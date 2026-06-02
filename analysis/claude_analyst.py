@@ -94,14 +94,19 @@ def _deduplicate_by_asset_type(
     return final
 
 
-def _build_prompt(items: list[dict], crypto_context: dict = None) -> str:
+def _build_prompt(
+    items:         list[dict],
+    crypto_context: dict = None,
+    price_history:  dict = None,
+) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
-    If crypto_context is provided, appends a context block at the top
-    so Claude understands what each crypto asset actually is.
+    Includes crypto context and 14-day price trend data when available
+    so Claude can generate calibrated exit conditions and stop loss levels.
     """
     lines = []
 
+    # Crypto asset context block
     if crypto_context:
         lines.append("=== CRYPTO ASSET CONTEXT ===")
         for ticker, ctx in crypto_context.items():
@@ -112,6 +117,26 @@ def _build_prompt(items: list[dict], crypto_context: dict = None) -> str:
             )
         lines.append("=== END CONTEXT ===\n")
 
+    # 14-day price trend block
+    if price_history:
+        available = {k: v for k, v in price_history.items() if v is not None}
+        if available:
+            lines.append("=== 14-DAY PRICE TREND DATA ===")
+            lines.append(
+                "Use this data to calibrate exit targets and stop loss levels. "
+                "High volatility = wider stops. Downtrend = more conservative targets. "
+                "Uptrend near 14d high = watch for resistance."
+            )
+            for ticker, data in available.items():
+                lines.append(
+                    f"${ticker}: {data['trend_14d']} {data['pct_change_14d']:+.1f}% over 14d | "
+                    f"volatility: {data['volatility']} (avg daily range: {data['avg_daily_range_pct']:.1f}%) | "
+                    f"14d high: ${data['high_14d']} ({data['pct_from_high']:+.1f}% from now) | "
+                    f"14d low: ${data['low_14d']} ({data['pct_from_low']:+.1f}% from now)"
+                )
+            lines.append("=== END TREND DATA ===\n")
+
+    # News items
     for i, item in enumerate(items, 1):
         ticker_hint = f" [ticker: ${item['ticker']}]" if item.get("ticker") else ""
         flag_hint   = " ⚠ unverified source" if item.get("flagged") else ""
@@ -152,6 +177,7 @@ def run_analysis(
         return []
 
     # Fetch CoinGecko context for crypto tickers if crypto is enabled
+    # Fetch CoinGecko context for crypto tickers if crypto is enabled
     crypto_context = {}
     if include_crypto:
         try:
@@ -163,8 +189,35 @@ def run_analysis(
         except Exception as e:
             print(f"Claude analyst: crypto context fetch failed: {e}")
 
+    # Fetch 14-day price history for all recommended tickers
+    price_history = {}
     try:
-        news_block = _build_prompt(unique_items, crypto_context=crypto_context)
+        from ingestion.prices import fetch_price_history
+        from storage.watchlist import get_tickers
+
+        stock_tickers  = get_tickers("stocks") if include_stocks else []
+        etf_tickers    = get_tickers("etfs")   if include_etfs   else []
+        crypto_tickers = get_tickers("crypto") if include_crypto else []
+
+        if stock_tickers or etf_tickers:
+            stock_history = fetch_price_history(stock_tickers + etf_tickers, asset_type="stock")
+            price_history.update(stock_history)
+
+        if crypto_tickers:
+            crypto_history = fetch_price_history(crypto_tickers, asset_type="crypto")
+            price_history.update(crypto_history)
+
+        fetched = sum(1 for v in price_history.values() if v is not None)
+        print(f"Claude analyst: loaded 14-day price history for {fetched} tickers")
+    except Exception as e:
+        print(f"Claude analyst: price history fetch failed: {e}")
+
+    try:
+        news_block = _build_prompt(
+            unique_items,
+            crypto_context=crypto_context,
+            price_history=price_history,
+        )
     except Exception as e:
         import traceback
         print(f"Prompt build error: {e}")
@@ -194,7 +247,11 @@ IMPORTANT RULES:
 - For flagged (unverified) sources, set risk_level to 'high' regardless.
 - For crypto assets, use the standard symbol (BTC, ETH, SOL etc) as the ticker.
 - For ETFs, use the standard ticker (SPY, QQQ etc) as the ticker.
-- Use the CRYPTO ASSET CONTEXT block provided to improve your analysis accuracy.
+- Use the CRYPTO ASSET CONTEXT block to understand what each crypto asset does.
+- Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
+  For high volatility assets use wider stops (4-6%). For low volatility use tighter stops (2-3%).
+  For downtrending assets be more conservative with targets. For uptrending assets near 14d highs, note resistance.
+  Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
 
 You must respond with ONLY a valid JSON array. No preamble, no explanation,
 no markdown code fences. Just the raw JSON array.
