@@ -54,12 +54,14 @@ streamlit run dashboard/app.py
 
 ## Project Structure
 
+```
 stock-advisor/
-├── ingestion/ # News fetching (RSS, Reddit, Finnhub, SEC)
-├── validation/ # Confidence scoring
-├── analysis/ # Claude AI analysis
-├── calculator/ # Portfolio allocation math
-├── storage/ # Positions, watch list, sheets, cache
-├── alerts/ # Exit checker, notifications, snooze
-├── dashboard/ # Streamlit UI
-└── main.py # Pipeline runner
+├── ingestion/        # News fetching (RSS, Reddit, Finnhub, SEC)
+├── validation/       # Confidence scoring
+├── analysis/         # Claude AI analysis
+├── calculator/       # Portfolio allocation math
+├── storage/          # Positions, watch list, sheets, cache
+├── alerts/           # Exit checker, notifications, snooze
+├── dashboard/        # Streamlit UI
+└── main.py           # Pipeline runner
+```
