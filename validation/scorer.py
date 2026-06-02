@@ -11,6 +11,8 @@ SOURCE_WEIGHTS = {
     "finnhub_general":  0.6,
     "finnhub_crypto":   0.5,
     "rss":              0.5,
+    "etf_rss":          0.5,
+    "crypto_rss":       0.45,
     "reddit_rss":       0.15,
 }
 

@@ -107,9 +107,11 @@ def fetch_finnhub_news(
 ) -> list[dict]:
     """
     Main entry point. Fetches news based on which asset types are enabled.
-    Stocks are always included in general news.
-    ETFs and crypto only fetched when their flags are True.
+    Now includes dedicated RSS feeds for ETF and crypto for higher volume.
     """
+    from ingestion.crypto_news import fetch_crypto_rss
+    from ingestion.etf_news    import fetch_etf_rss
+
     client  = get_client()
     results = []
 
@@ -120,13 +122,15 @@ def fetch_finnhub_news(
     if include_stocks:
         results += fetch_company_news(client, asset_type="stocks")
 
-    # ETF news
+    # ETF news — Finnhub company news + dedicated RSS
     if include_etfs:
         results += fetch_company_news(client, asset_type="etfs")
+        results += fetch_etf_rss()
 
-    # Crypto news
+    # Crypto news — Finnhub general + dedicated RSS
     if include_crypto:
         results += fetch_crypto_news(client)
+        results += fetch_crypto_rss()
 
     return results
 
