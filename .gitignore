@@ -1,0 +1,26 @@
+# API keys and credentials — never commit these
+.env
+google_credentials.json
+
+# Local data files — personal and changes constantly
+pipeline_cache.json
+pipeline_cache_backup.json
+positions.json
+snoozed_alerts.json
+budget.json
+watchlist.json
+exit_checker.log
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+desktop.ini
