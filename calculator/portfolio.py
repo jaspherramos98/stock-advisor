@@ -94,6 +94,7 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
             "ticker":           rec.get("ticker", "???"),
             "company_name":     rec.get("company_name", "Unknown"),
             "direction":        rec.get("direction"),
+            "asset_type":       rec.get("asset_type", "stock"),
             "dollar_amount":    dollar_amount,
             "percentage":       pct,
             "entry_rationale":  rec.get("entry_rationale"),

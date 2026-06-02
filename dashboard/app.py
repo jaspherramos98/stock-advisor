@@ -170,7 +170,7 @@ if st.session_state.recommendations:
     allocations = calculate_allocations(recs, budget)
     prices      = st.session_state.prices
 
-    for a in allocations:
+    for idx, a in enumerate(allocations):
         ticker     = a.get("ticker")
         price_data = prices.get(ticker)
         if price_data:
@@ -277,7 +277,7 @@ if st.session_state.recommendations:
 
             open_tickers = {p["ticker"] for p in get_open_positions()}
 
-            for a in allocations:
+            for idx, a in enumerate(allocations):
                 flag_label      = " ⚠ Unverified source" if a["flagged"] else ""
                 direction_emoji = "🟢" if a["direction"] == "buy" else "🟡"
                 is_open         = a["ticker"] in open_tickers
@@ -294,6 +294,16 @@ if st.session_state.recommendations:
                     st.markdown(f"**Why buy:** {a['entry_rationale']}")
                     st.markdown(f"**Exit when:** {a['exit_condition']}")
                     st.markdown(f"**Based on:** _{a['source_title']}_")
+
+                    # White paper and info links for crypto assets
+                    if a.get("asset_type") == "crypto":
+                        from ingestion.coingecko import TICKER_TO_COINGECKO_ID
+                        coin_id = TICKER_TO_COINGECKO_ID.get(a.get("ticker", ""), "")
+                        if coin_id:
+                            st.markdown(
+                                f"🔗 [White paper](https://www.coingecko.com/en/coins/{coin_id}) · "
+                                f"[CoinMarketCap](https://coinmarketcap.com/currencies/{coin_id}/)"
+                            )
 
                     if a["flagged"]:
                         st.warning(
@@ -314,7 +324,7 @@ if st.session_state.recommendations:
                                 min_value=0.01,
                                 value=0.01,
                                 step=0.01,
-                                key=f"manual_price_{a['ticker']}",
+                                key=f"manual_price_{idx}_{a['ticker']}",
                                 help="Leave at 0.01 to use the current market price automatically.",
                             )
 
@@ -322,7 +332,7 @@ if st.session_state.recommendations:
                             st.markdown("<div style='margin-top: 28px'>", unsafe_allow_html=True)
                             if st.button(
                                 f"📌 Add {a['ticker']} to positions",
-                                key=f"add_pos_{a['ticker']}",
+                                key=f"add_pos_{idx}_{a['ticker']}",
                                 use_container_width=True,
                             ):
                                 with st.spinner(f"Fetching current price for {a['ticker']}..."):
@@ -429,6 +439,16 @@ if st.session_state.recommendations:
 
                     st.markdown(f"**Exit when:** {p['exit_condition']}")
                     st.markdown(f"**Based on:** _{p['source_title']}_")
+
+                    # White paper link for crypto positions
+                    ticker = p.get("ticker", "")
+                    # White paper link for crypto positions
+                    from ingestion.coingecko import TICKER_TO_COINGECKO_ID
+                    coin_id = TICKER_TO_COINGECKO_ID.get(p.get("ticker", ""), "")
+                    if coin_id:
+                        st.markdown(
+                            f"🔗 [White paper & info](https://www.coingecko.com/en/coins/{coin_id})"
+                        )
 
                     st.divider()
 
