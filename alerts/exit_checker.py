@@ -28,7 +28,9 @@ PCT_TOLERANCE = 0.5
 def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
     """
     Checks if a percentage-based exit condition has been met.
-    Looks for patterns like '10% gain', '5% loss', '15% gain or 2 weeks'.
+    Handles two patterns:
+      - Gain targets:     "target 8% gain", "10% gain"
+      - Stop loss exits:  "stop loss at 4%", "stop loss at 4"
     Returns an alert dict if triggered, None otherwise.
     """
     exit_cond     = position["exit_condition"].lower()
@@ -37,111 +39,133 @@ def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
     if effective_ref <= 0:
         return None
 
-    # Calculate actual price change
     change_pct = ((current_price - effective_ref) / effective_ref) * 100
 
-    # Look for percentage targets in the exit condition string
     import re
-    pct_matches = re.findall(r"(\d+(?:\.\d+)?)\s*%\s*(gain|loss|drop|rise|move)?", exit_cond)
 
-    for match in pct_matches:
-        target_pct = float(match[0])
-        direction  = match[1] if match[1] else "gain"
-
-        # Check gain targets
-        if direction in ("gain", "rise", "move", "") and change_pct >= (target_pct - PCT_TOLERANCE):
+    # --- Check stop loss first — most important ---
+    stop_match = re.search(r"stop\s*loss\s*at\s*(\d+(?:\.\d+)?)\s*%?", exit_cond)
+    if stop_match:
+        stop_pct = float(stop_match.group(1))
+        if change_pct <= -(stop_pct - PCT_TOLERANCE):
             return {
-                "ticker":      position["ticker"],
-                "alert_type":  "percentage_gain",
-                "message":     (
-                    f"{position['ticker']} has gained {change_pct:.1f}% "
-                    f"from your reference price of ${effective_ref:.2f}. "
+                "ticker":         position["ticker"],
+                "alert_type":     "stop_loss",
+                "message":        (
+                    f"🛑 STOP LOSS triggered for {position['ticker']}. "
+                    f"Position is down {abs(change_pct):.1f}% from your entry of ${effective_ref:.2f}. "
                     f"Current price: ${current_price:.2f}. "
-                    f"Exit condition was: {position['exit_condition']}"
+                    f"Stop loss was set at {stop_pct}%. "
+                    f"Consider closing this position."
                 ),
-                "current_price": current_price,
-                "change_pct":    round(change_pct, 2),
+                "current_price":  current_price,
+                "change_pct":     round(change_pct, 2),
                 "exit_condition": position["exit_condition"],
             }
 
-        # Check loss targets
-        if direction in ("loss", "drop") and change_pct <= -(target_pct - PCT_TOLERANCE):
+    # --- Check gain targets ---
+    # Looks for: "target 8% gain", "10% gain", "8% rise"
+    gain_matches = re.findall(
+        r"(?:target\s+)?(\d+(?:\.\d+)?)\s*%\s*(gain|rise|profit|up)?",
+        exit_cond
+    )
+    for match in gain_matches:
+        target_pct = float(match[0])
+        label      = match[1] if match[1] else "gain"
+
+        # Skip if this looks like a stop loss percentage we already handled
+        context = exit_cond[max(0, exit_cond.find(f"{target_pct}%") - 15): exit_cond.find(f"{target_pct}%") + 5]
+        if "stop" in context or "loss" in context:
+            continue
+
+        if change_pct >= (target_pct - PCT_TOLERANCE):
             return {
-                "ticker":      position["ticker"],
-                "alert_type":  "percentage_loss",
-                "message":     (
-                    f"{position['ticker']} has dropped {abs(change_pct):.1f}% "
-                    f"from your reference price of ${effective_ref:.2f}. "
+                "ticker":         position["ticker"],
+                "alert_type":     "percentage_gain",
+                "message":        (
+                    f"✅ Gain target reached for {position['ticker']}. "
+                    f"Position is up {change_pct:.1f}% from your entry of ${effective_ref:.2f}. "
                     f"Current price: ${current_price:.2f}. "
                     f"Exit condition was: {position['exit_condition']}"
                 ),
-                "current_price": current_price,
-                "change_pct":    round(change_pct, 2),
+                "current_price":  current_price,
+                "change_pct":     round(change_pct, 2),
                 "exit_condition": position["exit_condition"],
             }
 
     return None
 
-
 def _check_time_exit(position: dict) -> dict | None:
     """
     Checks if a time-based exit condition has been met.
-    Looks for patterns like '2 weeks', '3 days', '1 month'.
-    Returns an alert dict if triggered, None otherwise.
+    Uses entry_date (when user actually bought) if available,
+    otherwise falls back to opened_at (when they added it to the app).
     """
-    exit_cond  = position["exit_condition"].lower()
-    opened_at  = datetime.fromisoformat(position["opened_at"])
-    now        = datetime.now()
-    days_open  = (now - opened_at).days
+    exit_cond = position["exit_condition"].lower()
+
+    # Use actual purchase date if available, otherwise app-add date
+    entry_date_str = position.get("entry_date")
+    if entry_date_str:
+        try:
+            start_date = datetime.strptime(entry_date_str, "%Y-%m-%d")
+        except Exception:
+            start_date = datetime.fromisoformat(position["opened_at"])
+    else:
+        start_date = datetime.fromisoformat(position["opened_at"])
+
+    days_open = (datetime.now() - start_date).days
 
     import re
 
-    # Check for week-based exits
+    # Week-based exits
     week_match = re.search(r"(\d+)\s*week", exit_cond)
     if week_match:
         target_days = int(week_match.group(1)) * 7
         if days_open >= target_days:
             return {
-                "ticker":     position["ticker"],
-                "alert_type": "time_based",
-                "message":    (
-                    f"{position['ticker']} has been open for {days_open} days. "
-                    f"Exit condition was: {position['exit_condition']}. "
-                    f"Time limit of {week_match.group(1)} week(s) reached."
+                "ticker":         position["ticker"],
+                "alert_type":     "time_based",
+                "message":        (
+                    f"⏰ Time exit for {position['ticker']}. "
+                    f"Position has been open {days_open} days since purchase. "
+                    f"Time limit of {week_match.group(1)} week(s) reached. "
+                    f"Exit condition: {position['exit_condition']}"
                 ),
                 "days_open":      days_open,
                 "exit_condition": position["exit_condition"],
             }
 
-    # Check for day-based exits
+    # Day-based exits
     day_match = re.search(r"(\d+)\s*day", exit_cond)
     if day_match:
         target_days = int(day_match.group(1))
         if days_open >= target_days:
             return {
-                "ticker":     position["ticker"],
-                "alert_type": "time_based",
-                "message":    (
-                    f"{position['ticker']} has been open for {days_open} days. "
-                    f"Exit condition was: {position['exit_condition']}. "
-                    f"Time limit of {day_match.group(1)} day(s) reached."
+                "ticker":         position["ticker"],
+                "alert_type":     "time_based",
+                "message":        (
+                    f"⏰ Time exit for {position['ticker']}. "
+                    f"Position has been open {days_open} days since purchase. "
+                    f"Time limit of {day_match.group(1)} day(s) reached. "
+                    f"Exit condition: {position['exit_condition']}"
                 ),
                 "days_open":      days_open,
                 "exit_condition": position["exit_condition"],
             }
 
-    # Check for month-based exits
+    # Month-based exits
     month_match = re.search(r"(\d+)\s*month", exit_cond)
     if month_match:
         target_days = int(month_match.group(1)) * 30
         if days_open >= target_days:
             return {
-                "ticker":     position["ticker"],
-                "alert_type": "time_based",
-                "message":    (
-                    f"{position['ticker']} has been open for {days_open} days. "
-                    f"Exit condition was: {position['exit_condition']}. "
-                    f"Time limit of {month_match.group(1)} month(s) reached."
+                "ticker":         position["ticker"],
+                "alert_type":     "time_based",
+                "message":        (
+                    f"⏰ Time exit for {position['ticker']}. "
+                    f"Position has been open {days_open} days since purchase. "
+                    f"Time limit of {month_match.group(1)} month(s) reached. "
+                    f"Exit condition: {position['exit_condition']}"
                 ),
                 "days_open":      days_open,
                 "exit_condition": position["exit_condition"],
