@@ -1,11 +1,12 @@
+from analysis.claude_analyst    import run_analysis
 from ingestion.rss              import fetch_rss_news
 from ingestion.reddit           import fetch_reddit_news
 from ingestion.finnhub_news     import fetch_finnhub_news
 from ingestion.sec              import fetch_sec_filings
 from validation.scorer          import run_scorer
-from analysis.claude_analyst    import run_analysis
 from calculator.portfolio       import calculate_allocations, print_allocation_table
 import os
+
 
 def run_ingestion_and_analysis(
     include_stocks: bool = True,
@@ -16,9 +17,12 @@ def run_ingestion_and_analysis(
     # When MOCK_INGESTION=true, skip all news fetching and go straight
     # to Claude (which will also be mocked if MOCK_MODE=true).
     # Full pipeline completes in ~2 seconds instead of ~30.
+    """
+    Runs layers 1 through 3 — ingestion, scoring, and Claude analysis.
+    Asset type flags control which categories get fetched and analyzed.
+    """
     if os.getenv("MOCK_INGESTION", "false").lower() == "true":
         print("\n⚠️  MOCK INGESTION — all news fetching skipped.")
-        from analysis.claude_analyst import run_analysis
         return run_analysis(
             [],
             include_stocks=include_stocks,
@@ -27,13 +31,8 @@ def run_ingestion_and_analysis(
         )
     # ── END MOCK INGESTION ─────────────────────────────────────────
 
-
-    """
-    Runs layers 1 through 3 — ingestion, scoring, and Claude analysis.
-    Asset type flags control which categories get fetched and analyzed.
-    """
     print("\n==============================")
-    print("  STOCK ADVISOR — PIPELINE    ")
+    print("  ARGUS — PIPELINE    ")
     print("==============================\n")
 
     # --- Layer 1: Ingestion ---

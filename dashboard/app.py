@@ -3,6 +3,9 @@ import sys
 import os
 import pandas as pd
 from datetime import datetime
+from ingestion.coingecko import TICKER_TO_COINGECKO_ID
+import json
+from alerts.snooze import is_snoozed, snooze_ticker, dismiss_ticker, clear_snooze
 
 # Add the project root to the path so Streamlit can find all modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,13 +26,11 @@ BUDGET_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 # --- Helper functions (must be defined before any UI code) ---
 def save_budget(amount: float):
-    import json
     with open(BUDGET_FILE, "w") as f:
         json.dump({"budget": amount}, f)
 
 
 def load_budget() -> float:
-    import json
     if not os.path.exists(BUDGET_FILE):
         return 1000.0
     try:
@@ -40,7 +41,6 @@ def load_budget() -> float:
 
 
 def save_cache(recommendations, prices, last_run):
-    import json
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r") as f:
@@ -60,7 +60,6 @@ def save_cache(recommendations, prices, last_run):
 
 
 def load_cache() -> dict | None:
-    import json
 
     def try_load(path) -> dict | None:
         if not os.path.exists(path):
@@ -316,7 +315,6 @@ if st.session_state.recommendations:
                     # White paper and info links for crypto assets
                     
                     if a.get("asset_type") == "crypto":
-                        from ingestion.coingecko import TICKER_TO_COINGECKO_ID
                         coin_id = TICKER_TO_COINGECKO_ID.get(a.get("ticker", ""), "")
                         if coin_id:
                             st.markdown(
@@ -373,11 +371,11 @@ if st.session_state.recommendations:
                                 with d_col3:
                                     st.write("")  # spacer
 
-                                import datetime as dt
+                                
                                 picked_date = st.date_input(
                                     "Or pick a date",
-                                    value=dt.date.today(),
-                                    max_value=dt.date.today(),
+                                    value=datetime.date.today(),
+                                    max_value=datetime.date.today(),
                                     key=f"date_picker_{ticker_key}",
                                     label_visibility="collapsed",
                                 )
@@ -518,7 +516,6 @@ if st.session_state.recommendations:
                         continue
 
                     # Find earliest date across all positions
-                    from datetime import date as dt_date
                     entry_dt = datetime.strptime(entry_date_str, "%Y-%m-%d")
                     if earliest_date is None or entry_dt < earliest_date:
                         earliest_date = entry_dt
@@ -547,7 +544,7 @@ if st.session_state.recommendations:
             if not all_dates.empty:
                 portfolio_df = all_dates.reset_index()
                 portfolio_df.columns = ["Date", "Value ($)"]
-                portfolio_df["Date"] = pd.to_datetime(portfolio_df["Date"]).dt.date
+                portfolio_df["Date"] = pd.to_datetime(portfolio_df["Date"]).datetime.date
 
                 # Add total invested line as reference
                 fig = go.Figure()
@@ -627,7 +624,6 @@ if st.session_state.recommendations:
        # --- Manual position entry ---
         with st.expander("➕ Add a position manually"):
             st.caption("Use this to track stocks you already own that weren't recommended by the pipeline.")
-            import datetime as dt
 
             m_col1, m_col2 = st.columns(2)
             with m_col1:
@@ -636,7 +632,7 @@ if st.session_state.recommendations:
                 m_price   = st.number_input("Price you paid per share ($)", min_value=0.01, value=100.00, step=0.01, key="manual_entry_price")
             with m_col2:
                 m_exit    = st.text_input("Exit condition", placeholder="e.g. target 10% gain, stop loss at 5%", key="manual_exit")
-                m_date    = st.date_input("Date you bought it", value=dt.date.today(), max_value=dt.date.today(), key="manual_date")
+                m_date    = st.date_input("Date you bought it", value=datetime.date.today(), max_value=datetime.date.today(), key="manual_date")
                 m_direction = st.selectbox("Direction", ["buy", "watch"], key="manual_direction")
 
             if st.button("📌 Add to positions", key="manual_add_btn", use_container_width=True, type="primary"):
@@ -744,9 +740,6 @@ if st.session_state.recommendations:
                     st.markdown(f"**Based on:** _{p['source_title']}_")
 
                     # White paper link for crypto positions
-                    ticker = p.get("ticker", "")
-                    # White paper link for crypto positions
-                    from ingestion.coingecko import TICKER_TO_COINGECKO_ID
                     coin_id = TICKER_TO_COINGECKO_ID.get(p.get("ticker", ""), "")
                     if coin_id:
                         st.markdown(
@@ -809,7 +802,6 @@ if st.session_state.recommendations:
 
                     st.divider()
 
-                    from alerts.snooze import is_snoozed, snooze_ticker, dismiss_ticker, clear_snooze
                     st.markdown("**Alert snooze**")
                     currently_snoozed = is_snoozed(ticker)
 

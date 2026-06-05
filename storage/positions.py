@@ -91,6 +91,12 @@ def add_position(
     print(f"Positions: added {ticker} at ${reference_price} (entry date: {entry_date})")
     return position
 
+def get_effective_price(position: dict) -> float:
+    """
+    Returns the price to use for exit calculations.
+    Manual price takes priority over the auto reference price.
+    """
+    return position["manual_price"] or position["reference_price"]
 
 def close_position(ticker: str, reason: str, close_price: float = None):
     """
@@ -166,13 +172,6 @@ def get_open_positions() -> list[dict]:
     """Returns only positions with status 'open'."""
     return [p for p in load_positions() if p["status"] == "open"]
 
-
-def get_effective_price(position: dict) -> float:
-    """
-    Returns the price to use for exit calculations.
-    Manual price takes priority over the auto reference price.
-    """
-    return position["manual_price"] or position["reference_price"]
 
 
 if __name__ == "__main__":

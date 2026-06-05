@@ -50,7 +50,7 @@
   {
     "ticker": "SPY",
     "company_name": "SPDR S&P 500 ETF Trust",
-    "asset_type": "etf",
+    "asset_type": "stock",
     "direction": "buy",
     "entry_rationale": "MOCK: Broad market strength on positive jobs data.",
     "exit_condition": "target 3% gain, stop loss at 1.5%",
