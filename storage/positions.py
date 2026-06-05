@@ -92,21 +92,44 @@ def add_position(
     return position
 
 
-def close_position(ticker: str, reason: str):
+def close_position(ticker: str, reason: str, close_price: float = None):
     """
     Marks a position as closed. Keeps the record for history —
     never deletes, just changes status to 'closed'.
+    Optionally records the closing price and calculates final P&L.
     """
     positions = load_positions()
     for p in positions:
         if p["ticker"] == ticker and p["status"] == "open":
-            p["status"]     = "closed"
-            p["closed_at"]  = datetime.now().isoformat()
+            p["status"]       = "closed"
+            p["closed_at"]    = datetime.now().isoformat()
             p["close_reason"] = reason
+            p["close_price"]  = close_price
+
+            # Calculate final P&L if we have a closing price
+            if close_price:
+                entry_price = get_effective_price(p)
+                if entry_price and entry_price > 0:
+                    p["pnl_pct"]     = round(((close_price - entry_price) / entry_price) * 100, 2)
+                    p["pnl_dollars"] = round(close_price - entry_price, 2)
+                else:
+                    p["pnl_pct"]     = None
+                    p["pnl_dollars"] = None
+            else:
+                p["pnl_pct"]     = None
+                p["pnl_dollars"] = None
+
             save_positions(positions)
-            print(f"Positions: closed {ticker} — {reason}")
+            pnl_str = f" | P&L: {p['pnl_pct']:+.1f}%" if p.get("pnl_pct") is not None else ""
+            print(f"Positions: closed {ticker} — {reason}{pnl_str}")
             return
     print(f"Positions: {ticker} not found or already closed.")
+
+
+def get_closed_positions() -> list[dict]:
+    """Returns only positions with status 'closed', most recent first."""
+    closed = [p for p in load_positions() if p["status"] == "closed"]
+    return sorted(closed, key=lambda x: x.get("closed_at", ""), reverse=True)
 
 
 def update_manual_price(ticker: str, price: float):

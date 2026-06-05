@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ingestion.prices import fetch_prices
 from main import run_ingestion_and_analysis
 from calculator.portfolio import calculate_allocations
-from storage.positions import add_position, get_open_positions, close_position, update_manual_price
+from storage.positions import add_position, get_open_positions, get_closed_positions, close_position, update_manual_price
 from storage.watchlist import load_watchlist, save_watchlist, add_ticker, remove_ticker, reset_to_defaults
 import plotly.express as px
 import plotly.graph_objects as go
@@ -585,9 +585,12 @@ if st.session_state.recommendations:
                             key=f"close_{ticker}",
                             use_container_width=True,
                         ):
-                            reason = close_reason or f"Manually closed on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                            close_position(ticker, reason)
-                            st.warning(f"{ticker} position closed.")
+                            reason      = close_reason or f"Manually closed on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                            close_price = live_price  # use the live price we already fetched
+                            close_position(ticker, reason, close_price=close_price)
+                            pnl = ((close_price - ref_price) / ref_price * 100) if close_price else None
+                            pnl_str = f" | P&L: {pnl:+.1f}%" if pnl is not None else ""
+                            st.warning(f"{ticker} position closed at ${close_price:.2f}{pnl_str}.")
                             st.rerun()
                         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -620,6 +623,71 @@ if st.session_state.recommendations:
                                 dismiss_ticker(ticker)
                                 st.success(f"{ticker} alerts dismissed permanently.")
                                 st.rerun()
+                # --- Closed positions history ---
+        closed_positions = get_closed_positions()
+        if closed_positions:
+            st.divider()
+            st.subheader("Closed positions")
+
+            # Summary metrics
+            with_pnl    = [p for p in closed_positions if p.get("pnl_pct") is not None]
+            winners     = [p for p in with_pnl if p["pnl_pct"] > 0]
+            losers      = [p for p in with_pnl if p["pnl_pct"] <= 0]
+            win_rate    = round(len(winners) / len(with_pnl) * 100) if with_pnl else 0
+            avg_pnl     = round(sum(p["pnl_pct"] for p in with_pnl) / len(with_pnl), 1) if with_pnl else 0
+            best        = max(with_pnl, key=lambda x: x["pnl_pct"]) if with_pnl else None
+            worst       = min(with_pnl, key=lambda x: x["pnl_pct"]) if with_pnl else None
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Total closed",  len(closed_positions))
+            m2.metric("Win rate",      f"{win_rate}%")
+            m3.metric("Avg P&L",       f"{avg_pnl:+.1f}%")
+            m4.metric("Best trade",    f"{best['ticker']} {best['pnl_pct']:+.1f}%" if best else "—")
+            m5.metric("Worst trade",   f"{worst['ticker']} {worst['pnl_pct']:+.1f}%" if worst else "—")
+
+            st.divider()
+
+            # Closed positions table
+            closed_rows = []
+            for p in closed_positions:
+                entry_price  = p.get("manual_price") or p.get("reference_price", 0)
+                close_price  = p.get("close_price")
+                pnl_pct      = p.get("pnl_pct")
+                closed_at    = datetime.fromisoformat(p["closed_at"]).strftime("%Y-%m-%d") if p.get("closed_at") else "—"
+                entry_date   = p.get("entry_date") or "—"
+
+                # Calculate days held
+                if p.get("entry_date") and p.get("closed_at"):
+                    try:
+                        entry_dt  = datetime.strptime(p["entry_date"], "%Y-%m-%d")
+                        close_dt  = datetime.fromisoformat(p["closed_at"])
+                        days_held = (close_dt - entry_dt).days
+                    except Exception:
+                        days_held = "—"
+                else:
+                    days_held = "—"
+
+                closed_rows.append({
+                    "Ticker":       p["ticker"],
+                    "Company":      p["company_name"],
+                    "Entry ($)":    f"${entry_price:.2f}",
+                    "Close ($)":    f"${close_price:.2f}" if close_price else "—",
+                    "P&L %":        f"{pnl_pct:+.1f}%" if pnl_pct is not None else "—",
+                    "Days held":    days_held,
+                    "Reason":       p.get("close_reason", "—"),
+                    "Closed":       closed_at,
+                })
+
+            closed_df = pd.DataFrame(closed_rows)
+
+            def color_pnl(val):
+                if val == "—":          return ""
+                if val.startswith("+"): return "color: #2ecc71; font-weight: bold"
+                if val.startswith("-"): return "color: #e74c3c; font-weight: bold"
+                return ""
+
+            styled_closed = closed_df.style.map(color_pnl, subset=["P&L %"])
+            st.dataframe(styled_closed, use_container_width=True, hide_index=True)
 
     # =========================================================
     # TAB 3 — Watch List Editor
