@@ -147,6 +147,20 @@ def update_manual_price(ticker: str, price: float):
             return
     print(f"Positions: {ticker} not found.")
 
+def update_amount_invested(ticker: str, amount: float):
+    """
+    Records how many actual dollars the user invested in this position.
+    Used to calculate real portfolio value and P&L in dollar terms.
+    """
+    positions = load_positions()
+    for p in positions:
+        if p["ticker"] == ticker and p["status"] == "open":
+            p["amount_invested"] = amount
+            p["updated_at"]      = datetime.now().isoformat()
+            save_positions(positions)
+            print(f"Positions: {ticker} amount invested set to ${amount:.2f}")
+            return
+    print(f"Positions: {ticker} not found.")
 
 def get_open_positions() -> list[dict]:
     """Returns only positions with status 'open'."""
