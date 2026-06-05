@@ -14,27 +14,6 @@ load_dotenv()
 # Uses the built-in Windows toast notification system.
 # No extra library needed for basic notifications, but
 # win10toast gives nicer formatting.
-try:
-    from plyer import notification
-    TOAST_AVAILABLE = True
-except Exception:
-    TOAST_AVAILABLE = False
-
-
-def _send_desktop_notification(title: str, message: str):
-    if not TOAST_AVAILABLE:
-        print("Desktop notifier: unavailable, skipping.")
-        return
-    try:
-        notification.notify(
-            title=title,
-            message=message[:200],
-            app_name="Stock Advisor",
-            timeout=10,
-        )
-        print(f"Desktop notification sent: {title}")
-    except Exception as e:
-        print(f"Desktop notification error: {e}")
 
 
 def _build_email_html(alerts: list[dict]) -> str:
@@ -80,7 +59,7 @@ def _build_email_html(alerts: list[dict]) -> str:
         <div style="max-width: 700px; margin: 0 auto;">
 
             <h1 style="color: #ffffff; border-bottom: 2px solid #2ecc71; padding-bottom: 10px;">
-                📈 Stock Advisor — Exit Alert
+                📈 Argus — Exit Alert
             </h1>
 
             <p style="color: #aaaaaa;">
@@ -102,7 +81,7 @@ def _build_email_html(alerts: list[dict]) -> str:
 
             <div style="margin-top: 30px; padding: 15px; background-color: #2a2a2a; border-radius: 8px;">
                 <p style="color: #aaaaaa; font-size: 12px; margin: 0;">
-                    This is an automated alert from your personal Stock Advisor app.
+                    This is an automated alert from your personal Argus app.
                     This is not financial advice. Always do your own research before acting.
                 </p>
             </div>
@@ -128,7 +107,7 @@ def _send_email(alerts: list[dict]):
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"📈 Stock Advisor — {len(alerts)} Exit Alert(s) Triggered"
+        msg["Subject"] = f"📈 Argus — {len(alerts)} Exit Alert(s) Triggered"
         msg["From"]    = sender_email
         msg["To"]      = receiver_email
 
@@ -155,16 +134,6 @@ def send_alerts(alerts: list[dict]):
         return
 
     print(f"Notifier: sending {len(alerts)} alert(s)...")
-
-    # Desktop — one notification per alert so each is visible
-    for a in alerts:
-        ticker  = a["ticker"]
-        atype   = a["alert_type"].replace("_", " ").title()
-        message = a["message"][:150]
-        _send_desktop_notification(
-            f"Stock Advisor — {ticker} Exit Signal",
-            f"[{atype}] {message}"
-        )
 
     # Email — one combined email for all alerts
     _send_email(alerts)
