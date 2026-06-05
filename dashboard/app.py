@@ -296,6 +296,7 @@ if st.session_state.recommendations:
                     st.markdown(f"**Based on:** _{a['source_title']}_")
 
                     # White paper and info links for crypto assets
+                    
                     if a.get("asset_type") == "crypto":
                         from ingestion.coingecko import TICKER_TO_COINGECKO_ID
                         coin_id = TICKER_TO_COINGECKO_ID.get(a.get("ticker", ""), "")
@@ -312,34 +313,88 @@ if st.session_state.recommendations:
                         )
 
                     st.divider()
-
                     if is_open:
                         st.success(f"✓ {a['ticker']} is already in your open positions.")
                     else:
-                        col_btn, col_price, col_spacer = st.columns([2, 2, 3])
+                        # --- Add to positions UI ---
+                        ticker_key = f"{idx}_{a['ticker']}"
 
-                        with col_price:
-                            manual_ref = st.number_input(
-                                "Override reference price ($)",
-                                min_value=0.01,
-                                value=0.01,
-                                step=0.01,
-                                key=f"manual_price_{idx}_{a['ticker']}",
-                                help="Leave at 0.01 to use the current market price automatically.",
-                            )
+                        # Toggle: did you buy at a different price?
+                        different_price = st.checkbox(
+                            "I bought this at a different price",
+                            key=f"diff_price_toggle_{ticker_key}",
+                        )
 
-                        with col_btn:
-                            st.markdown("<div style='margin-top: 28px'>", unsafe_allow_html=True)
-                            if st.button(
-                                f"📌 Add {a['ticker']} to positions",
-                                key=f"add_pos_{idx}_{a['ticker']}",
-                                use_container_width=True,
-                            ):
-                                with st.spinner(f"Fetching current price for {a['ticker']}..."):
-                                    if manual_ref > 0.01:
-                                        ref_price    = manual_ref
-                                        price_source = f"manual (${ref_price:.2f})"
-                                    else:
+                        ref_price    = None
+                        entry_date   = datetime.now().strftime("%Y-%m-%d")
+                        price_source = "market"
+
+                        if different_price:
+                            col_price, col_date = st.columns(2)
+
+                            with col_price:
+                                manual_ref = st.number_input(
+                                    "Price you paid per share ($)",
+                                    min_value=0.01,
+                                    value=0.01,
+                                    step=0.01,
+                                    key=f"manual_price_{ticker_key}",
+                                )
+
+                            with col_date:
+                                # Quick date buttons + date picker
+                                st.markdown("**When did you buy it?**")
+                                d_col1, d_col2, d_col3 = st.columns(3)
+                                with d_col1:
+                                    if st.button("Today", key=f"date_today_{ticker_key}", use_container_width=True):
+                                        st.session_state[f"entry_date_{ticker_key}"] = datetime.now().strftime("%Y-%m-%d")
+                                with d_col2:
+                                    if st.button("Yesterday", key=f"date_yest_{ticker_key}", use_container_width=True):
+                                        from datetime import timedelta
+                                        st.session_state[f"entry_date_{ticker_key}"] = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                                with d_col3:
+                                    st.write("")  # spacer
+
+                                import datetime as dt
+                                picked_date = st.date_input(
+                                    "Or pick a date",
+                                    value=dt.date.today(),
+                                    max_value=dt.date.today(),
+                                    key=f"date_picker_{ticker_key}",
+                                    label_visibility="collapsed",
+                                )
+                                entry_date = picked_date.strftime("%Y-%m-%d")
+
+                            # Validate price against market price
+                            if manual_ref > 0.01:
+                                market_data  = prices.get(a["ticker"])
+                                market_price = market_data["price"] if market_data else None
+
+                                if market_price:
+                                    ratio = manual_ref / market_price
+                                    if ratio < 0.5 or ratio > 2.0:
+                                        st.warning(
+                                            f"⚠️ You entered ${manual_ref:.2f} but the current market price is "
+                                            f"${market_price:.2f}. That's a {abs(1-ratio)*100:.0f}% difference. "
+                                            f"Double-check before adding."
+                                        )
+
+                                ref_price    = manual_ref
+                                price_source = f"manual entry (${manual_ref:.2f})"
+
+                        # Add button — always visible
+                        if st.button(
+                            f"📌 Add {a['ticker']} to positions",
+                            key=f"add_pos_{ticker_key}",
+                            use_container_width=True,
+                            type="primary",
+                        ):
+                            if different_price and manual_ref <= 0.01:
+                                st.error("Enter the price you paid before adding.")
+                            else:
+                                if not different_price:
+                                    # Fetch current market price
+                                    with st.spinner(f"Fetching current price for {a['ticker']}..."):
                                         price_data = fetch_prices([a["ticker"]])
                                         pd_entry   = price_data.get(a["ticker"])
                                         if pd_entry:
@@ -347,7 +402,6 @@ if st.session_state.recommendations:
                                             price_source = f"market (${ref_price:.2f})"
                                         else:
                                             st.error(f"Could not fetch price for {a['ticker']}. Enter it manually.")
-                                            ref_price = None
 
                                 if ref_price:
                                     add_position(
@@ -358,19 +412,68 @@ if st.session_state.recommendations:
                                         direction=       a["direction"],
                                         confidence=      a["confidence_score"],
                                         source_title=    a["source_title"],
+                                        entry_date=      entry_date,
                                     )
                                     open_tickers.add(a["ticker"])
                                     st.success(
                                         f"✓ {a['ticker']} added to positions "
-                                        f"at reference price {price_source}."
+                                        f"at {price_source}, entry date {entry_date}."
                                     )
-                            st.markdown("</div>", unsafe_allow_html=True)
-
     # =========================================================
     # TAB 2 — My Positions
     # =========================================================
     with tab2:
         all_positions = get_open_positions()
+
+       # --- Manual position entry ---
+        with st.expander("➕ Add a position manually"):
+            st.caption("Use this to track stocks you already own that weren't recommended by the pipeline.")
+            import datetime as dt
+
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                m_ticker  = st.text_input("Ticker symbol", placeholder="e.g. MSFT", key="manual_ticker").strip().upper()
+                m_company = st.text_input("Company name", placeholder="e.g. Microsoft Corp.", key="manual_company").strip()
+                m_price   = st.number_input("Price you paid per share ($)", min_value=0.01, value=100.00, step=0.01, key="manual_entry_price")
+            with m_col2:
+                m_exit    = st.text_input("Exit condition", placeholder="e.g. target 10% gain, stop loss at 5%", key="manual_exit")
+                m_date    = st.date_input("Date you bought it", value=dt.date.today(), max_value=dt.date.today(), key="manual_date")
+                m_direction = st.selectbox("Direction", ["buy", "watch"], key="manual_direction")
+
+            if st.button("📌 Add to positions", key="manual_add_btn", use_container_width=True, type="primary"):
+                if not m_ticker:
+                    st.error("Enter a ticker symbol.")
+                elif not m_company:
+                    st.error("Enter a company name.")
+                elif m_price <= 0.01:
+                    st.error("Enter the price you paid per share.")
+                else:
+                    # Validate price against market
+                    with st.spinner(f"Checking current price for {m_ticker}..."):
+                        market_data = fetch_prices([m_ticker])
+                        market_info = market_data.get(m_ticker)
+
+                    if market_info:
+                        ratio = m_price / market_info["price"]
+                        if ratio < 0.5 or ratio > 2.0:
+                            st.warning(
+                                f"⚠️ You entered ${m_price:.2f} but the current market price is "
+                                f"${market_info['price']:.2f}. That's a {abs(1-ratio)*100:.0f}% difference. "
+                                f"The position has been added but double-check your entry price."
+                            )
+
+                    add_position(
+                        ticker=          m_ticker,
+                        company_name=    m_company,
+                        reference_price= m_price,
+                        exit_condition=  m_exit or "No exit condition set",
+                        direction=       m_direction,
+                        confidence=      0.0,
+                        source_title=    "Manually added",
+                        entry_date=      m_date.strftime("%Y-%m-%d"),
+                    )
+                    st.success(f"✓ {m_ticker} added at ${m_price:.2f}, bought on {m_date}.")
+                    st.rerun()
 
         if not all_positions:
             st.info("No open positions yet. Add stocks from the Recommendations tab.")
@@ -402,7 +505,7 @@ if st.session_state.recommendations:
                     "Live Price": f"${live_price:.2f}" if live_price else "N/A",
                     "Change":     f"{change_pct:+.1f}%" if change_pct is not None else "N/A",
                     "Exit when":  p["exit_condition"],
-                    "Opened":     opened,
+                    "Bought":     p.get("entry_date") or opened,
                 })
 
             pos_df = pd.DataFrame(rows)
@@ -435,7 +538,8 @@ if st.session_state.recommendations:
                     c1.metric("Reference price", f"${ref_price:.2f}")
                     c2.metric("Live price",       f"${live_price:.2f}" if live_price else "N/A")
                     c3.metric("Change",           change_str)
-                    c4.metric("Opened",           opened[:10])
+                    entry_date_display = p.get("entry_date") or opened[:10]
+                    c4.metric("Bought on", entry_date_display)
 
                     st.markdown(f"**Exit when:** {p['exit_condition']}")
                     st.markdown(f"**Based on:** _{p['source_title']}_")

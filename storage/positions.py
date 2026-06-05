@@ -43,13 +43,19 @@ def add_position(
     direction:       str,
     confidence:      float,
     source_title:    str,
+    entry_date:      str  = None,  # ISO date string e.g. "2026-06-04" — defaults to today
 ) -> dict:
     """
     Adds a new open position. If the ticker already exists as an
-    open position, it updates it instead of adding a duplicate.
-    Returns the position dict that was saved.
+    open position, updates it instead of adding a duplicate.
+    entry_date lets the user record when they actually bought,
+    which may differ from when they added it to the app.
     """
     positions = load_positions()
+
+    # Use today if no entry date provided
+    if not entry_date:
+        entry_date = datetime.now().strftime("%Y-%m-%d")
 
     # Check if this ticker is already open
     for p in positions:
@@ -57,6 +63,7 @@ def add_position(
             print(f"Positions: {ticker} already open, updating reference price.")
             p["reference_price"] = reference_price
             p["exit_condition"]  = exit_condition
+            p["entry_date"]      = entry_date
             p["updated_at"]      = datetime.now().isoformat()
             save_positions(positions)
             return p
@@ -65,22 +72,23 @@ def add_position(
         "ticker":           ticker,
         "company_name":     company_name,
         "reference_price":  reference_price,
-        "manual_price":     None,   # set later if user overrides
+        "manual_price":     None,
         "exit_condition":   exit_condition,
         "direction":        direction,
         "confidence":       confidence,
         "source_title":     source_title,
-        "opened_at":        datetime.now().isoformat(),
+        "entry_date":       entry_date,        # when the user actually bought
+        "opened_at":        datetime.now().isoformat(),  # when they added it to the app
         "updated_at":       datetime.now().isoformat(),
-        "status":           "open",   # open | closed
+        "status":           "open",
         "closed_at":        None,
-        "close_reason":     None,     # what triggered the exit
-        "alerts_sent":      [],       # log of alerts already sent
+        "close_reason":     None,
+        "alerts_sent":      [],
     }
 
     positions.append(position)
     save_positions(positions)
-    print(f"Positions: added {ticker} at ${reference_price}")
+    print(f"Positions: added {ticker} at ${reference_price} (entry date: {entry_date})")
     return position
 
 
