@@ -130,6 +130,40 @@ with st.sidebar:
     run_button = st.button("🔄 Run pipeline", use_container_width=True, type="primary")
     st.caption("Fetches fresh news, scores it, and runs Claude analysis. Takes ~30 seconds.")
 
+    # Robinhood sync
+    from ingestion.robinhood import is_available as rh_available, fetch_positions as rh_fetch
+    if rh_available():
+        st.divider()
+        st.subheader("Robinhood")
+        if st.button("🔄 Sync positions", use_container_width=True):
+            with st.spinner("Connecting to Robinhood..."):
+                rh_positions = rh_fetch()
+            if rh_positions:
+                synced = 0
+                skipped = 0
+                existing_tickers = {p["ticker"] for p in get_open_positions()}
+                for rp in rh_positions:
+                    if rp["ticker"] in existing_tickers:
+                        skipped += 1
+                        continue
+                    add_position(
+                        ticker=          rp["ticker"],
+                        company_name=    rp["company_name"],
+                        reference_price= rp["avg_cost"],
+                        exit_condition=  "Synced from Robinhood — set exit condition manually",
+                        direction=       "buy",
+                        confidence=      0.0,
+                        source_title=    "Robinhood sync",
+                    )
+                    update_amount_invested(rp["ticker"], rp["amount_invested"])
+                    synced += 1
+                st.success(f"Synced {synced} positions. Skipped {skipped} already in Argus.")
+                if synced > 0:
+                    st.rerun()
+            else:
+                st.error("Could not fetch Robinhood positions. Check credentials in .env.")
+        st.caption("Read-only — imports positions, does not trade.")
+
 # --- Session state ---
 if "recommendations" not in st.session_state:
     cache = load_cache()
