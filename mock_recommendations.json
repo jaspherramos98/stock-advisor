@@ -1,0 +1,86 @@
+[
+  {
+    "ticker": "AAPL",
+    "company_name": "Apple Inc.",
+    "asset_type": "stock",
+    "direction": "buy",
+    "entry_rationale": "MOCK: Strong AI product pipeline driving services revenue growth.",
+    "exit_condition": "target 8% gain, stop loss at 3%",
+    "risk_level": "low",
+    "confidence_score": 0.78,
+    "flagged": false,
+    "source_title": "MOCK DATA — Claude API not called"
+  },
+  {
+    "ticker": "NVDA",
+    "company_name": "NVIDIA Corporation",
+    "asset_type": "stock",
+    "direction": "buy",
+    "entry_rationale": "MOCK: Data center demand accelerating on AI infrastructure buildout.",
+    "exit_condition": "target 10% gain, stop loss at 5%",
+    "risk_level": "medium",
+    "confidence_score": 0.72,
+    "flagged": false,
+    "source_title": "MOCK DATA — Claude API not called"
+  },
+  {
+    "ticker": "GOOGL",
+    "company_name": "Alphabet Inc.",
+    "asset_type": "stock",
+    "direction": "watch",
+    "entry_rationale": "MOCK: Antitrust concerns creating uncertainty despite strong ad revenue.",
+    "exit_condition": "clarity on antitrust ruling or 3 weeks, stop loss at 4%",
+    "risk_level": "medium",
+    "confidence_score": 0.65,
+    "flagged": false,
+    "source_title": "MOCK DATA — Claude API not called"
+  },
+  {
+    "ticker": "TSLA",
+    "company_name": "Tesla Inc.",
+    "asset_type": "stock",
+    "direction": "watch",
+    "entry_rationale": "MOCK: EV market share recovery signals but execution risk remains.",
+    "exit_condition": "post-earnings reaction or 2 weeks, stop loss at 5%",
+    "risk_level": "medium",
+    "confidence_score": 0.58,
+    "flagged": false,
+    "source_title": "MOCK DATA — Claude API not called"
+  },
+  {
+    "ticker": "SPY",
+    "company_name": "SPDR S&P 500 ETF Trust",
+    "asset_type": "etf",
+    "direction": "buy",
+    "entry_rationale": "MOCK: Broad market strength on positive jobs data.",
+    "exit_condition": "target 3% gain, stop loss at 1.5%",
+    "risk_level": "low",
+    "confidence_score": 0.80,
+    "flagged": false,
+    "source_title": "MOCK DATA — Claude API not called"
+  },
+  {
+    "ticker": "BTC",
+    "company_name": "Bitcoin",
+    "asset_type": "crypto",
+    "direction": "watch",
+    "entry_rationale": "MOCK: Institutional adoption growing but currently in 14% downtrend.",
+    "exit_condition": "target 8% gain, stop loss at 6% given high volatility",
+    "risk_level": "high",
+    "confidence_score": 0.52,
+    "flagged": false,
+    "source_title": "MOCK DATA — Claude API not called"
+  },
+  {
+    "ticker": "ETH",
+    "company_name": "Ethereum",
+    "asset_type": "crypto",
+    "direction": "watch",
+    "entry_rationale": "MOCK: Layer 2 adoption accelerating but unverified price target source.",
+    "exit_condition": "target 10% gain, stop loss at 5%",
+    "risk_level": "high",
+    "confidence_score": 0.48,
+    "flagged": true,
+    "source_title": "MOCK DATA — Claude API not called"
+  }
+]

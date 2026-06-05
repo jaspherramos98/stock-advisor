@@ -164,6 +164,32 @@ def run_analysis(
     fetches crypto context from CoinGecko if needed, sends to Claude,
     and returns a list of recommendations as clean dictionaries.
     """
+    # ── MOCK MODE ──────────────────────────────────────────────────
+    # When MOCK_MODE=true in .env, skip the Claude API entirely and
+    # return pre-saved recommendations. Zero tokens consumed.
+    if os.getenv("MOCK_MODE", "false").lower() == "true":
+        mock_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "mock_recommendations.json"
+        )
+        try:
+            with open(mock_path, "r") as f:
+                mock_recs = json.load(f)
+
+            # Filter by asset type so checkboxes still work in mock mode
+            filtered = []
+            for rec in mock_recs:
+                asset = rec.get("asset_type", "stock")
+                if asset == "stock"  and include_stocks: filtered.append(rec)
+                if asset == "etf"    and include_etfs:   filtered.append(rec)
+                if asset == "crypto" and include_crypto:  filtered.append(rec)
+
+            print(f"\n⚠️  MOCK MODE — Claude API skipped. Returning {len(filtered)} mock recommendations.")
+            return filtered
+        except Exception as e:
+            print(f"Mock mode error: {e} — falling through to real Claude call.")
+    # ── END MOCK MODE ──────────────────────────────────────────────
+
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     unique_items = _deduplicate_by_asset_type(
