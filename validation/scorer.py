@@ -8,6 +8,7 @@ SOURCE_WEIGHTS = {
     "sec":              1.0,
     "finnhub_company":  0.7,
     "finnhub_etf":      0.7,
+    "robinhood_news":   0.65,
     "finnhub_general":  0.6,
     "finnhub_crypto":   0.5,
     "rss":              0.5,

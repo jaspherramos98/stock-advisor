@@ -128,7 +128,58 @@ def fetch_positions() -> list[dict]:
         print(f"Robinhood sync: fetch failed — {e}")
         _logout()
         return []
+def fetch_robinhood_news(tickers: list[str] = None) -> list[dict]:
+    """
+    Fetches news from Robinhood for the given tickers.
+    Returns normalized items compatible with the scoring pipeline.
+    
+    If robin_stocks breaks, update the parsing logic here
+    but keep the return format the same.
+    """
+    if not _login():
+        return []
 
+    if not tickers:
+        # Default to watchlist tickers
+        try:
+            from storage.watchlist import get_tickers
+            tickers = get_tickers("stocks")
+        except Exception:
+            tickers = []
+
+    all_news = []
+    seen_titles = set()
+
+    for ticker in tickers:
+        try:
+            stories = rh.stocks.get_news(ticker)
+            if not stories:
+                continue
+
+            for story in stories[:3]:  # top 3 per ticker to avoid flooding
+                title = story.get("title", "")
+                if not title or title in seen_titles:
+                    continue
+                seen_titles.add(title)
+
+                all_news.append({
+                    "title":            title,
+                    "summary":          story.get("preview_text", "") or story.get("summary", ""),
+                    "source":           story.get("source", "Robinhood"),
+                    "source_type":      "robinhood_news",
+                    "ticker":           ticker,
+                    "url":              story.get("url", ""),
+                    "published":        story.get("published_at", ""),
+                    "confidence_score": 0,  # scorer will assign this
+                    "flagged":          False,
+                })
+        except Exception as e:
+            print(f"Robinhood news error for {ticker}: {e}")
+            continue
+
+    _logout()
+    print(f"Robinhood news: fetched {len(all_news)} articles")
+    return all_news
 
 def is_available() -> bool:
     """Check if Robinhood sync is configured and ready."""

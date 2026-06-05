@@ -5,6 +5,7 @@ from ingestion.finnhub_news     import fetch_finnhub_news
 from ingestion.sec              import fetch_sec_filings
 from validation.scorer          import run_scorer
 from calculator.portfolio       import calculate_allocations, print_allocation_table
+from ingestion.robinhood        import is_available, fetch_robinhood_news
 import os
 
 
@@ -44,7 +45,17 @@ def run_ingestion_and_analysis(
         include_crypto=include_crypto,
     )
     sec_filings   = fetch_sec_filings()
-    all_items     = rss_articles + reddit_posts + finnhub_items + sec_filings
+
+    # Robinhood news (optional — only if credentials are configured)
+    rh_news = []
+    try:
+        from ingestion.robinhood import is_available, fetch_robinhood_news
+        if is_available():
+            rh_news = fetch_robinhood_news()
+    except Exception as e:
+        print(f"Robinhood news fetch error: {e}")
+
+    all_items = rss_articles + reddit_posts + finnhub_items + sec_filings + rh_news
     print(f"\nTotal raw items: {len(all_items)}")
 
     # --- Layer 2: Scoring ---
