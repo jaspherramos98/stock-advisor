@@ -34,11 +34,119 @@ def save_budget(amount: float):
     with open(BUDGET_FILE, "w") as f:
         json.dump({"budget": amount}, f)
 
+def load_budget() -> float:
+    if not os.path.exists(BUDGET_FILE):
+        return 1000.0
+    try:
+        with open(BUDGET_FILE, "r") as f:
+            return json.load(f).get("budget", 1000.0)
+    except Exception:
+        return 1000.0
+
+
 # =========================================================
 # CHATBOT PROXY SERVER — keeps API key server-side
 # =========================================================
 import threading
 import requests as _requests
+
+def _build_argus_context() -> str:
+    """
+    Builds a real-time snapshot of the user's portfolio and today's
+    recommendations to inject into the chatbot system prompt.
+    """
+    lines = []
+
+    # --- Budget ---
+    try:
+        budget = load_budget()
+        lines.append(f"CURRENT BUDGET: ${budget:,.2f}")
+    except Exception:
+        pass
+
+    # --- Open positions ---
+    try:
+        from storage.positions import get_open_positions
+        from ingestion.prices import fetch_prices as _fp
+        positions = get_open_positions()
+        if positions:
+            tickers    = [p["ticker"] for p in positions]
+            live_prices = _fp(tickers)
+            lines.append("\nOPEN POSITIONS:")
+            for p in positions:
+                ticker     = p["ticker"]
+                ref_price  = p.get("manual_price") or p.get("reference_price", 0)
+                live       = live_prices.get(ticker)
+                live_price = live["price"] if live else ref_price
+                change_pct = ((live_price - ref_price) / ref_price * 100) if ref_price else 0
+                amount_inv = p.get("amount_invested", 0) or 0
+                lines.append(
+                    f"  {ticker} — {p['company_name']} | "
+                    f"entry: ${ref_price:.2f} | live: ${live_price:.2f} | "
+                    f"P&L: {change_pct:+.1f}% | invested: ${amount_inv:.2f} | "
+                    f"exit when: {p.get('exit_condition', 'not set')}"
+                )
+        else:
+            lines.append("\nOPEN POSITIONS: None")
+    except Exception as e:
+        lines.append(f"\nOPEN POSITIONS: Could not load ({e})")
+
+    # --- Closed positions summary ---
+    try:
+        from storage.positions import get_closed_positions
+        closed = get_closed_positions()
+        if closed:
+            with_pnl = [p for p in closed if p.get("pnl_pct") is not None]
+            winners  = [p for p in with_pnl if p["pnl_pct"] > 0]
+            avg_pnl  = sum(p["pnl_pct"] for p in with_pnl) / len(with_pnl) if with_pnl else 0
+            win_rate = round(len(winners) / len(with_pnl) * 100) if with_pnl else 0
+            lines.append(
+                f"\nCLOSED POSITIONS: {len(closed)} total | "
+                f"win rate: {win_rate}% | avg P&L: {avg_pnl:+.1f}%"
+            )
+    except Exception:
+        pass
+
+    # --- Today's recommendations ---
+    try:
+        cache_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "pipeline_cache.json"
+        )
+        if os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                cache = json.load(f)
+            recs = cache.get("recommendations", [])
+            if recs:
+                lines.append(f"\nTODAY'S RECOMMENDATIONS ({cache.get('last_run', 'unknown run time')}):")
+                for r in recs:
+                    hr    = " ⭐ HIGHLY RECOMMENDED" if r.get("highly_recommended") else ""
+                    lines.append(
+                        f"  {r.get('ticker','?')} — {r.get('company_name','?')} | "
+                        f"{r.get('direction','?').upper()}{hr} | "
+                        f"confidence: {r.get('confidence_score',0):.2f} | "
+                        f"risk: {r.get('risk_level','?')} | "
+                        f"exit: {r.get('exit_condition','?')} | "
+                        f"rationale: {r.get('entry_rationale','?')}"
+                    )
+            else:
+                lines.append("\nTODAY'S RECOMMENDATIONS: None yet — run the pipeline first.")
+    except Exception as e:
+        lines.append(f"\nTODAY'S RECOMMENDATIONS: Could not load ({e})")
+
+    # --- Watchlist ---
+    try:
+        from storage.watchlist import load_watchlist
+        wl = load_watchlist()
+        for asset_type in ["stocks", "etfs", "crypto"]:
+            tickers = wl.get(asset_type, [])
+            if tickers:
+                lines.append(f"\nWATCHLIST ({asset_type.upper()}): {', '.join(tickers)}")
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
 
 def _start_proxy_server():
     """
@@ -65,18 +173,16 @@ def _start_proxy_server():
             if not api_key:
                 return jsonify({"error": "API key not configured"}), 500
 
-            # Validate required fields
             messages = data.get("messages", [])
             system   = data.get("system", "")
             if not messages:
                 return jsonify({"error": "No messages provided"}), 400
 
-            # Forward to Anthropic
             resp = _requests.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
-                    "Content-Type":    "application/json",
-                    "x-api-key":       api_key,
+                    "Content-Type":      "application/json",
+                    "x-api-key":         api_key,
                     "anthropic-version": "2023-06-01",
                 },
                 json={
@@ -92,11 +198,19 @@ def _start_proxy_server():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @proxy_app.route("/context", methods=["GET"])
+    def context():
+        """Returns a real-time snapshot of the user's portfolio and recommendations."""
+        try:
+            ctx = _build_argus_context()
+            return jsonify({"context": ctx}), 200
+        except Exception as e:
+            return jsonify({"context": "", "error": str(e)}), 200
+
     @proxy_app.route("/health", methods=["GET"])
     def health():
         return jsonify({"status": "ok"}), 200
 
-    # Run in background thread — daemon=True means it dies when Streamlit dies
     thread = threading.Thread(
         target=lambda: proxy_app.run(
             host="127.0.0.1",
@@ -109,22 +223,10 @@ def _start_proxy_server():
     thread.start()
     print("Proxy: chatbot proxy server started on localhost:8502")
 
-# Start once — Streamlit rerenders the script on every interaction
-# so we guard against starting multiple threads
 if "proxy_started" not in st.session_state:
     _start_proxy_server()
     st.session_state.proxy_started = True
 
-
-
-def load_budget() -> float:
-    if not os.path.exists(BUDGET_FILE):
-        return 1000.0
-    try:
-        with open(BUDGET_FILE, "r") as f:
-            return json.load(f).get("budget", 1000.0)
-    except Exception:
-        return 1000.0
 
 
 def save_cache(recommendations, prices, last_run):
@@ -1342,287 +1444,186 @@ else:
 # =========================================================
 
 
+st.write("")  # chatbot anchor
 from streamlit.components.v1 import html as st_html
 
-st_html(f"""<!DOCTYPE html>
-<html>
-<head>
-<style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  html, body {{
-    background: transparent !important;
-    overflow: hidden;
-    font-family: 'Segoe UI', sans-serif;
-  }}
+from streamlit.components.v1 import html as st_html
 
-  #argus-chat-btn {{
-    position: fixed;
-    bottom: 12px;
-    right: 12px;
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #2ecc71, #1a8a4a);
-    border: none;
-    cursor: pointer;
-    z-index: 9999;
-    box-shadow: 0 4px 24px rgba(46,204,113,0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 22px;
-    color: white;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-  }}
-  #argus-chat-btn:hover {{
-    transform: scale(1.08);
-    box-shadow: 0 6px 32px rgba(46,204,113,0.6);
-  }}
-
-  #argus-chat-panel {{
-    position: fixed;
-    bottom: 76px;
-    right: 12px;
-    width: 370px;
-    height: 500px;
-    background: #0f1a14;
-    border: 1px solid #2ecc71;
-    border-radius: 16px;
-    z-index: 9998;
-    display: none;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 8px 48px rgba(0,0,0,0.6);
-  }}
-  #argus-chat-panel.open {{ display: flex; }}
-
-  #argus-chat-header {{
-    padding: 14px 18px;
-    background: #0d1f12;
-    border-bottom: 1px solid rgba(46,204,113,0.3);
-    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
-  }}
-  .dot {{
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #2ecc71; box-shadow: 0 0 8px #2ecc71;
-    animation: pulse 2s infinite; flex-shrink: 0;
-  }}
-  @keyframes pulse {{ 0%,100%{{opacity:1;}} 50%{{opacity:0.4;}} }}
-  .title {{ color:#2ecc71; font-size:13px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }}
-  .subtitle {{ color:rgba(255,255,255,0.4); font-size:11px; font-family:monospace; margin-left:auto; }}
-  #close-btn {{ background:none; border:none; color:rgba(255,255,255,0.4); font-size:16px; cursor:pointer; padding:0 0 0 8px; }}
-  #close-btn:hover {{ color:#fff; }}
-
-  #argus-chat-messages {{
-    flex:1; overflow-y:auto; padding:14px;
-    display:flex; flex-direction:column; gap:12px;
-    scrollbar-width:thin; scrollbar-color:#2ecc71 transparent;
-  }}
-  #argus-chat-messages::-webkit-scrollbar {{ width:4px; }}
-  #argus-chat-messages::-webkit-scrollbar-thumb {{ background:#2ecc71; border-radius:2px; }}
-
-  .msg {{ max-width:85%; padding:10px 14px; border-radius:12px; font-size:13px; line-height:1.5; }}
-  .user {{ align-self:flex-end; background:linear-gradient(135deg,#1a4a2e,#2ecc71); color:#fff; border-bottom-right-radius:4px; }}
-  .assistant {{
-    align-self:flex-start; background:rgba(255,255,255,0.05);
-    color:rgba(255,255,255,0.9); border:1px solid rgba(46,204,113,0.15);
-    border-bottom-left-radius:4px; font-family:monospace; font-size:12px;
-  }}
-  .disclaimer {{ margin-top:6px; font-size:10px; color:rgba(255,255,255,0.3); border-top:1px solid rgba(255,255,255,0.1); padding-top:6px; }}
-  .thinking {{
-    align-self:flex-start; color:#2ecc71; font-family:monospace; font-size:11px;
-    padding:8px 14px; background:rgba(46,204,113,0.05);
-    border:1px solid rgba(46,204,113,0.2); border-radius:12px;
-  }}
-
-  #argus-chat-input-area {{
-    padding:12px 16px; border-top:1px solid rgba(46,204,113,0.2);
-    background:#0a1210; display:flex; gap:8px; align-items:flex-end; flex-shrink:0;
-  }}
-  #argus-chat-input {{
-    flex:1; background:rgba(255,255,255,0.05);
-    border:1px solid rgba(46,204,113,0.3); border-radius:8px;
-    color:#fff; padding:10px 12px; font-size:13px;
-    font-family:'Segoe UI',sans-serif;
-    resize:none; outline:none; min-height:40px; max-height:100px;
-    transition:border-color 0.2s;
-  }}
-  #argus-chat-input:focus {{ border-color:#2ecc71; }}
-  #argus-chat-input::placeholder {{ color:rgba(255,255,255,0.25); }}
-  #argus-chat-send {{
-    background:linear-gradient(135deg,#2ecc71,#1a8a4a);
-    border:none; border-radius:8px; width:40px; height:40px;
-    cursor:pointer; color:white; font-size:16px; flex-shrink:0;
-    display:flex; align-items:center; justify-content:center;
-    transition:opacity 0.2s;
-  }}
-  #argus-chat-send:hover {{ opacity:0.85; }}
-  #argus-chat-send:disabled {{ opacity:0.4; cursor:not-allowed; }}
-</style>
-</head>
-<body>
-
-<button id="argus-chat-btn" onclick="toggleArgusChat()">🔍</button>
-
-<div id="argus-chat-panel">
-  <div id="argus-chat-header">
-    <div class="dot"></div>
-    <div class="title">Argus Assistant</div>
-    <div class="subtitle">investing only</div>
-    <button id="close-btn" onclick="toggleArgusChat()">✕</button>
-  </div>
-  <div id="argus-chat-messages">
-    <div class="msg assistant">
-      Hey — I'm Argus. Ask me anything about investing, how this app works, or what any of the signals mean.
-      <div class="disclaimer">Not financial advice. For informational purposes only.</div>
-    </div>
-  </div>
-  <div id="argus-chat-input-area">
-    <textarea id="argus-chat-input" placeholder="Ask about investing or how Argus works..." rows="1"
-      onkeydown="if(event.key==='Enter'&&!event.shiftKey){{event.preventDefault();sendArgusMessage();}}"></textarea>
-    <button id="argus-chat-send" onclick="sendArgusMessage()">➤</button>
-  </div>
-</div>
-
+st_html("""
 <script>
-let myIframe = null;
-let argusOpen = false;
-
-function findMyIframe() {{
-  if (myIframe) return myIframe;
-  try {{
-    const iframes = window.parent.document.querySelectorAll('iframe');
-    for (let i = 0; i < iframes.length; i++) {{
-      try {{
-        if (iframes[i].contentWindow === window) {{
-          myIframe = iframes[i];
-          return myIframe;
-        }}
-      }} catch(e) {{}}
-    }}
-  }} catch(e) {{}}
-  return null;
-}}
-
-function setIframeSize(expanded) {{
-  const iframe = findMyIframe();
-  if (!iframe) return;
-  if (expanded) {{
-    iframe.style.cssText = `
-      position:fixed !important; bottom:0 !important; right:0 !important;
-      width:420px !important; height:640px !important;
-      border:none !important; z-index:999999 !important;
-      background:transparent !important;
-    `;
-  }} else {{
-    iframe.style.cssText = `
-      position:fixed !important; bottom:20px !important; right:20px !important;
-      width:72px !important; height:72px !important;
-      border:none !important; z-index:999999 !important;
-      background:transparent !important;
-    `;
-  }}
-}}
-
-// Start small — just the button
-function init() {{
-  if (!findMyIframe()) {{
-    setTimeout(init, 100);
-    return;
-  }}
-  setIframeSize(false);
-}}
-init();
-
-function toggleArgusChat() {{
-  argusOpen = !argusOpen;
-  document.getElementById('argus-chat-panel').className = argusOpen ? 'open' : '';
-  setIframeSize(argusOpen);
-  if (argusOpen) setTimeout(() => document.getElementById('argus-chat-input').focus(), 150);
-}}
-
-// API key is handled server-side via proxy at localhost:8502
-const ARGUS_SYSTEM = `You are Argus Assistant, the built-in helper for the Argus stock advisor app.
-STRICT RULES:
-1. You ONLY discuss investing topics and how the Argus app works. Nothing else.
-2. If asked about anything unrelated say: "I can only help with investing topics and how Argus works."
-3. Keep responses concise — 3-5 sentences max unless detail is genuinely needed.
-4. Never recommend specific stocks to buy or sell.
-5. Always end with: "Not financial advice — always do your own research."
-ABOUT ARGUS:
-- AI stock advisor fetching news from 8+ sources daily
-- Scores: SEC=1.0, Finnhub=0.68, RSS=0.50, Reddit=0.15
-- Claude analyzes top 25 stories, returns buy/watch/avoid signals
-- Buy signals get real budget allocations. Watch=$0. Avoid=filtered out.
-- Confidence score = source verification level, not stock prediction confidence
-- Track positions with entry price, date, exit conditions
-- Exit checker monitors stop loss, gain targets, time limits, news events
-- Portfolio tab shows invested money and combined value trend graph
-- Mock mode (MOCK_MODE=true in .env) skips Claude API for zero-token testing
-INVESTING TOPICS:
-- Stop loss, P&L, confidence score, allocation, position, signal definitions
-- How to read the recommendation table, buy vs watch vs avoid
-- Diversification, risk management, dollar cost averaging
-- How to use any Argus feature`;
-
-let argusHistory = [];
-
-function appendMsg(role, text) {{
-  const c = document.getElementById('argus-chat-messages');
-  const d = document.createElement('div');
-  d.className = 'msg ' + role;
-  if (role === 'assistant') {{
-    d.innerHTML = text.replace(/\\n/g,'<br>').replace(/[*][*](.*?)[*][*]/g,'<strong>$1</strong>') +
-      '<div class="disclaimer">Not financial advice — always do your own research.</div>';
-  }} else {{
-    d.textContent = text;
-  }}
-  c.appendChild(d);
-  c.scrollTop = c.scrollHeight;
-}}
-
-async function sendArgusMessage() {{
-  const input = document.getElementById('argus-chat-input');
-  const sendBtn = document.getElementById('argus-chat-send');
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  sendBtn.disabled = true;
-  appendMsg('user', text);
-  argusHistory.push({{role:'user', content:text}});
-
-  const c = document.getElementById('argus-chat-messages');
-  const thinking = document.createElement('div');
-  thinking.className = 'thinking';
-  thinking.textContent = '▋ analyzing...';
-  c.appendChild(thinking);
-  c.scrollTop = c.scrollHeight;
-
-  try {{
-    const response = await fetch('http://localhost:8502/chat', {{
-      method:'POST',
-      headers:{{ 'Content-Type':'application/json' }},
-      body: JSON.stringify({{
-        system: ARGUS_SYSTEM,
-        messages: argusHistory,
-      }}),
-    }});
-    const data = await response.json();
-    thinking.remove();
-    if (data.content && data.content[0]) {{
-      const reply = data.content[0].text;
-      argusHistory.push({{role:'assistant', content:reply}});
-      appendMsg('assistant', reply);
-    }} else {{
-      appendMsg('assistant','Error: ' + JSON.stringify(data));
-    }}
-  }} catch(e) {{
-    thinking.remove();
-    appendMsg('assistant','Could not reach the API. Check your connection.');
-  }}
-  sendBtn.disabled = false;
-  input.focus();
-}}
+(function() {
+  // Don't inject twice
+  if (window.parent.document.getElementById('argus-chat-injected')) return;
+  
+  const parentDoc = window.parent.document;
+  const container = parentDoc.createElement('div');
+  container.id = 'argus-chat-injected';
+  container.innerHTML = `
+    <style>
+      #argus-chat-btn {
+        position: fixed; bottom: 20px; right: 20px;
+        width: 52px; height: 52px; border-radius: 50%;
+        background: linear-gradient(135deg, #2ecc71, #1a8a4a);
+        border: none; cursor: pointer; z-index: 999999;
+        box-shadow: 0 4px 24px rgba(46,204,113,0.4);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 22px; color: white;
+      }
+      #argus-chat-btn:hover { transform: scale(1.08); }
+      #argus-chat-panel {
+        position: fixed; bottom: 85px; right: 20px;
+        width: 370px; height: 500px;
+        background: #0f1a14; border: 1px solid #2ecc71;
+        border-radius: 16px; z-index: 999998;
+        display: none; flex-direction: column;
+        overflow: hidden; box-shadow: 0 8px 48px rgba(0,0,0,0.6);
+        font-family: 'Segoe UI', sans-serif;
+      }
+      #argus-chat-panel.open { display: flex; }
+      #argus-chat-header {
+        padding: 14px 18px; background: #0d1f12;
+        border-bottom: 1px solid rgba(46,204,113,0.3);
+        display: flex; align-items: center; gap: 10px;
+      }
+      .argus-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #2ecc71; box-shadow: 0 0 8px #2ecc71;
+      }
+      .argus-title { color: #2ecc71; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+      .argus-subtitle { color: rgba(255,255,255,0.4); font-size: 11px; margin-left: auto; }
+      #argus-close-btn { background: none; border: none; color: rgba(255,255,255,0.4); font-size: 16px; cursor: pointer; }
+      #argus-messages {
+        flex: 1; overflow-y: auto; padding: 14px;
+        display: flex; flex-direction: column; gap: 12px;
+      }
+      .argus-msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+      .argus-user { align-self: flex-end; background: linear-gradient(135deg, #1a4a2e, #2ecc71); color: #fff; }
+      .argus-assistant { align-self: flex-start; background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.9); border: 1px solid rgba(46,204,113,0.15); font-size: 12px; }
+      .argus-disclaimer { margin-top: 6px; font-size: 10px; color: rgba(255,255,255,0.3); border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px; }
+      .argus-thinking { align-self: flex-start; color: #2ecc71; font-size: 11px; padding: 8px 14px; background: rgba(46,204,113,0.05); border-radius: 12px; }
+      #argus-input-area { padding: 12px 16px; border-top: 1px solid rgba(46,204,113,0.2); background: #0a1210; display: flex; gap: 8px; }
+      #argus-input {
+        flex: 1; background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(46,204,113,0.3); border-radius: 8px;
+        color: #fff; padding: 10px 12px; font-size: 13px;
+        resize: none; outline: none; min-height: 40px; max-height: 100px;
+        font-family: 'Segoe UI', sans-serif;
+      }
+      #argus-send {
+        background: linear-gradient(135deg, #2ecc71, #1a8a4a);
+        border: none; border-radius: 8px; width: 40px; height: 40px;
+        cursor: pointer; color: white; font-size: 16px;
+      }
+    </style>
+    <button id="argus-chat-btn">🔍</button>
+    <div id="argus-chat-panel">
+      <div id="argus-chat-header">
+        <div class="argus-dot"></div>
+        <div class="argus-title">Argus Assistant</div>
+        <div class="argus-subtitle">investing only</div>
+        <button id="argus-close-btn">✕</button>
+      </div>
+      <div id="argus-messages">
+        <div class="argus-msg argus-assistant">
+          Hey — I'm Argus. Ask me anything about investing, how this app works, or what any of the signals mean.
+          <div class="argus-disclaimer">Not financial advice. For informational purposes only.</div>
+        </div>
+      </div>
+      <div id="argus-input-area">
+        <textarea id="argus-input" placeholder="Ask about investing or how Argus works..." rows="1"></textarea>
+        <button id="argus-send">➤</button>
+      </div>
+    </div>
+  `;
+  parentDoc.body.appendChild(container);
+  
+  const ARGUS_SYSTEM_BASE = `You are Argus Assistant, the personal investing advisor built into the Argus stock advisor app. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing topics and how the Argus app works. 2. If asked about anything unrelated say: "I can only help with investing topics and how Argus works." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable analysis — you can say "this position looks worth holding" or "today's signals are weak, I wouldn't act on them." Always explain your reasoning. 5. Always end with: "Not financial advice — always do your own research." SIGNAL QUALITY HONESTY: Always assess the quality of today's signals before giving advice. Check confidence scores and whether any are marked highly recommended. If all signals have confidence below 0.68, no highly recommended signals exist, or the rationales are vague, tell the user clearly: "Today's pipeline signals are weak — I wouldn't act on new positions today." In that case, shift focus to the user's existing positions: review each one's P&L and exit condition, flag any that are near their stop loss or have hit their gain target, and give a clear read on whether each looks like a hold or a close. If signals are strong (highly recommended present, confidence 0.68+, unambiguous catalysts), lead with those and compare them against existing positions.`;
+  let argusOpen = false;
+  let argusHistory = [];
+  let argusContext = "";
+  
+  async function loadContext() {
+    try {
+      const res = await fetch('http://localhost:8502/context');
+      const data = await res.json();
+      argusContext = data.context || "";
+    } catch(e) { argusContext = ""; }
+  }
+  
+  function buildSystem() {
+    if (!argusContext) return ARGUS_SYSTEM_BASE;
+    return ARGUS_SYSTEM_BASE + "\\n\\n=== LIVE PORTFOLIO DATA ===\\n" + argusContext;
+  }
+  
+  function toggle() {
+    argusOpen = !argusOpen;
+    parentDoc.getElementById('argus-chat-panel').className = argusOpen ? 'open' : '';
+    if (argusOpen) {
+      loadContext();
+      setTimeout(() => parentDoc.getElementById('argus-input').focus(), 150);
+    }
+  }
+  
+  function appendMsg(role, text) {
+    const c = parentDoc.getElementById('argus-messages');
+    const d = parentDoc.createElement('div');
+    d.className = 'argus-msg argus-' + role;
+    if (role === 'assistant') {
+      d.innerHTML = text.replace(/\\n/g,'<br>').replace(/[*][*](.*?)[*][*]/g,'<strong>$1</strong>') +
+        '<div class="argus-disclaimer">Not financial advice — always do your own research.</div>';
+    } else {
+      d.textContent = text;
+    }
+    c.appendChild(d);
+    c.scrollTop = c.scrollHeight;
+  }
+  
+  async function send() {
+    const input = parentDoc.getElementById('argus-input');
+    const sendBtn = parentDoc.getElementById('argus-send');
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    sendBtn.disabled = true;
+    appendMsg('user', text);
+    argusHistory.push({role:'user', content:text});
+    
+    const c = parentDoc.getElementById('argus-messages');
+    const thinking = parentDoc.createElement('div');
+    thinking.className = 'argus-thinking';
+    thinking.textContent = '▋ analyzing...';
+    c.appendChild(thinking);
+    c.scrollTop = c.scrollHeight;
+    
+    try {
+      const response = await fetch('http://localhost:8502/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system: buildSystem(), messages: argusHistory })
+      });
+      const data = await response.json();
+      thinking.remove();
+      if (data.content && data.content[0]) {
+        const reply = data.content[0].text;
+        argusHistory.push({role:'assistant', content:reply});
+        appendMsg('assistant', reply);
+      } else {
+        appendMsg('assistant', 'Error: ' + JSON.stringify(data));
+      }
+    } catch(e) {
+      thinking.remove();
+      appendMsg('assistant', 'Could not reach the API.');
+    }
+    sendBtn.disabled = false;
+    input.focus();
+  }
+  
+  parentDoc.getElementById('argus-chat-btn').addEventListener('click', toggle);
+  parentDoc.getElementById('argus-close-btn').addEventListener('click', toggle);
+  parentDoc.getElementById('argus-send').addEventListener('click', send);
+  parentDoc.getElementById('argus-input').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+})();
 </script>
-</body>
-</html>""", height=640)
+""", height=0)
