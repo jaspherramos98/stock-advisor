@@ -333,25 +333,31 @@ if st.session_state.recommendations:
             st.divider()
             st.subheader("Portfolio allocation")
 
+            # Ensure highly_recommended exists even for old cache data
+            for a in allocations:
+                a.setdefault("highly_recommended", False)
+                a["highly_recommended_display"] = "⭐" if a["highly_recommended"] else ""
+
             df = pd.DataFrame(allocations)
             df = df[[
                 "ticker", "company_name", "direction",
                 "current_price", "change_pct",
                 "dollar_amount", "percentage",
                 "risk_level", "confidence_score",
-                "exit_condition", "flagged"
+                "exit_condition", "flagged", "highly_recommended"
             ]].rename(columns={
-                "ticker":           "Ticker",
-                "company_name":     "Company",
-                "direction":        "Direction",
-                "current_price":    "Price",
-                "change_pct":       "Today",
-                "dollar_amount":    "Amount ($)",
-                "percentage":       "Allocation (%)",
-                "risk_level":       "Risk",
-                "confidence_score": "Confidence",
-                "exit_condition":   "Sell when",
-                "flagged":          "⚠ Flagged",
+                "ticker":             "Ticker",
+                "company_name":       "Company",
+                "direction":          "Direction",
+                "current_price":      "Price",
+                "change_pct":         "Today",
+                "dollar_amount":      "Amount ($)",
+                "percentage":         "Allocation (%)",
+                "risk_level":         "Risk",
+                "confidence_score":   "Confidence",
+                "exit_condition":     "Sell when",
+                "flagged":            "⚠ Flagged",
+                "highly_recommended": "⭐",
             })
 
             def color_direction(val):
@@ -370,8 +376,14 @@ if st.session_state.recommendations:
                 if val.startswith("-"): return "color: #e74c3c"
                 return ""
 
+            def highlight_hr(row):
+                if row.get("⭐") == "⭐":
+                    return ["background-color: rgba(255, 215, 0, 0.08); border-left: 3px solid #FFD700"] * len(row)
+                return [""] * len(row)
+
             styled_df = (
                 df.style
+                .apply(highlight_hr, axis=1)
                 .map(color_direction, subset=["Direction"])
                 .map(color_risk,      subset=["Risk"])
                 .map(color_change,    subset=["Today"])
@@ -410,18 +422,27 @@ if st.session_state.recommendations:
             for idx, a in enumerate(allocations):
                 flag_label      = " ⚠ Unverified source" if a["flagged"] else ""
                 direction_emoji = "🟢" if a["direction"] == "buy" else "🟡"
+                hr_badge        = " ⭐ HIGHLY RECOMMENDED" if a.get("highly_recommended") else ""
                 is_open         = a["ticker"] in open_tickers
 
                 with st.expander(
                     f"{direction_emoji} {a['ticker']} — {a['company_name']} "
-                    f"| ${a['dollar_amount']:.2f} ({a['percentage']:.1f}%){flag_label}"
+                    f"| ${a['dollar_amount']:.2f} ({a['percentage']:.1f}%){flag_label}{hr_badge}"
                 ):
                     # Colored bar — green for buy, orange for watch
-                    bar_color = "#2ecc71" if a["direction"] == "buy" else "#f39c12"
+                    bar_color = "#FFD700" if a.get("highly_recommended") else ("#2ecc71" if a["direction"] == "buy" else "#f39c12")
                     st.markdown(
                         f'<div style="height:3px; background:{bar_color}; border-radius:2px; margin-bottom:12px"></div>',
                         unsafe_allow_html=True,
                     )
+                    if a.get("highly_recommended"):
+                        st.markdown(
+                            '<div style="background:rgba(255,215,0,0.1); border:1px solid #FFD700; '
+                            'border-radius:8px; padding:8px 14px; margin-bottom:12px; '
+                            'color:#FFD700; font-size:13px; font-weight:700;">⭐ Highly Recommended — '
+                            'Strong catalyst, high-conviction signal, aggressive targets set.</div>',
+                            unsafe_allow_html=True,
+                        )
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Direction",  a["direction"].upper())
                     c2.metric("Risk",       a["risk_level"].upper())

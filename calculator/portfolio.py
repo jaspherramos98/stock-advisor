@@ -5,36 +5,40 @@ RISK_MULTIPLIERS = {
     "high":   0.35,
 }
 
+# Highly recommended signals get 2x the capital of regular buys.
+HIGHLY_RECOMMENDED_MULTIPLIER = 2.0
+
 # Safety cap — no single stock gets more than this
 # percentage of your total budget.
-MAX_SINGLE_ALLOCATION = 0.35
+MAX_SINGLE_ALLOCATION = 0.40
 
 
 def _compute_weight(rec: dict) -> float:
     """
     Calculates a raw weight for one BUY recommendation.
-    Weight = confidence_score x risk_multiplier
+    Weight = confidence_score x risk_multiplier x highly_recommended_boost
     """
-    confidence = rec.get("confidence_score", 0.5)
-    risk       = rec.get("risk_level", "medium")
-    risk_mult  = RISK_MULTIPLIERS.get(risk, 0.5)
-    return confidence * risk_mult
+    confidence   = rec.get("confidence_score", 0.5)
+    risk         = rec.get("risk_level", "medium")
+    risk_mult    = RISK_MULTIPLIERS.get(risk, 0.5)
+    hr_mult      = HIGHLY_RECOMMENDED_MULTIPLIER if rec.get("highly_recommended") else 1.0
+    return confidence * risk_mult * hr_mult
 
 
 def calculate_allocations(recommendations: list[dict], budget: float) -> list[dict]:
     """
     Takes Claude's recommendations and a user budget.
 
-    - BUY signals   → get real dollar allocations from the budget
-    - WATCH signals → appear with $0 / 0% so the user can still track them
-    - AVOID signals → filtered out entirely
+    - BUY signals (highly recommended) → 2x weighted allocation
+    - BUY signals (regular)            → standard weighted allocation
+    - WATCH signals                    → appear with $0 / 0%
+    - AVOID signals                    → filtered out entirely
     """
     if not recommendations or budget <= 0:
         print("No recommendations or zero budget — nothing to allocate.")
         return []
 
-    # Separate buy and watch — filter out avoids entirely
-    buys   = [r for r in recommendations if r.get("direction") == "buy"]
+    buys    = [r for r in recommendations if r.get("direction") == "buy"]
     watches = [r for r in recommendations if r.get("direction") == "watch"]
 
     if not buys and not watches:
@@ -77,55 +81,61 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
                 pct           = round(rec["_fraction"] * 100, 1)
                 results.append(_build_result(rec, dollar_amount, pct))
 
-    # ── WATCH — always $0, sorted after buys ────────────────────
+    # ── WATCH — always $0, sorted after buys ─────────────────────
     for rec in watches:
         results.append(_build_result(rec, 0.0, 0.0))
 
-    # Sort: buys by dollar amount descending, watches after
-    buys_out   = [r for r in results if r["direction"] == "buy"]
-    watches_out = [r for r in results if r["direction"] == "watch"]
-    buys_out.sort(key=lambda x: x["dollar_amount"], reverse=True)
+    # Sort: highly recommended first, then regular buys by amount, then watches
+    hr_buys      = [r for r in results if r["direction"] == "buy" and r.get("highly_recommended")]
+    regular_buys = [r for r in results if r["direction"] == "buy" and not r.get("highly_recommended")]
+    watches_out  = [r for r in results if r["direction"] == "watch"]
 
-    return buys_out + watches_out
+    hr_buys.sort(key=lambda x: x["dollar_amount"], reverse=True)
+    regular_buys.sort(key=lambda x: x["dollar_amount"], reverse=True)
+
+    return hr_buys + regular_buys + watches_out
 
 
 def _build_result(rec: dict, dollar_amount: float, pct: float) -> dict:
     """Builds a clean output dict for one recommendation."""
     return {
-        "ticker":           rec.get("ticker", "???"),
-        "company_name":     rec.get("company_name", "Unknown"),
-        "direction":        rec.get("direction"),
-        "asset_type":       rec.get("asset_type", "stock"),
-        "dollar_amount":    dollar_amount,
-        "percentage":       pct,
-        "entry_rationale":  rec.get("entry_rationale"),
-        "exit_condition":   rec.get("exit_condition"),
-        "risk_level":       rec.get("risk_level"),
-        "confidence_score": rec.get("confidence_score"),
-        "flagged":          rec.get("flagged", False),
-        "source_title":     rec.get("source_title", ""),
+        "ticker":             rec.get("ticker", "???"),
+        "company_name":       rec.get("company_name", "Unknown"),
+        "direction":          rec.get("direction"),
+        "asset_type":         rec.get("asset_type", "stock"),
+        "dollar_amount":      dollar_amount,
+        "percentage":         pct,
+        "entry_rationale":    rec.get("entry_rationale"),
+        "exit_condition":     rec.get("exit_condition"),
+        "risk_level":         rec.get("risk_level"),
+        "confidence_score":   rec.get("confidence_score"),
+        "flagged":            rec.get("flagged", False),
+        "source_title":       rec.get("source_title", ""),
+        "highly_recommended": rec.get("highly_recommended", False),
     }
 
 
 def print_allocation_table(allocations: list[dict], budget: float):
     """Prints a clean summary table of how the budget is distributed."""
-    print(f"\n{'='*58}")
+    print(f"\n{'='*68}")
     print(f"  Portfolio allocation — ${budget:,.2f} budget")
-    print(f"{'='*58}")
-    print(f"  {'Ticker':<8} {'Direction':<8} {'Amount':>10} {'Pct':>6} {'Risk':<8}")
-    print(f"  {'-'*54}")
+    print(f"{'='*68}")
+    print(f"  {'Ticker':<8} {'Direction':<8} {'Amount':>10} {'Pct':>6} {'Risk':<8} {'HR':>4}")
+    print(f"  {'-'*64}")
 
     for a in allocations:
         flag   = " ⚠" if a["flagged"] else ""
         ticker = a["ticker"] + flag
         amount = f"${a['dollar_amount']:>9,.2f}" if a["dollar_amount"] > 0 else "      watch"
         pct    = f"{a['percentage']:>5.1f}%" if a["percentage"] > 0 else "   —"
-        print(f"  {ticker:<10} {a['direction']:<8} {amount} {pct} {a['risk_level']:<8}")
+        hr     = "⭐" if a.get("highly_recommended") else ""
+        print(f"  {ticker:<10} {a['direction']:<8} {amount} {pct} {a['risk_level']:<8} {hr}")
 
-    print(f"  {'-'*54}")
+    print(f"  {'-'*64}")
     total_allocated = sum(a["dollar_amount"] for a in allocations)
-    print(f"  {'TOTAL BUY':<18} ${total_allocated:>9,.2f}")
-    print(f"{'='*58}\n")
+    hr_count        = sum(1 for a in allocations if a.get("highly_recommended"))
+    print(f"  {'TOTAL BUY':<18} ${total_allocated:>9,.2f}   ⭐ {hr_count} highly recommended")
+    print(f"{'='*68}\n")
 
 
 if __name__ == "__main__":
@@ -134,46 +144,28 @@ if __name__ == "__main__":
             "ticker": "AAPL", "company_name": "Apple Inc.",
             "direction": "buy", "confidence_score": 0.78,
             "risk_level": "low", "flagged": False,
-            "asset_type": "stock",
-            "entry_rationale": "Strong AI pipeline.",
-            "exit_condition": "target 8% gain, stop loss at 3%",
-            "source_title": "Apple announces AI features",
+            "asset_type": "stock", "highly_recommended": True,
+            "entry_rationale": "Beat earnings by 18%, raised guidance.",
+            "exit_condition": "target 15% gain, stop loss at 5%",
+            "source_title": "Apple Q2 earnings massive beat",
         },
         {
             "ticker": "NVDA", "company_name": "NVIDIA Corp.",
             "direction": "buy", "confidence_score": 0.72,
             "risk_level": "medium", "flagged": False,
-            "asset_type": "stock",
+            "asset_type": "stock", "highly_recommended": False,
             "entry_rationale": "Data center demand accelerating.",
-            "exit_condition": "target 10% gain, stop loss at 5%",
+            "exit_condition": "target 10% gain, stop loss at 4%",
             "source_title": "NVDA data center revenue surges",
         },
         {
             "ticker": "TSLA", "company_name": "Tesla Inc.",
             "direction": "watch", "confidence_score": 0.58,
             "risk_level": "medium", "flagged": False,
-            "asset_type": "stock",
+            "asset_type": "stock", "highly_recommended": False,
             "entry_rationale": "EV recovery signals but unclear timing.",
             "exit_condition": "post-earnings or 2 weeks, stop loss at 5%",
             "source_title": "Tesla Q2 delivery numbers",
-        },
-        {
-            "ticker": "GOOGL", "company_name": "Alphabet Inc.",
-            "direction": "watch", "confidence_score": 0.65,
-            "risk_level": "medium", "flagged": False,
-            "asset_type": "stock",
-            "entry_rationale": "Antitrust uncertainty despite strong ads.",
-            "exit_condition": "ruling clarity or 3 weeks, stop loss at 4%",
-            "source_title": "Alphabet antitrust ruling expected",
-        },
-        {
-            "ticker": "AMZN", "company_name": "Amazon",
-            "direction": "avoid", "confidence_score": 0.45,
-            "risk_level": "high", "flagged": True,
-            "asset_type": "stock",
-            "entry_rationale": "Unverified dilution risk.",
-            "exit_condition": "n/a",
-            "source_title": "Amazon raises $80B unverified",
         },
     ]
 

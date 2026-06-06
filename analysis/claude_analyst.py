@@ -309,7 +309,6 @@ and identify which assets are likely affected.
 IMPORTANT RULES:
 - This is for informational purposes only, not financial advice.
 - Only recommend assets in these categories: {asset_scope}.
-- Be conservative — only flag an asset if the news has a clear, direct impact.
 - Do not invent tickers. If you are unsure of the ticker, use null.
 - For flagged (unverified) sources, set risk_level to 'high' regardless.
 - For crypto assets, use the standard symbol (BTC, ETH, SOL etc) as the ticker.
@@ -319,25 +318,46 @@ IMPORTANT RULES:
   Always try to find at least 5-10 other actionable opportunities from the news beyond owned tickers.
 - Use the CRYPTO ASSET CONTEXT block to understand what each crypto asset does.
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
-  For high volatility assets use wider stops (4-6%). For low volatility use tighter stops (2-3%).
-  For downtrending assets be more conservative with targets. For uptrending assets near 14d highs, note resistance.
   Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
+
+SIGNAL QUALITY — BE RUTHLESSLY SELECTIVE:
+- Only return a 'buy' signal if the catalyst is unambiguous and directly actionable.
+  Strong catalysts: earnings beats, M&A announcements, FDA approvals, major contract wins,
+  short squeeze setups, insider buying at scale, SEC filings showing material positive events.
+  Weak catalysts (use 'watch' or skip): analyst upgrades, general sector optimism, vague macro tailwinds.
+- Return 'watch' for interesting but unclear setups — where the thesis is sound but timing is uncertain.
+- Return 'avoid' or omit entirely for anything with weak evidence or unverified sources.
+
+HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 3 CONDITIONS ARE MET:
+1. The catalyst is unambiguous — no "may", "could", "might". It happened or was officially announced.
+2. The confidence score is 0.68 or above (Finnhub company news, SEC filing, or Robinhood news).
+3. The price trend supports entry — not already at the 14-day high, not in a sharp downtrend
+   (unless the catalyst is a reversal event like an earnings beat or buyout).
+Set highly_recommended to false for everything else including all watch signals.
+
+EXIT CONDITIONS — BE AGGRESSIVE FOR STRONG SIGNALS:
+- highly_recommended buys: gain targets 12-20%, stops 4-6% (let winners run, stops wide enough to breathe)
+- Regular buys: gain targets 6-10%, stops 2-4%
+- Upside must be at least 2x the stop loss distance. If it isn't, widen the target not the stop.
+- For high volatility assets (avg daily range >3%) use stops of at least 5% to avoid noise shakeouts.
+- For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
 
 You must respond with ONLY a valid JSON array. No preamble, no explanation,
 no markdown code fences. Just the raw JSON array.
 
 Each object in the array must have exactly these fields:
 {{
-  "ticker":          string or null,
-  "company_name":    string,
-  "asset_type":      "stock" or "etf" or "crypto",
-  "direction":       "buy" or "watch" or "avoid",
-  "entry_rationale": string (max 2 sentences),
-  "exit_condition":  string (e.g. '10% gain' or '2 weeks' or 'earnings release'),
-  "risk_level":      "low" or "medium" or "high",
-  "confidence_score": number (pass through from the news item),
-  "flagged":         boolean,
-  "source_title":    string (the news headline this is based on)
+  "ticker":             string or null,
+  "company_name":       string,
+  "asset_type":         "stock" or "etf" or "crypto",
+  "direction":          "buy" or "watch" or "avoid",
+  "entry_rationale":    string (max 2 sentences),
+  "exit_condition":     string (e.g. '10% gain' or '2 weeks' or 'earnings release'),
+  "risk_level":         "low" or "medium" or "high",
+  "confidence_score":   number (pass through from the news item),
+  "flagged":            boolean,
+  "source_title":       string (the news headline this is based on),
+  "highly_recommended": boolean
 }}
 
 If no assets are clearly actionable from the news provided, return an empty array: []"""
