@@ -29,15 +29,18 @@ def _build_email_html(alerts: list[dict]) -> str:
         if a["alert_type"] == "percentage_gain":
             color      = "#2ecc71"
             type_label = f"📈 {alert_type}"
-        elif a["alert_type"] == "percentage_loss":
+        elif a["alert_type"] == "stop_loss":
             color      = "#e74c3c"
-            type_label = f"📉 {alert_type}"
+            type_label = f"🛑 Stop Loss"
         elif a["alert_type"] == "time_based":
             color      = "#f39c12"
             type_label = f"⏰ {alert_type}"
-        else:
+        elif a["alert_type"] == "event_based":
             color      = "#3498db"
             type_label = f"📰 {alert_type}"
+        else:
+            color      = "#aaaaaa"
+            type_label = alert_type
 
         alert_rows += f"""
         <tr>

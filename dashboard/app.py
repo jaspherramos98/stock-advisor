@@ -674,8 +674,11 @@ if st.session_state.recommendations:
                 m_direction = st.selectbox("Direction", ["buy", "watch"], key="manual_direction")
 
             if st.button("📌 Add to positions", key="manual_add_btn", use_container_width=True, type="primary"):
+                import re as _re
                 if not m_ticker:
                     st.error("Enter a ticker symbol.")
+                elif not _re.match(r'^[A-Z0-9.\-]{1,10}$', m_ticker):
+                    st.error("Invalid ticker symbol. Use letters, numbers, dots, or hyphens only (e.g. AAPL, BRK.B).")
                 elif not m_company:
                     st.error("Enter a company name.")
                 elif m_price <= 0.01:

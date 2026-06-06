@@ -175,20 +175,16 @@ def _check_time_exit(position: dict) -> dict | None:
 
 
 def _check_event_exits(positions: list[dict]) -> list[dict]:
-
-    if os.getenv("MOCK_MODE", "false").lower() == "true":
-        print("Event checker: MOCK MODE — skipping Claude call.")
-        return []
-
-    if not positions:
-        return []
-
     """
     Uses Claude to check if any recent news signals that an
     event-based exit condition has been met for any open position.
     Sends all positions and recent news in one Claude call to save tokens.
     Returns a list of alert dicts for any triggered exits.
     """
+    if os.getenv("MOCK_MODE", "false").lower() == "true":
+        print("Event checker: MOCK MODE — skipping Claude call.")
+        return []
+
     if not positions:
         return []
 
