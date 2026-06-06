@@ -99,7 +99,7 @@ How all components, files, and external APIs connect.
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/jaspherramos98/MyDentalPortal
+git clone https://github.com/jaspherramos98/Mstock-advisor
 cd stock-advisor
 python -m venv venv
 venv\Scripts\activate        # Windows
