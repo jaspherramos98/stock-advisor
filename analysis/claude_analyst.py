@@ -98,6 +98,7 @@ def _build_prompt(
     items:         list[dict],
     crypto_context: dict = None,
     price_history:  dict = None,
+    open_positions:  list = None,
 ) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
@@ -135,6 +136,23 @@ def _build_prompt(
                     f"14d low: ${data['low_14d']} ({data['pct_from_low']:+.1f}% from now)"
                 )
             lines.append("=== END TREND DATA ===\n")
+            # Open positions block — tells Claude what the user already owns
+
+    if open_positions:
+        lines.append("=== YOUR CURRENT OPEN POSITIONS ===")
+        lines.append(
+            "The user already owns these assets. Do NOT recommend buying more of them. "
+            "If there is strong news about an already-owned ticker, you may include it "
+            "as direction='watch' with a note about the news impact on the existing position, "
+            "but do not allocate new capital to it."
+        )
+        for p in open_positions:
+            lines.append(
+                f"${p['ticker']} — {p['company_name']} | "
+                f"entry: ${p.get('reference_price', 0):.2f} | "
+                f"exit when: {p.get('exit_condition', 'not set')}"
+            )
+        lines.append("=== END OPEN POSITIONS ===\n")
 
     # News items
     for i, item in enumerate(items, 1):
@@ -147,7 +165,7 @@ def _build_prompt(
         lines.append(
             f"{i}. [{score} confidence{flag_hint}]{ticker_hint}\n"
             f"   Title   : {title}\n"
-            f"   Summary : {summary[:200]}\n"
+            f"   Summary : {summary[:100]}\n"
             f"   Source  : {source}"
         )
     return "\n\n".join(lines)
@@ -192,6 +210,17 @@ def run_analysis(
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+    # Fetch open positions so Claude knows what the user already owns
+    open_positions = []
+    try:
+        from storage.positions import get_open_positions
+        open_positions = get_open_positions()
+        if open_positions:
+            tickers = [p["ticker"] for p in open_positions]
+            print(f"Claude analyst: user has {len(open_positions)} open positions ({', '.join(tickers)}) — passing to Claude")
+    except Exception as e:
+        print(f"Claude analyst: could not load open positions: {e}")
+
     unique_items = _deduplicate_by_asset_type(
         items,
         include_stocks=include_stocks,
@@ -216,21 +245,32 @@ def run_analysis(
             print(f"Claude analyst: crypto context fetch failed: {e}")
 
     # Fetch 14-day price history for all recommended tickers
+    # Fetch 14-day price history — only for tickers that appear in the news
     price_history = {}
     try:
         from ingestion.prices import fetch_price_history
-        from storage.watchlist import get_tickers
 
-        stock_tickers  = get_tickers("stocks") if include_stocks else []
-        etf_tickers    = get_tickers("etfs")   if include_etfs   else []
-        crypto_tickers = get_tickers("crypto") if include_crypto else []
+        # Only fetch history for tickers actually mentioned in the news
+        news_tickers = list({
+            item.get("ticker") for item in unique_items
+            if item.get("ticker")
+        })
 
-        if stock_tickers or etf_tickers:
-            stock_history = fetch_price_history(stock_tickers + etf_tickers, asset_type="stock")
+        stock_news_tickers  = [t for t in news_tickers if not any(
+            item.get("asset_type") == "crypto"
+            for item in unique_items if item.get("ticker") == t
+        )]
+        crypto_news_tickers = [t for t in news_tickers if any(
+            item.get("asset_type") == "crypto"
+            for item in unique_items if item.get("ticker") == t
+        )]
+
+        if stock_news_tickers and (include_stocks or include_etfs):
+            stock_history = fetch_price_history(stock_news_tickers, asset_type="stock")
             price_history.update(stock_history)
 
-        if crypto_tickers:
-            crypto_history = fetch_price_history(crypto_tickers, asset_type="crypto")
+        if crypto_news_tickers and include_crypto:
+            crypto_history = fetch_price_history(crypto_news_tickers, asset_type="crypto")
             price_history.update(crypto_history)
 
         fetched = sum(1 for v in price_history.values() if v is not None)
@@ -243,6 +283,7 @@ def run_analysis(
             unique_items,
             crypto_context=crypto_context,
             price_history=price_history,
+            open_positions=open_positions,
         )
     except Exception as e:
         import traceback
@@ -273,6 +314,9 @@ IMPORTANT RULES:
 - For flagged (unverified) sources, set risk_level to 'high' regardless.
 - For crypto assets, use the standard symbol (BTC, ETH, SOL etc) as the ticker.
 - For ETFs, use the standard ticker (SPY, QQQ etc) as the ticker.
+- Check the OPEN POSITIONS block. Do not recommend 'buy' for tickers the user already owns.
+  If strong news exists about an owned ticker, include it as 'watch' only to inform the user.
+  Always try to find at least 5-10 other actionable opportunities from the news beyond owned tickers.
 - Use the CRYPTO ASSET CONTEXT block to understand what each crypto asset does.
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
   For high volatility assets use wider stops (4-6%). For low volatility use tighter stops (2-3%).

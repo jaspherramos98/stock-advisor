@@ -17,33 +17,34 @@ except ImportError:
     RH_AVAILABLE = False
 
 
+# Track login state within this process session
+_LOGGED_IN = False
+
 def _login() -> bool:
-    """
-    Logs into Robinhood using credentials from .env.
-    Returns True if successful, False otherwise.
-    
-    If robin_stocks breaks in the future, update this function
-    to use whatever new auth method is required.
-    """
+    global _LOGGED_IN
+    if _LOGGED_IN:
+        return True
+
     if not RH_AVAILABLE:
-        print("Robinhood sync: robin_stocks not installed. Run: pip install robin_stocks")
+        print("Robinhood sync: robin_stocks not installed.")
         return False
 
     username = os.getenv("ROBINHOOD_USERNAME")
     password = os.getenv("ROBINHOOD_PASSWORD")
 
     if not username or not password:
-        print("Robinhood sync: ROBINHOOD_USERNAME and ROBINHOOD_PASSWORD not set in .env")
+        print("Robinhood sync: credentials not set in .env")
         return False
 
     try:
         login = rh.login(
             username,
             password,
-            store_session=True,       # caches auth token so MFA isn't needed every time
-            expiresIn=86400,          # 24 hour session
+            store_session=True,
+            expiresIn=86400,
         )
         if login:
+            _LOGGED_IN = True
             print("Robinhood sync: logged in successfully.")
             return True
         else:
@@ -121,13 +122,14 @@ def fetch_positions() -> list[dict]:
                 continue
 
         print(f"Robinhood sync: fetched {len(positions)} positions.")
-        _logout()
         return positions
 
     except Exception as e:
         print(f"Robinhood sync: fetch failed — {e}")
-        _logout()
         return []
+    
+
+    
 def fetch_robinhood_news(tickers: list[str] = None) -> list[dict]:
     """
     Fetches news from Robinhood for the given tickers.
@@ -177,7 +179,6 @@ def fetch_robinhood_news(tickers: list[str] = None) -> list[dict]:
             print(f"Robinhood news error for {ticker}: {e}")
             continue
 
-    _logout()
     print(f"Robinhood news: fetched {len(all_news)} articles")
     return all_news
 
