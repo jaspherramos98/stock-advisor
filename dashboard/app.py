@@ -22,6 +22,7 @@ from alerts.snooze import is_snoozed, snooze_ticker, dismiss_ticker, clear_snooz
 from dotenv import load_dotenv
 load_dotenv()
 
+
 # --- File paths ---
 CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache.json")
 CACHE_BACKUP_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache_backup.json")
@@ -32,6 +33,88 @@ BUDGET_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 def save_budget(amount: float):
     with open(BUDGET_FILE, "w") as f:
         json.dump({"budget": amount}, f)
+
+# =========================================================
+# CHATBOT PROXY SERVER — keeps API key server-side
+# =========================================================
+import threading
+import requests as _requests
+
+def _start_proxy_server():
+    """
+    Starts a tiny Flask proxy on port 8502.
+    The chatbot iframe calls this instead of Anthropic directly.
+    The real API key never leaves the server.
+    """
+    try:
+        from flask import Flask, request, jsonify
+        from flask_cors import CORS
+    except ImportError:
+        print("Proxy: flask or flask-cors not installed — chatbot will be disabled.")
+        return
+
+    proxy_app = Flask(__name__)
+    CORS(proxy_app, origins=["http://localhost:8501", "http://127.0.0.1:8501"])
+
+    @proxy_app.route("/chat", methods=["POST"])
+    def chat():
+        try:
+            data    = request.get_json()
+            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+
+            if not api_key:
+                return jsonify({"error": "API key not configured"}), 500
+
+            # Validate required fields
+            messages = data.get("messages", [])
+            system   = data.get("system", "")
+            if not messages:
+                return jsonify({"error": "No messages provided"}), 400
+
+            # Forward to Anthropic
+            resp = _requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type":    "application/json",
+                    "x-api-key":       api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json={
+                    "model":      "claude-sonnet-4-5",
+                    "max_tokens": 512,
+                    "system":     system,
+                    "messages":   messages,
+                },
+                timeout=30,
+            )
+            return jsonify(resp.json()), resp.status_code
+
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @proxy_app.route("/health", methods=["GET"])
+    def health():
+        return jsonify({"status": "ok"}), 200
+
+    # Run in background thread — daemon=True means it dies when Streamlit dies
+    thread = threading.Thread(
+        target=lambda: proxy_app.run(
+            host="127.0.0.1",
+            port=8502,
+            debug=False,
+            use_reloader=False,
+        ),
+        daemon=True,
+    )
+    thread.start()
+    print("Proxy: chatbot proxy server started on localhost:8502")
+
+# Start once — Streamlit rerenders the script on every interaction
+# so we guard against starting multiple threads
+if "proxy_started" not in st.session_state:
+    _start_proxy_server()
+    st.session_state.proxy_started = True
+
 
 
 def load_budget() -> float:
@@ -1236,7 +1319,7 @@ else:
     # =========================================================
 # ARGUS CHATBOT — Floating assistant widget
 # =========================================================
-anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+
 
 from streamlit.components.v1 import html as st_html
 
@@ -1437,7 +1520,7 @@ function toggleArgusChat() {{
   if (argusOpen) setTimeout(() => document.getElementById('argus-chat-input').focus(), 150);
 }}
 
-const ARGUS_API_KEY = "{anthropic_key}";
+// API key is handled server-side via proxy at localhost:8502
 const ARGUS_SYSTEM = `You are Argus Assistant, the built-in helper for the Argus stock advisor app.
 STRICT RULES:
 1. You ONLY discuss investing topics and how the Argus app works. Nothing else.
@@ -1468,7 +1551,7 @@ function appendMsg(role, text) {{
   const d = document.createElement('div');
   d.className = 'msg ' + role;
   if (role === 'assistant') {{
-    d.innerHTML = text.replace(/\\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>') +
+    d.innerHTML = text.replace(/\\n/g,'<br>').replace(/[*][*](.*?)[*][*]/g,'<strong>$1</strong>') +
       '<div class="disclaimer">Not financial advice — always do your own research.</div>';
   }} else {{
     d.textContent = text;
@@ -1495,17 +1578,10 @@ async function sendArgusMessage() {{
   c.scrollTop = c.scrollHeight;
 
   try {{
-    const response = await fetch('https://api.anthropic.com/v1/messages', {{
+    const response = await fetch('http://localhost:8502/chat', {{
       method:'POST',
-      headers:{{
-        'Content-Type':'application/json',
-        'x-api-key': ARGUS_API_KEY,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true',
-      }},
+      headers:{{ 'Content-Type':'application/json' }},
       body: JSON.stringify({{
-        model:'claude-sonnet-4-5',
-        max_tokens:512,
         system: ARGUS_SYSTEM,
         messages: argusHistory,
       }}),
