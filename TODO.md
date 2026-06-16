@@ -51,15 +51,36 @@ every interaction, killing the old event listeners.
   reworded both system prompts (chat + analyst) to a profit-driven
   investment-banker persona.
 
+### 6. Reassess analyst prompt to stop chasing priced-in moves ✅
+Reworked the system prompt in `analysis/claude_analyst.py` to protect capital,
+not just chase catalysts. Changes:
+- Persona reframed: keeping the job means NOT losing money; prefer `watch` over
+  `buy` when in doubt; capital preserved = capital for the next real setup.
+- New "CATALYST TIMING" section — the #1 loss driver is buying news already in
+  the price. Cross-checks each buy against the 14-day trend; if the move already
+  happened (at/near 14d high on this same news, or old news), it's a `watch`.
+- New "M&A / BUYOUTS" section — distinguishes target vs acquirer; announced
+  all-cash targets trade at the offer price (arb spread only) → `watch`, never
+  highly_recommended; closed deals → skip; flags regulatory/financing risk.
+- Clarified `confidence_score` = SOURCE CREDIBILITY, not trade edge.
+- Earnings "beat" is not automatically bullish (guidance / already expected).
+- Removed the "always find 5-10 opportunities" quota that forced buys; mostly
+  `watch` or empty array on weak days is now explicitly correct.
+- HIGHLY RECOMMENDED upgraded from 3 → 4 conditions: catalyst must be recent,
+  edge must still be open (not priced in), plus the prior trend/confidence gates.
+- Applied the same discipline to the Argus chatbot prompt (`dashboard/app.py`):
+  catalyst-timing check, M&A mechanics, confidence-is-not-edge, prefer watch.
+- `CLAUDE.md` HR criteria + analyst/chatbot notes updated to match.
+
 ---
 
 ## Backlog
 
-### 3. Robinhood MCP sync
+### 7. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 4. Reactive loading screen
+### 8. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.

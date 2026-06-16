@@ -84,10 +84,17 @@ SOURCE_WEIGHTS = {
 }
 ```
 
-### Highly Recommended Criteria (all 3 must be met)
-1. Catalyst is unambiguous (earnings beat, M&A, FDA approval, major contract)
-2. Confidence score >= 0.68
-3. Price trend supports entry (not at 14-day high, not in sharp downtrend)
+### Highly Recommended Criteria (all 4 must be met)
+1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)
+2. Confidence score >= 0.68 (source credibility — NOT a measure of trade edge)
+3. Edge still open — price has NOT already fully reflected the catalyst (not pinned at 14-day high on this same news, not a buyout target trading at offer price)
+4. Price trend supports entry (not in a sharp downtrend unless a genuine reversal catalyst)
+
+The analyst prompt is built to avoid buying already-priced-in moves: it treats
+`confidence_score` as source credibility (not edge), runs a catalyst-timing /
+"buy the rumor sell the news" check against the 14-day trend, handles M&A
+target-vs-acquirer mechanics (announced cash-deal targets → `watch`, closed deals →
+skip), and prefers `watch`/empty over forced buys on weak days.
 
 ### Budget Allocation
 - `HIGHLY_RECOMMENDED_MULTIPLIER = 2.0` — HR buys get 2x capital weight
@@ -100,6 +107,9 @@ SOURCE_WEIGHTS = {
 - `/context` endpoint builds live portfolio snapshot on every chat open
 - System prompt includes: budget, open positions with P&L, closed position stats, today's recommendations, watchlist
 - Gives direct actionable advice; honest about weak signal days
+- Same anti-priced-in discipline as the analyst: catalyst-timing check ("buy the
+  rumor, sell the news"), M&A target-vs-acquirer mechanics, `confidence_score` =
+  source credibility (not edge); prefers watch over chasing moves that already ran
 
 ## Claude Analysis JSON Schema
 Each recommendation must have:
