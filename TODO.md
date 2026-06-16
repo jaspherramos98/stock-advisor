@@ -72,65 +72,15 @@ not just chase catalysts. Changes:
   catalyst-timing check, M&A mechanics, confidence-is-not-edge, prefer watch.
 - `CLAUDE.md` HR criteria + analyst/chatbot notes updated to match.
 
-### 7. Time-based catalyst-timing column (recommendations + positions) ✅
-Added a `catalyst_timing` field surfacing WHEN the news catalyst is expected to
-play out (e.g. "Earnings Jul 15", "Merger closes ~Q3 2026"), so the user knows
-the timeframe and when to reassess — complements the price-based exit_condition.
-- `analysis/claude_analyst.py` — new `catalyst_timing` field in the JSON schema
-  plus a "CATALYST TIMING FIELD" prompt block: use a date only when grounded in
-  the news (no guessing), otherwise an honest hold-horizon estimate.
-- `calculator/portfolio.py` — passes `catalyst_timing` through `_build_result`.
-- `storage/positions.py` — `add_position()` stores it; new
-  `update_catalyst_timing()` for editing; updated on existing positions.
-- `dashboard/app.py` — "Catalyst by" column in the Recommendations table and the
-  Open Positions table; shown in both detail expanders; editable input in
-  Manage positions (beside Exit strategy) and in the manual-add form; included
-  in the chatbot `/context` for both positions and today's recs.
-- Display-only — no alert plumbing (per chosen scope).
-- `CLAUDE.md` JSON schema updated to match.
-
-### 8. Adopt TradingAgents ideas — bull/bear debate, reflection, risk gate ✅
-Borrowed from TauricResearch/TradingAgents (multi-agent trading framework) but
-kept inside Argus's single Claude call to stay cheap/fast. Three additions to
-`analysis/claude_analyst.py`:
-- **Bull/Bear debate** — new `bull_case` / `bear_case` schema fields; the prompt
-  requires the strongest case for AND against every candidate, and the bear case
-  is the gate for keeping a 'buy' (else downgrade to 'watch'). Passed through
-  `calculator/portfolio.py`; shown as side-by-side green/red boxes in each
-  recommendation detail expander (`dashboard/app.py`) and added to the chatbot
-  `/context`.
-- **Reflection memory** — `run_analysis()` now loads closed positions and
-  `_build_prompt()` adds a "PAST TRADE OUTCOMES — LEARN FROM THESE" block
-  (realized P&L %, win rate, source, close reason, capped at 12 recent trades) so
-  the analyst adapts to what has actually worked/lost for this user.
-- **Portfolio risk gate** — new prompt section makes the analyst review all buys
-  as one book (plus existing open positions) and downgrade correlated/over-
-  concentrated names to 'watch'. Heuristic/prompt-level (no sector data ingested).
-- `CLAUDE.md` pipeline flow + JSON schema updated to match.
-
-### 9. Self-contained exits for the one-shot model ✅
-Argus runs once with no live monitoring, so exits must stand alone. The analyst was
-emitting useless process placeholders like "await 8-K details review" (especially on
-watch signals). Fixed in `analysis/claude_analyst.py`:
-- New "THIS IS A ONE-SHOT TOOL" rule: every exit_condition must be a concrete,
-  self-contained price rule (gain target + stop) the user can set right now; banned
-  "await/review/reassess/monitor/check back/pending" placeholders — if no concrete
-  exit is possible, mark 'avoid'/omit.
-- EXIT CONDITIONS section now covers 'watch' too: must give a concrete if/then
-  (buy trigger price + target/stop), not vague language.
-- catalyst_timing is now purely factual ("Already filed Jun 15", "Earnings Jul 15"),
-  never a "review within X days" instruction.
-- `CLAUDE.md` Exit Targets section updated with the one-shot constraint.
-
 ---
 
 ## Backlog
 
-### 10. Robinhood MCP sync
+### 7. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 11. Reactive loading screen
+### 8. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.
