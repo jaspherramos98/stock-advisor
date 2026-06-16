@@ -147,6 +147,12 @@ Each recommendation must have:
 - Streamlit rerenders entire script on every interaction — all expensive operations should be cached
 - Chatbot DOM injection uses `(function() { if already injected, return; })()` guard to prevent duplicates
 - Pipeline cache date-checks against today — stale cache from yesterday is ignored, backup cache used if main fails mid-run
+- **Console encoding (caused "0 recommendations"):** pipeline `print()`s contain non-ASCII
+  symbols (→, —, ⭐, ⚠, ✓). On a Windows cp1252 console these raise `UnicodeEncodeError`
+  and crash the pipeline mid-run (e.g. the dedup log in `claude_analyst.py`), before Claude
+  is called → empty result. Guards in place: `argus.bat` sets `PYTHONUTF8=1`/`PYTHONIOENCODING=utf-8`,
+  and `main.py` + `dashboard/app.py` reconfigure stdout/stderr to UTF-8 (errors="replace") at
+  startup. Keep all three; don't add bare non-ASCII to prints without them.
 
 ## .env Keys Required
 ```

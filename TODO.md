@@ -72,15 +72,27 @@ not just chase catalysts. Changes:
   catalyst-timing check, M&A mechanics, confidence-is-not-edge, prefer watch.
 - `CLAUDE.md` HR criteria + analyst/chatbot notes updated to match.
 
+### 7. Fix "0 recommendations" — UnicodeEncodeError crash on cp1252 console ✅
+The real cause of the persistent empty pipeline runs (NOT the analyst logic). The dedup
+log in `analysis/claude_analyst.py` prints a "→" character; on a Windows cp1252 console
+(what `argus.bat`/cmd.exe uses) that raises `UnicodeEncodeError` and crashes the pipeline
+BEFORE Claude is called → the app shows 0. Proven: same code returns 10+ recs with UTF-8
+output, crashes to 0 on cp1252. Latent bug, surfaced by the launch console's code page.
+- `argus.bat` — sets `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` before launching streamlit.
+- `main.py` + `dashboard/app.py` — reconfigure stdout/stderr to UTF-8 (errors="replace")
+  at startup so no print can ever crash the run (covers non-argus.bat launches too).
+- Verified: 3 runs on the default cp1252 console returned 10/8/9 recs, no crash.
+- `CLAUDE.md` Known Issues updated. Pure bug fix — no analyst/feature behavior changed.
+
 ---
 
 ## Backlog
 
-### 7. Robinhood MCP sync
+### 8. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 8. Reactive loading screen
+### 9. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.

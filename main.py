@@ -1,3 +1,15 @@
+import sys
+
+# Force UTF-8 stdout/stderr. Pipeline print()s contain non-ASCII symbols
+# (→, —, ⭐, ⚠, ✓); on a Windows cp1252 console these raise UnicodeEncodeError
+# and crash the pipeline mid-run (symptom: "0 recommendations"). errors="replace"
+# guarantees a print can never crash the run even if reconfigure is unavailable.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from analysis.claude_analyst import run_analysis
 from ingestion.rss           import fetch_rss_news
 from ingestion.reddit        import fetch_reddit_news

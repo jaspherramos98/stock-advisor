@@ -8,6 +8,16 @@ import datetime as dt
 import plotly.express as px
 import plotly.graph_objects as go
 
+# Force UTF-8 stdout/stderr. Pipeline print()s contain non-ASCII symbols
+# (→, —, ⭐, ⚠, ✓); on a Windows cp1252 console these raise UnicodeEncodeError
+# and crash the pipeline mid-run (symptom: "0 recommendations"). errors="replace"
+# guarantees a print can never crash the run even if reconfigure is unavailable.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # --- THIS MUST COME BEFORE ANY LOCAL IMPORTS ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
