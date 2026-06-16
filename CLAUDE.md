@@ -145,6 +145,13 @@ Each recommendation must have:
 - Highly recommended: gain targets 12-20%, stops 4-6%
 - Regular buy: gain targets 6-10%, stops 2-4%
 - Upside must be at least 2x the stop distance
+- **One-shot constraint:** Argus runs once and does NOT monitor live, so every
+  `exit_condition` must be a concrete, self-contained price rule the user can set
+  immediately (gain target + stop). Process/deferral placeholders ("await details",
+  "review the filing", "reassess later", "monitor") are banned in the prompt. Even
+  `watch` items must give a concrete if/then (buy trigger + target/stop), not vague
+  language. `catalyst_timing` is factual ("Already filed Jun 15" / "Earnings Jul 15"),
+  never a "review within X days" instruction.
 
 ## Dashboard Tabs
 1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders, add to positions

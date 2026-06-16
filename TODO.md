@@ -108,15 +108,29 @@ kept inside Argus's single Claude call to stay cheap/fast. Three additions to
   concentrated names to 'watch'. Heuristic/prompt-level (no sector data ingested).
 - `CLAUDE.md` pipeline flow + JSON schema updated to match.
 
+### 9. Self-contained exits for the one-shot model ✅
+Argus runs once with no live monitoring, so exits must stand alone. The analyst was
+emitting useless process placeholders like "await 8-K details review" (especially on
+watch signals). Fixed in `analysis/claude_analyst.py`:
+- New "THIS IS A ONE-SHOT TOOL" rule: every exit_condition must be a concrete,
+  self-contained price rule (gain target + stop) the user can set right now; banned
+  "await/review/reassess/monitor/check back/pending" placeholders — if no concrete
+  exit is possible, mark 'avoid'/omit.
+- EXIT CONDITIONS section now covers 'watch' too: must give a concrete if/then
+  (buy trigger price + target/stop), not vague language.
+- catalyst_timing is now purely factual ("Already filed Jun 15", "Earnings Jul 15"),
+  never a "review within X days" instruction.
+- `CLAUDE.md` Exit Targets section updated with the one-shot constraint.
+
 ---
 
 ## Backlog
 
-### 9. Robinhood MCP sync
+### 10. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 10. Reactive loading screen
+### 11. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.

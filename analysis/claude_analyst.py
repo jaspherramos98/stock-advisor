@@ -357,6 +357,18 @@ IMPORTANT RULES:
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
   Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
 
+THIS IS A ONE-SHOT TOOL — EVERY RECOMMENDATION MUST STAND ALONE:
+- This tool runs ONCE per session. It does NOT monitor positions live, send updates, or get a
+  second pass. The user reads this snapshot and acts on it directly. There is no "later" where you
+  or the tool revisit anything.
+- Therefore exit_condition must ALWAYS be a concrete, self-contained instruction the user can set and
+  follow on their own RIGHT NOW. It must be a real price/level-based rule — a gain target AND a stop
+  loss (e.g. "target 9% gain, stop loss at 4%"), or a clear price level to act on.
+- NEVER write process/deferral placeholders. Banned exit_condition phrasings include "await details",
+  "review the filing", "reassess later", "monitor", "check back", "wait and see", "pending review",
+  or anything that depends on someone re-evaluating after this run. If you can't state a concrete
+  price-based exit, the item is not actionable — mark it 'avoid' or omit it.
+
 CONFIDENCE_SCORE IS NOT EDGE:
 - confidence_score measures SOURCE CREDIBILITY (how much to trust the report) — it does NOT
   measure how good the trade is or how much money it will make. A highly credible source
@@ -421,13 +433,19 @@ HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
    event such as a fresh earnings beat with room to run).
 Set highly_recommended to false for everything else, including all watch signals and all M&A targets.
 
-EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
-- highly_recommended buys: gain targets 12-20%, stops 4-6% (let winners run, stops wide enough to breathe)
-- Regular buys: gain targets 6-10%, stops 2-4%
+EXIT CONDITIONS — CONCRETE, SELF-CONTAINED, REWARD JUSTIFIES RISK:
+- For 'buy': exit_condition is a price-based sell rule the user sets immediately — a gain target AND a
+  stop loss. highly_recommended buys: gain targets 12-20%, stops 4-6% (let winners run, wide enough to
+  breathe). Regular buys: gain targets 6-10%, stops 2-4%.
+- For 'watch': still give a concrete, self-contained rule — the specific price level or condition that
+  would make it a buy, PLUS the target/stop to use if entered. E.g. "Buy only on a pullback to ~$190;
+  then target 8% gain, stop loss at 4%" or "Skip unless it breaks above $52 on volume; then target 10%,
+  stop 5%". A watch is NOT permission to be vague — it's a clear if/then the user can act on alone.
 - Upside must be at least 2x the stop loss distance. If it isn't, widen the target not the stop —
   and if a realistic target can't clear that 2x bar, it's a 'watch', not a 'buy'.
 - For high volatility assets (avg daily range >3%) use stops of at least 5% to avoid noise shakeouts.
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
+- Reminder: NO "await/review/reassess/monitor" placeholders — see the one-shot rule above.
 
 PORTFOLIO RISK GATE — REVIEW YOUR BUYS AS ONE BOOK (final check before you answer):
 - Don't just rate candidates in isolation. Step back and look at all your 'buy' signals together,
@@ -441,15 +459,16 @@ PORTFOLIO RISK GATE — REVIEW YOUR BUYS AS ONE BOOK (final check before you ans
 - (Budgeting note: the allocator caps any single name at 40% and double-weights highly_recommended,
   so don't over-stuff the list — a few well-chosen, uncorrelated buys is the goal.)
 
-CATALYST TIMING FIELD — WHEN does the news actually play out:
-- Fill "catalyst_timing" with the date or window the catalyst is expected to resolve, so the user
-  knows the timeframe over which the thesis should work (and when to reassess if it hasn't).
-- If the news states or clearly implies a specific date/window, USE IT — e.g. "Earnings Jul 15",
-  "Merger expected to close ~Q3 2026", "FDA PDUFA decision Mar 1", "Investor day next week".
-- ONLY give a specific date when it is grounded in the news. Do NOT invent or guess dates. If the
-  news gives no timing, provide an honest estimate of the hold horizon instead — e.g.
-  "no fixed date — momentum trade, ~1-2 weeks" or "open-ended, re-evaluate in 2-4 weeks".
-- Keep it short (a few words). This is a TIMING field only; price targets stay in exit_condition.
+CATALYST TIMING FIELD — purely factual "when", not an instruction:
+- "catalyst_timing" is a short factual note about WHEN the catalyst happens/happened, so the user knows
+  the timeframe. It is informational only — never a process step (no "review within X days").
+- Future event with a date grounded in the news: state it — e.g. "Earnings Jul 15", "Merger expected
+  to close ~Q3 2026", "FDA PDUFA decision Mar 1".
+- Event already occurred (e.g. an 8-K already filed, earnings already reported): say so plainly —
+  e.g. "Already filed Jun 15" or "Reported Jun 14" — so the user knows the move may be done.
+- No date in the news and none implied: give a short honest horizon — e.g. "momentum, ~1-2 weeks" or
+  "open-ended". Do NOT invent dates.
+- Keep it to a few words. Price-based sell rules live in exit_condition, not here.
 
 You must respond with ONLY a valid JSON array. No preamble, no explanation,
 no markdown code fences. Just the raw JSON array.
