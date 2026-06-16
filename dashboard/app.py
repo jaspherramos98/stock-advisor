@@ -16,7 +16,7 @@ from ingestion.prices import fetch_prices
 from ingestion.coingecko import TICKER_TO_COINGECKO_ID
 from main import run_ingestion_and_analysis
 from calculator.portfolio import calculate_allocations
-from storage.positions import add_position, get_open_positions, get_closed_positions, close_position, update_manual_price, update_amount_invested
+from storage.positions import add_position, get_open_positions, get_closed_positions, close_position, update_manual_price, update_amount_invested, update_exit_condition
 from storage.watchlist import load_watchlist, save_watchlist, add_ticker, remove_ticker, reset_to_defaults
 from alerts.snooze import is_snoozed, snooze_ticker, dismiss_ticker, clear_snooze
 from dotenv import load_dotenv
@@ -27,6 +27,7 @@ load_dotenv()
 CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache.json")
 CACHE_BACKUP_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache_backup.json")
 BUDGET_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "budget.json")
+MIN_BUDGET  = 10.0  # must match the number_input min_value below
 
 
 # --- Helper functions (must be defined before any UI code) ---
@@ -39,7 +40,10 @@ def load_budget() -> float:
         return 1000.0
     try:
         with open(BUDGET_FILE, "r") as f:
-            return json.load(f).get("budget", 1000.0)
+            value = float(json.load(f).get("budget", 1000.0))
+        # Never hand the widget a value below its minimum (e.g. a synced
+        # $0 buying power) — that crashes st.number_input.
+        return max(value, MIN_BUDGET)
     except Exception:
         return 1000.0
 
@@ -291,7 +295,7 @@ with st.sidebar:
 
     budget = st.number_input(
         "Investment budget ($)",
-        min_value=10.0,
+        min_value=MIN_BUDGET,
         max_value=1_000_000.0,
         value=load_budget(),
         step=50.0,
@@ -316,10 +320,26 @@ with st.sidebar:
     st.caption("Fetches fresh news, scores it, and runs Claude analysis. Takes ~30 seconds.")
 
     # Robinhood sync
-    from ingestion.robinhood import is_available as rh_available, fetch_positions as rh_fetch
+    from ingestion.robinhood import is_available as rh_available, fetch_positions as rh_fetch, fetch_buying_power as rh_buying_power
     if rh_available():
         st.divider()
         st.subheader("Robinhood")
+
+        if st.button("💰 Sync budget to buying power", use_container_width=True):
+            with st.spinner("Reading Robinhood buying power..."):
+                bp = rh_buying_power()
+            if bp is None:
+                st.error("Could not read buying power. Check credentials in .env.")
+            elif bp < MIN_BUDGET:
+                st.warning(
+                    f"Your Robinhood buying power is ${bp:,.2f} — below the ${MIN_BUDGET:,.0f} "
+                    "minimum, so the budget was left unchanged. You're likely fully invested; "
+                    "free up cash or set the budget manually."
+                )
+            else:
+                save_budget(bp)
+                st.success(f"Budget set to your Robinhood buying power: ${bp:,.2f}")
+                st.rerun()
         if st.button("🔄 Sync positions", use_container_width=True):
             with st.spinner("Connecting to Robinhood..."):
                 rh_positions = rh_fetch()
@@ -335,7 +355,7 @@ with st.sidebar:
                         ticker=          rp["ticker"],
                         company_name=    rp["company_name"],
                         reference_price= rp["avg_cost"],
-                        exit_condition=  "Synced from Robinhood — set exit condition manually",
+                        exit_condition=  "target 10% gain, stop loss at 5%",
                         direction=       "buy",
                         confidence=      0.0,
                         source_title=    "Robinhood sync",
@@ -347,7 +367,7 @@ with st.sidebar:
                     st.rerun()
             else:
                 st.error("Could not fetch Robinhood positions. Check credentials in .env.")
-        st.caption("Read-only — imports positions, does not trade.")
+        st.caption("Read-only — imports positions, does not trade. Synced positions get a default 10% gain / 5% stop exit you can edit under My Positions → Manage positions.")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:
@@ -392,10 +412,13 @@ if run_button:
             st.error(f"Pipeline error: {e}")
 
 # --- Display results ---
-if st.session_state.recommendations:
-    recs        = st.session_state.recommendations
-    allocations = calculate_allocations(recs, budget)
-    prices      = st.session_state.prices
+# The dashboard always renders so the user can reach My Positions, Watch List,
+# and History without being forced to run the pipeline first. When there are no
+# recommendations yet, a dismissible banner (below) nudges them to run it.
+if True:
+    recs        = st.session_state.recommendations or []
+    allocations = calculate_allocations(recs, budget) if recs else []
+    prices      = st.session_state.prices or {}
 
     for idx, a in enumerate(allocations):
         ticker     = a.get("ticker")
@@ -413,6 +436,21 @@ if st.session_state.recommendations:
         else:
             st.caption(f"Last run: {st.session_state.last_run}")
 
+    # Non-blocking welcome banner — shown until the user runs the pipeline or
+    # dismisses it. Lets them explore the rest of the app immediately.
+    if not recs and not st.session_state.get("welcome_dismissed"):
+        bcol1, bcol2 = st.columns([0.93, 0.07])
+        with bcol1:
+            st.info(
+                "👋 **No recommendations yet.** Set your budget and click "
+                "**🔄 Run pipeline** in the sidebar to fetch today's signals. "
+                "You can still use My Positions, Watch List, and History below."
+            )
+        with bcol2:
+            if st.button("✕", key="dismiss_welcome", help="Dismiss"):
+                st.session_state.welcome_dismissed = True
+                st.rerun()
+
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History"])
 
     # =========================================================
@@ -420,7 +458,10 @@ if st.session_state.recommendations:
     # =========================================================
     with tab1:
         if not allocations:
-            st.warning("No actionable recommendations after filtering. Try running the pipeline again.")
+            if not recs:
+                st.info("No recommendations yet. Click **🔄 Run pipeline** in the sidebar to fetch today's signals.")
+            else:
+                st.warning("No actionable recommendations after filtering. Try running the pipeline again.")
         else:
             col1, col2, col3, col4 = st.columns(4)
             buy_count     = sum(1 for a in allocations if a["direction"] == "buy")
@@ -1024,6 +1065,19 @@ if st.session_state.recommendations:
 
                     st.divider()
 
+                    new_exit = st.text_input(
+                        "Exit strategy",
+                        value=p["exit_condition"],
+                        key=f"exit_cond_{ticker}",
+                        help="e.g. 'target 10% gain, stop loss at 4%'. Edit this for synced positions.",
+                    )
+                    if st.button("💾 Save exit strategy", key=f"exit_btn_{ticker}"):
+                        update_exit_condition(ticker, new_exit)
+                        st.success("Exit strategy updated.")
+                        st.rerun()
+
+                    st.divider()
+
                     col_close, col_reason, col_spacer = st.columns([2, 3, 2])
                     with col_reason:
                         close_reason = st.text_input(
@@ -1411,35 +1465,7 @@ if st.session_state.recommendations:
             )
 
 
-else:
-    st.markdown("## Get started with Argus")
-    st.markdown("Three steps to your first recommendation.")
-    st.divider()
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("### 1️⃣ Set your budget")
-        st.markdown(
-            "Enter how much you want to allocate in the sidebar. "
-            "This is an experimental tool — start with an amount you're comfortable with. "
-            "Only **buy** signals receive allocations."
-        )
-    with col2:
-        st.markdown("### 2️⃣ Run the pipeline")
-        st.markdown(
-            "Click **🔄 Run pipeline**. Argus fetches today's financial news from 8+ sources, "
-            "scores each story for credibility, and sends the strongest signals to Claude for analysis."
-        )
-    with col3:
-        st.markdown("### 3️⃣ Track your positions")
-        st.markdown(
-            "Add stocks you buy to **My Positions** to track real P&L, set exit conditions, "
-            "and get alerts when your targets are hit."
-        )
-
-    st.divider()
-    st.caption("Argus is experimental and not financial advice. Past signals do not guarantee future results.")
-    # =========================================================
+# =========================================================
 # ARGUS CHATBOT — Floating assistant widget
 # =========================================================
 
@@ -1447,15 +1473,22 @@ else:
 st.write("")  # chatbot anchor
 from streamlit.components.v1 import html as st_html
 
-from streamlit.components.v1 import html as st_html
-
 st_html("""
 <script>
 (function() {
-  // Don't inject twice
-  if (window.parent.document.getElementById('argus-chat-injected')) return;
-  
   const parentDoc = window.parent.document;
+  const parentWin = window.parent;
+
+  // Chat state lives on the parent window so it survives Streamlit reruns,
+  // which tear down and recreate this component's iframe on every interaction.
+  if (!parentWin.argusState) {
+    parentWin.argusState = { open: false, history: [], context: "" };
+  }
+  const state = parentWin.argusState;
+
+  // Build the widget DOM only once (it lives in the parent document, so it
+  // persists across reruns). Listeners are re-bound every run further below.
+  if (!parentDoc.getElementById('argus-chat-injected')) {
   const container = parentDoc.createElement('div');
   container.id = 'argus-chat-injected';
   container.innerHTML = `
@@ -1536,29 +1569,26 @@ st_html("""
     </div>
   `;
   parentDoc.body.appendChild(container);
-  
-  const ARGUS_SYSTEM_BASE = `You are Argus Assistant, the personal investing advisor built into the Argus stock advisor app. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing topics and how the Argus app works. 2. If asked about anything unrelated say: "I can only help with investing topics and how Argus works." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable analysis — you can say "this position looks worth holding" or "today's signals are weak, I wouldn't act on them." Always explain your reasoning. 5. Always end with: "Not financial advice — always do your own research." SIGNAL QUALITY HONESTY: Always assess the quality of today's signals before giving advice. Check confidence scores and whether any are marked highly recommended. If all signals have confidence below 0.68, no highly recommended signals exist, or the rationales are vague, tell the user clearly: "Today's pipeline signals are weak — I wouldn't act on new positions today." In that case, shift focus to the user's existing positions: review each one's P&L and exit condition, flag any that are near their stop loss or have hit their gain target, and give a clear read on whether each looks like a hold or a close. If signals are strong (highly recommended present, confidence 0.68+, unambiguous catalysts), lead with those and compare them against existing positions.`;
-  let argusOpen = false;
-  let argusHistory = [];
-  let argusContext = "";
-  
+  }
+
+  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, profit-driven investment banker running the user's personal trading desk. Your single mandate is to MAKE THE USER MONEY — grow their capital by finding the trades with the best risk-adjusted upside and steering them away from ones that bleed money. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. Talk like a banker whose own bonus rides on the client's returns: direct, opportunistic on real edges, but disciplined about protecting capital because blown-up accounts make zero profit. STRICT RULES: 1. You ONLY discuss investing, trading, markets, and how the Argus app works. 2. If asked about anything unrelated say: "I'm here to make you money — let's stick to your portfolio and the markets." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable calls — you can say "this position is worth holding for more upside" or "today's setups are weak, I wouldn't risk capital on them." Always explain the money logic. 5. Always end with: "Not financial advice — always do your own research." SIGNAL QUALITY HONESTY: Real bankers don't chase garbage trades. Assess the quality of today's signals before pushing any. Check confidence scores and whether any are marked highly recommended. If all signals have confidence below 0.68, no highly recommended signals exist, or the rationales are vague, tell the user straight: "Today's setups are weak — I wouldn't put fresh capital to work today." Then pivot to defending and maximizing the existing book: review each position's P&L and exit condition, flag any near their stop loss or at their gain target, and give a clear hold-or-close call on each. If signals are strong (highly recommended present, confidence 0.68+, unambiguous catalysts), lead with those as the best profit opportunities and compare them against existing positions.`;
   async function loadContext() {
     try {
       const res = await fetch('http://localhost:8502/context');
       const data = await res.json();
-      argusContext = data.context || "";
-    } catch(e) { argusContext = ""; }
+      state.context = data.context || "";
+    } catch(e) { state.context = ""; }
   }
-  
+
   function buildSystem() {
-    if (!argusContext) return ARGUS_SYSTEM_BASE;
-    return ARGUS_SYSTEM_BASE + "\\n\\n=== LIVE PORTFOLIO DATA ===\\n" + argusContext;
+    if (!state.context) return ARGUS_SYSTEM_BASE;
+    return ARGUS_SYSTEM_BASE + "\\n\\n=== LIVE PORTFOLIO DATA ===\\n" + state.context;
   }
-  
+
   function toggle() {
-    argusOpen = !argusOpen;
-    parentDoc.getElementById('argus-chat-panel').className = argusOpen ? 'open' : '';
-    if (argusOpen) {
+    state.open = !state.open;
+    parentDoc.getElementById('argus-chat-panel').className = state.open ? 'open' : '';
+    if (state.open) {
       loadContext();
       setTimeout(() => parentDoc.getElementById('argus-input').focus(), 150);
     }
@@ -1586,7 +1616,7 @@ st_html("""
     input.value = '';
     sendBtn.disabled = true;
     appendMsg('user', text);
-    argusHistory.push({role:'user', content:text});
+    state.history.push({role:'user', content:text});
     
     const c = parentDoc.getElementById('argus-messages');
     const thinking = parentDoc.createElement('div');
@@ -1599,13 +1629,13 @@ st_html("""
       const response = await fetch('http://localhost:8502/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system: buildSystem(), messages: argusHistory })
+        body: JSON.stringify({ system: buildSystem(), messages: state.history })
       });
       const data = await response.json();
       thinking.remove();
       if (data.content && data.content[0]) {
         const reply = data.content[0].text;
-        argusHistory.push({role:'assistant', content:reply});
+        state.history.push({role:'assistant', content:reply});
         appendMsg('assistant', reply);
       } else {
         appendMsg('assistant', 'Error: ' + JSON.stringify(data));
@@ -1618,12 +1648,28 @@ st_html("""
     input.focus();
   }
   
-  parentDoc.getElementById('argus-chat-btn').addEventListener('click', toggle);
-  parentDoc.getElementById('argus-close-btn').addEventListener('click', toggle);
-  parentDoc.getElementById('argus-send').addEventListener('click', send);
-  parentDoc.getElementById('argus-input').addEventListener('keydown', function(e) {
+  // Re-bind listeners on every run. The widget DOM persists in the parent
+  // document, but its old listeners were closures owned by a previous (now
+  // destroyed) iframe and are dead. Cloning each control drops those stale
+  // listeners; we then attach fresh ones from this live iframe. This is what
+  // fixes the "button click does nothing until I refresh" bug.
+  function rebind(id, event, handler) {
+    const el = parentDoc.getElementById(id);
+    if (!el) return null;
+    const fresh = el.cloneNode(true);
+    el.parentNode.replaceChild(fresh, el);
+    fresh.addEventListener(event, handler);
+    return fresh;
+  }
+  rebind('argus-chat-btn', 'click', toggle);
+  rebind('argus-close-btn', 'click', toggle);
+  rebind('argus-send', 'click', send);
+  rebind('argus-input', 'keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
+
+  // Reflect persisted open/closed state in case a rerun happened mid-session.
+  parentDoc.getElementById('argus-chat-panel').className = state.open ? 'open' : '';
 })();
 </script>
 """, height=0)

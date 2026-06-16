@@ -130,6 +130,111 @@ def fetch_positions() -> list[dict]:
     
 
     
+def fetch_buying_power() -> float | None:
+    """
+    Fetches the account's current buying power (cash available to invest)
+    from Robinhood. Returns a float in dollars, or None if it can't be read.
+
+    Used to sync the Argus investment budget to real available funds.
+    All robin_stocks access stays in this file — if the unofficial API
+    changes, update the field parsing here but keep the return type.
+    """
+    if not _login():
+        return None
+
+    try:
+        profile = rh.profiles.load_account_profile()
+        if not profile:
+            print("Robinhood buying power: empty account profile.")
+            return None
+
+        # Prefer the most spendable figure. Robinhood exposes several;
+        # buying_power is the standard "available to invest" number.
+        for field in ("buying_power", "cash_available_for_withdrawal", "cash"):
+            raw = profile.get(field)
+            if raw is not None:
+                try:
+                    value = float(raw)
+                    print(f"Robinhood buying power: {field} = ${value:.2f}")
+                    return round(value, 2)
+                except (ValueError, TypeError):
+                    continue
+
+        print("Robinhood buying power: no usable balance field found.")
+        return None
+
+    except Exception as e:
+        print(f"Robinhood buying power: fetch failed — {e}")
+        return None
+
+
+def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
+    """
+    Fetches current quote data for a list of tickers from Robinhood.
+    Returns a dict keyed by ticker with normalized price details, matching
+    the structure produced by ingestion.prices.fetch_prices:
+
+        {"AAPL": {"price": .., "change": .., "change_pct": .., "high": .., "low": ..}}
+
+    Tickers Robinhood can't resolve (most crypto, delisted symbols) map to None
+    so the caller can fall back to another source. Robinhood quotes don't expose
+    intraday high/low, so those are returned as 0.0 (not consumed by the app).
+
+    All robin_stocks access lives in this file — if the unofficial API changes,
+    update the parsing here but keep the return structure the same.
+    """
+    if not tickers:
+        return {}
+
+    if not _login():
+        return {}
+
+    results: dict[str, dict] = {}
+
+    try:
+        # get_quotes returns a list aligned with the input symbols; invalid
+        # symbols come back as None.
+        quotes = rh.stocks.get_quotes(tickers)
+    except Exception as e:
+        print(f"Robinhood quotes: fetch failed — {e}")
+        return {}
+
+    for ticker, quote in zip(tickers, quotes or []):
+        if not quote:
+            results[ticker] = None
+            continue
+
+        try:
+            # Prefer the extended-hours print when the regular session is closed.
+            last_raw = quote.get("last_extended_hours_trade_price") or quote.get("last_trade_price")
+            prev_raw = quote.get("previous_close") or quote.get("adjusted_previous_close")
+
+            last = float(last_raw) if last_raw else 0.0
+            prev = float(prev_raw) if prev_raw else 0.0
+
+            if last == 0:
+                results[ticker] = None
+                continue
+
+            change     = last - prev if prev else 0.0
+            change_pct = (change / prev * 100) if prev else 0.0
+
+            results[ticker] = {
+                "price":      round(last, 2),
+                "change":     round(change, 2),
+                "change_pct": round(change_pct, 2),
+                "high":       0.0,
+                "low":        0.0,
+            }
+        except (ValueError, TypeError) as e:
+            print(f"Robinhood quotes: skipping {ticker} — {e}")
+            results[ticker] = None
+
+    fetched = sum(1 for v in results.values() if v is not None)
+    print(f"Robinhood quotes: fetched {fetched}/{len(tickers)} tickers successfully")
+    return results
+
+
 def fetch_robinhood_news(tickers: list[str] = None) -> list[dict]:
     """
     Fetches news from Robinhood for the given tickers.

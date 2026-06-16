@@ -153,6 +153,22 @@ def update_manual_price(ticker: str, price: float):
             return
     print(f"Positions: {ticker} not found.")
 
+def update_exit_condition(ticker: str, exit_condition: str):
+    """
+    Lets the user edit the exit strategy for an open position.
+    Useful for positions synced from Robinhood, which come in
+    without a real exit condition set.
+    """
+    positions = load_positions()
+    for p in positions:
+        if p["ticker"] == ticker and p["status"] == "open":
+            p["exit_condition"] = exit_condition
+            p["updated_at"]     = datetime.now().isoformat()
+            save_positions(positions)
+            print(f"Positions: {ticker} exit condition set to '{exit_condition}'")
+            return
+    print(f"Positions: {ticker} not found.")
+
 def update_amount_invested(ticker: str, amount: float):
     """
     Records how many actual dollars the user invested in this position.

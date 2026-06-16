@@ -1,20 +1,68 @@
 import os
-import finnhub
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-def get_client():
-    return finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+# Yahoo Finance uses different symbols for crypto. Used by both the yfinance
+# price fallback and the 14-day history fetch.
+CRYPTO_YAHOO_MAP = {
+    "BTC":  "BTC-USD",
+    "ETH":  "ETH-USD",
+    "SOL":  "SOL-USD",
+    "BNB":  "BNB-USD",
+    "XRP":  "XRP-USD",
+}
+
+
+def _yfinance_quote(ticker: str) -> dict | None:
+    """
+    Fallback current-price fetch via Yahoo Finance for tickers Robinhood
+    doesn't carry (most crypto, some ETFs). Returns the same dict shape as
+    fetch_prices, or None if unavailable.
+    """
+    import yfinance as yf
+
+    yahoo_symbol = CRYPTO_YAHOO_MAP.get(ticker, ticker)
+
+    try:
+        hist = yf.Ticker(yahoo_symbol).history(period="2d", interval="1d")
+        if hist.empty:
+            return None
+
+        last_price = float(hist["Close"].iloc[-1])
+        prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else last_price
+        day_high   = float(hist["High"].iloc[-1])
+        day_low    = float(hist["Low"].iloc[-1])
+
+        if last_price == 0:
+            return None
+
+        change     = last_price - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0.0
+
+        return {
+            "price":      round(last_price, 2),
+            "change":     round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "high":       round(day_high, 2),
+            "low":        round(day_low, 2),
+        }
+    except Exception as e:
+        print(f"yfinance price fetch error for {ticker}: {e}")
+        return None
 
 
 def fetch_prices(tickers: list[str]) -> dict[str, dict]:
     """
-    Fetches current price data for a list of tickers from Finnhub.
-    Returns a dict keyed by ticker with price details inside.
+    Fetches current price data for a list of tickers.
 
-    Example return value:
+    Robinhood is the primary source — it's the actual trading platform so
+    prices match exactly, and it has no free-tier quote cap like Finnhub did.
+    Any ticker Robinhood can't resolve (most crypto, occasional ETFs) falls
+    back to Yahoo Finance.
+
+    Returns a dict keyed by ticker with price details inside:
     {
         "AAPL": {
             "price":   189.42,
@@ -26,45 +74,31 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
         ...
     }
     """
-    client  = get_client()
-    results = {}
+    if not tickers:
+        return {}
 
-    for ticker in tickers:
-        try:
-            quote = client.quote(ticker)
+    results: dict[str, dict] = {}
 
-            # Finnhub quote fields:
-            # c = current price, d = change, dp = % change
-            # h = high, l = low, o = open, pc = previous close
-            price      = quote.get("c", 0.0)
-            change     = quote.get("d", 0.0)
-            change_pct = quote.get("dp", 0.0)
-            high       = quote.get("h", 0.0)
-            low        = quote.get("l", 0.0)
+    # --- Primary: Robinhood ---
+    try:
+        from ingestion.robinhood import is_available, fetch_quotes
+        if is_available():
+            rh_results = fetch_quotes(tickers)
+            for ticker in tickers:
+                if rh_results.get(ticker):
+                    results[ticker] = rh_results[ticker]
+    except Exception as e:
+        print(f"Prices: Robinhood quote source unavailable — {e}")
 
-            # If price is 0 the market is closed or ticker is invalid
-            if price == 0:
-                results[ticker] = None
-                continue
-
-            results[ticker] = {
-                "price":      round(price, 2),
-                "change":     round(change, 2),
-                "change_pct": round(change_pct, 2),
-                "high":       round(high, 2),
-                "low":        round(low, 2),
-            }
-
-        except Exception as e:
-            print(f"Price fetch error for {ticker}: {e}")
-            results[ticker] = None
+    # --- Fallback: Yahoo Finance for anything Robinhood didn't cover ---
+    remaining = [t for t in tickers if t not in results]
+    for ticker in remaining:
+        results[ticker] = _yfinance_quote(ticker)
 
     fetched = sum(1 for v in results.values() if v is not None)
     print(f"Prices: fetched {fetched}/{len(tickers)} tickers successfully")
     return results
 
-import time as _time
-from datetime import timedelta
 
 def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[str, dict]:
     """
@@ -73,15 +107,6 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
     Returns trend analysis Claude can use to calibrate exit conditions.
     """
     import yfinance as yf
-
-    # Yahoo Finance uses different symbols for crypto
-    CRYPTO_YAHOO_MAP = {
-        "BTC":  "BTC-USD",
-        "ETH":  "ETH-USD",
-        "SOL":  "SOL-USD",
-        "BNB":  "BNB-USD",
-        "XRP":  "XRP-USD",
-    }
 
     results = {}
 
