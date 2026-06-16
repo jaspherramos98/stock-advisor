@@ -16,7 +16,7 @@ from ingestion.prices import fetch_prices
 from ingestion.coingecko import TICKER_TO_COINGECKO_ID
 from main import run_ingestion_and_analysis
 from calculator.portfolio import calculate_allocations
-from storage.positions import add_position, get_open_positions, get_closed_positions, close_position, update_manual_price, update_amount_invested, update_exit_condition
+from storage.positions import add_position, get_open_positions, get_closed_positions, close_position, update_manual_price, update_amount_invested, update_exit_condition, update_catalyst_timing
 from storage.watchlist import load_watchlist, save_watchlist, add_ticker, remove_ticker, reset_to_defaults
 from alerts.snooze import is_snoozed, snooze_ticker, dismiss_ticker, clear_snooze
 from dotenv import load_dotenv
@@ -88,7 +88,8 @@ def _build_argus_context() -> str:
                     f"  {ticker} — {p['company_name']} | "
                     f"entry: ${ref_price:.2f} | live: ${live_price:.2f} | "
                     f"P&L: {change_pct:+.1f}% | invested: ${amount_inv:.2f} | "
-                    f"exit when: {p.get('exit_condition', 'not set')}"
+                    f"exit when: {p.get('exit_condition', 'not set')} | "
+                    f"catalyst by: {p.get('catalyst_timing') or 'n/a'}"
                 )
         else:
             lines.append("\nOPEN POSITIONS: None")
@@ -131,7 +132,10 @@ def _build_argus_context() -> str:
                         f"confidence: {r.get('confidence_score',0):.2f} | "
                         f"risk: {r.get('risk_level','?')} | "
                         f"exit: {r.get('exit_condition','?')} | "
-                        f"rationale: {r.get('entry_rationale','?')}"
+                        f"catalyst by: {r.get('catalyst_timing') or 'n/a'} | "
+                        f"rationale: {r.get('entry_rationale','?')} | "
+                        f"bull: {r.get('bull_case') or 'n/a'} | "
+                        f"bear: {r.get('bear_case') or 'n/a'}"
                     )
             else:
                 lines.append("\nTODAY'S RECOMMENDATIONS: None yet — run the pipeline first.")
@@ -481,13 +485,16 @@ if True:
                 a.setdefault("highly_recommended", False)
                 a["highly_recommended_display"] = "⭐" if a["highly_recommended"] else ""
 
+            for a in allocations:
+                a.setdefault("catalyst_timing", "")
+
             df = pd.DataFrame(allocations)
             df = df[[
                 "ticker", "company_name", "direction",
                 "current_price", "change_pct",
                 "dollar_amount", "percentage",
                 "risk_level", "confidence_score",
-                "exit_condition", "flagged", "highly_recommended"
+                "exit_condition", "catalyst_timing", "flagged", "highly_recommended"
             ]].rename(columns={
                 "ticker":             "Ticker",
                 "company_name":       "Company",
@@ -499,6 +506,7 @@ if True:
                 "risk_level":         "Risk",
                 "confidence_score":   "Confidence",
                 "exit_condition":     "Sell when",
+                "catalyst_timing":    "Catalyst by",
                 "flagged":            "⚠ Flagged",
                 "highly_recommended": "⭐",
             })
@@ -541,6 +549,7 @@ if True:
             st.caption(
                 "ℹ️ **Confidence** — how verified the source is (1.0 = SEC filing, 0.15 = Reddit).  "
                 "**Amount ($)** — $0.00 means watch only, no capital allocated.  "
+                "**Catalyst by** — when the news event is expected to play out (re-evaluate if it passes).  "
                 "**⚠ Flagged** — unverified source, treat with extra caution."
             )
 
@@ -594,7 +603,29 @@ if True:
 
                     why_label = "Why buy" if a["direction"] == "buy" else "Why watch"
                     st.markdown(f"**{why_label}:** {a['entry_rationale']}")
+
+                    # Bull vs bear debate — always show both sides before acting
+                    if a.get("bull_case") or a.get("bear_case"):
+                        bull_col, bear_col = st.columns(2)
+                        with bull_col:
+                            st.markdown(
+                                f'<div style="background:rgba(46,204,113,0.08); border-left:3px solid #2ecc71; '
+                                f'border-radius:4px; padding:8px 12px;"><b>🟢 Bull case</b><br>'
+                                f'{a.get("bull_case") or "—"}</div>',
+                                unsafe_allow_html=True,
+                            )
+                        with bear_col:
+                            st.markdown(
+                                f'<div style="background:rgba(231,76,60,0.08); border-left:3px solid #e74c3c; '
+                                f'border-radius:4px; padding:8px 12px;"><b>🔴 Bear case</b><br>'
+                                f'{a.get("bear_case") or "—"}</div>',
+                                unsafe_allow_html=True,
+                            )
+                        st.write("")
+
                     st.markdown(f"**Exit when:** {a['exit_condition']}")
+                    if a.get("catalyst_timing"):
+                        st.markdown(f"**Catalyst expected:** {a['catalyst_timing']}")
                     st.markdown(f"**Based on:** _{a['source_title']}_")
 
                     # White paper and info links for crypto assets
@@ -714,6 +745,7 @@ if True:
                                         confidence=      a["confidence_score"],
                                         source_title=    a["source_title"],
                                         entry_date=      entry_date,
+                                        catalyst_timing= a.get("catalyst_timing", ""),
                                     )
                                     open_tickers.add(a["ticker"])
                                     st.success(
@@ -917,6 +949,7 @@ if True:
                 m_price   = st.number_input("Price you paid per share ($)", min_value=0.01, value=100.00, step=0.01, key="manual_entry_price")
             with m_col2:
                 m_exit    = st.text_input("Exit condition", placeholder="e.g. target 10% gain, stop loss at 5%", key="manual_exit")
+                m_catalyst = st.text_input("Catalyst by (optional)", placeholder="e.g. Earnings Jul 15, Merger ~Q3", key="manual_catalyst", help="When the news event is expected to play out.")
                 m_date    = st.date_input("Date you bought it", value=datetime.today().date(), max_value=datetime.today().date(), key="manual_date")
                 m_direction = st.selectbox("Direction", ["buy", "watch"], key="manual_direction")
 
@@ -954,6 +987,7 @@ if True:
                         confidence=      0.0,
                         source_title=    "Manually added",
                         entry_date=      m_date.strftime("%Y-%m-%d"),
+                        catalyst_timing= m_catalyst.strip(),
                     )
                     st.success(f"✓ {m_ticker} added at ${m_price:.2f}, bought on {m_date}.")
                     st.rerun()
@@ -988,6 +1022,7 @@ if True:
                     "Live Price": f"${live_price:.2f}" if live_price else "N/A",
                     "Change":     f"{change_pct:+.1f}%" if change_pct is not None else "N/A",
                     "Exit when":  p["exit_condition"],
+                    "Catalyst by": p.get("catalyst_timing") or "—",
                     "Bought":     p.get("entry_date") or opened,
                 })
 
@@ -1025,6 +1060,8 @@ if True:
                     c4.metric("Bought on", entry_date_display)
 
                     st.markdown(f"**Exit when:** {p['exit_condition']}")
+                    if p.get("catalyst_timing"):
+                        st.markdown(f"**Catalyst expected:** {p['catalyst_timing']}")
                     st.markdown(f"**Based on:** _{p['source_title']}_")
 
                     # White paper link for crypto positions
@@ -1065,16 +1102,29 @@ if True:
 
                     st.divider()
 
-                    new_exit = st.text_input(
-                        "Exit strategy",
-                        value=p["exit_condition"],
-                        key=f"exit_cond_{ticker}",
-                        help="e.g. 'target 10% gain, stop loss at 4%'. Edit this for synced positions.",
-                    )
-                    if st.button("💾 Save exit strategy", key=f"exit_btn_{ticker}"):
-                        update_exit_condition(ticker, new_exit)
-                        st.success("Exit strategy updated.")
-                        st.rerun()
+                    col_exit, col_cat = st.columns(2)
+                    with col_exit:
+                        new_exit = st.text_input(
+                            "Exit strategy",
+                            value=p["exit_condition"],
+                            key=f"exit_cond_{ticker}",
+                            help="e.g. 'target 10% gain, stop loss at 4%'. Edit this for synced positions.",
+                        )
+                        if st.button("💾 Save exit strategy", key=f"exit_btn_{ticker}"):
+                            update_exit_condition(ticker, new_exit)
+                            st.success("Exit strategy updated.")
+                            st.rerun()
+                    with col_cat:
+                        new_catalyst = st.text_input(
+                            "Catalyst by",
+                            value=p.get("catalyst_timing", ""),
+                            key=f"catalyst_{ticker}",
+                            help="When the news event is expected to play out, e.g. 'Earnings Jul 15', 'Merger closes ~Q3 2026'.",
+                        )
+                        if st.button("💾 Save catalyst timing", key=f"catalyst_btn_{ticker}"):
+                            update_catalyst_timing(ticker, new_catalyst.strip())
+                            st.success("Catalyst timing updated.")
+                            st.rerun()
 
                     st.divider()
 

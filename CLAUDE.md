@@ -63,10 +63,19 @@ budget.json                   User's current budget setting
 ### Pipeline Flow
 1. `main.py` runs parallel ingestion via `ThreadPoolExecutor` (max_workers=5)
 2. `validation/scorer.py` scores each item by source weight
-3. Top 25 deduplicated stories sent to Claude
-4. Claude returns up to 20 recommendations with `highly_recommended` field
+3. Top 25 deduplicated stories sent to Claude, along with the user's OPEN POSITIONS
+   and a PAST TRADE OUTCOMES block (closed positions w/ realized P&L) for reflection
+4. Claude returns up to 20 recommendations. Per candidate it argues a `bull_case`
+   vs `bear_case` (the bear case is the gate for keeping a 'buy'), runs a portfolio
+   risk gate over the whole basket (concentration/correlation), and sets
+   `highly_recommended`
 5. `calculator/portfolio.py` allocates budget (HR signals get 2x weight)
 6. Results cached to `pipeline_cache.json`
+
+Analyst design ideas adapted from TauricResearch/TradingAgents (multi-agent
+trading framework), kept within Argus's single-call model: bull/bear debate,
+reflection from the user's own closed-trade outcomes, and a portfolio-level
+risk review.
 
 ### Source Confidence Weights
 ```python
@@ -120,7 +129,10 @@ Each recommendation must have:
   "asset_type": "stock|etf|crypto",
   "direction": "buy|watch|avoid",
   "entry_rationale": "string (max 2 sentences)",
+  "bull_case": "string (strongest reason it works)",
+  "bear_case": "string (strongest reason it loses money — the gate for keeping a 'buy')",
   "exit_condition": "string (e.g. 'target 12% gain, stop loss at 5%')",
+  "catalyst_timing": "string — when the catalyst is expected to play out (e.g. 'Earnings Jul 15', 'Merger ~Q3 2026'); honest horizon estimate if no date is in the news",
   "risk_level": "low|medium|high",
   "confidence_score": "number (passed through from scorer)",
   "flagged": "boolean",

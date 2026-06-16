@@ -44,6 +44,7 @@ def add_position(
     confidence:      float,
     source_title:    str,
     entry_date:      str  = None,  # ISO date string e.g. "2026-06-04" — defaults to today
+    catalyst_timing: str  = "",    # when the news catalyst is expected to play out
 ) -> dict:
     """
     Adds a new open position. If the ticker already exists as an
@@ -63,6 +64,7 @@ def add_position(
             print(f"Positions: {ticker} already open, updating reference price.")
             p["reference_price"] = reference_price
             p["exit_condition"]  = exit_condition
+            p["catalyst_timing"] = catalyst_timing or p.get("catalyst_timing", "")
             p["entry_date"]      = entry_date
             p["updated_at"]      = datetime.now().isoformat()
             save_positions(positions)
@@ -74,6 +76,7 @@ def add_position(
         "reference_price":  reference_price,
         "manual_price":     None,
         "exit_condition":   exit_condition,
+        "catalyst_timing":  catalyst_timing,
         "direction":        direction,
         "confidence":       confidence,
         "source_title":     source_title,
@@ -166,6 +169,22 @@ def update_exit_condition(ticker: str, exit_condition: str):
             p["updated_at"]     = datetime.now().isoformat()
             save_positions(positions)
             print(f"Positions: {ticker} exit condition set to '{exit_condition}'")
+            return
+    print(f"Positions: {ticker} not found.")
+
+def update_catalyst_timing(ticker: str, catalyst_timing: str):
+    """
+    Lets the user edit when the news catalyst behind a position is expected to
+    play out (e.g. 'Earnings Jul 15', 'Merger closes ~Q3 2026'). Display only —
+    not tied to alerts.
+    """
+    positions = load_positions()
+    for p in positions:
+        if p["ticker"] == ticker and p["status"] == "open":
+            p["catalyst_timing"] = catalyst_timing
+            p["updated_at"]      = datetime.now().isoformat()
+            save_positions(positions)
+            print(f"Positions: {ticker} catalyst timing set to '{catalyst_timing}'")
             return
     print(f"Positions: {ticker} not found.")
 

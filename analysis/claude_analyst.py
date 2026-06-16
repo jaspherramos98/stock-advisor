@@ -95,10 +95,11 @@ def _deduplicate_by_asset_type(
 
 
 def _build_prompt(
-    items:         list[dict],
-    crypto_context: dict = None,
-    price_history:  dict = None,
+    items:           list[dict],
+    crypto_context:  dict = None,
+    price_history:   dict = None,
     open_positions:  list = None,
+    closed_positions: list = None,
 ) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
@@ -153,6 +154,31 @@ def _build_prompt(
                 f"exit when: {p.get('exit_condition', 'not set')}"
             )
         lines.append("=== END OPEN POSITIONS ===\n")
+
+    # Past trade outcomes — let Claude learn from the user's own realized results
+    if closed_positions:
+        scored = [p for p in closed_positions if p.get("pnl_pct") is not None]
+        if scored:
+            wins   = [p for p in scored if p["pnl_pct"] > 0]
+            win_rate = round(len(wins) / len(scored) * 100)
+            avg_pnl  = round(sum(p["pnl_pct"] for p in scored) / len(scored), 1)
+            lines.append("=== PAST TRADE OUTCOMES — LEARN FROM THESE ===")
+            lines.append(
+                f"The user's realized track record so far: {len(scored)} closed trades, "
+                f"{win_rate}% win rate, average P&L {avg_pnl:+.1f}%. Study what actually made or "
+                "lost money for THIS user and adjust your conviction accordingly — if a certain kind "
+                "of setup (source, catalyst type, risk level) has repeatedly lost, be more skeptical "
+                "of similar ones today; lean into the kinds that have worked."
+            )
+            # Show the most recent trades (cap to keep tokens down)
+            for p in scored[:12]:
+                outcome = "WIN " if p["pnl_pct"] > 0 else "LOSS"
+                lines.append(
+                    f"[{outcome} {p['pnl_pct']:+.1f}%] ${p.get('ticker','?')} — "
+                    f"{p.get('direction','?')} | conf {p.get('confidence', 0):.2f} | "
+                    f"source: {p.get('source_title','?')} | closed because: {p.get('close_reason','?')}"
+                )
+            lines.append("=== END PAST TRADE OUTCOMES ===\n")
 
     # News items
     for i, item in enumerate(items, 1):
@@ -212,14 +238,18 @@ def run_analysis(
 
     # Fetch open positions so Claude knows what the user already owns
     open_positions = []
+    closed_positions = []
     try:
-        from storage.positions import get_open_positions
+        from storage.positions import get_open_positions, get_closed_positions
         open_positions = get_open_positions()
         if open_positions:
             tickers = [p["ticker"] for p in open_positions]
             print(f"Claude analyst: user has {len(open_positions)} open positions ({', '.join(tickers)}) — passing to Claude")
+        closed_positions = get_closed_positions()
+        if closed_positions:
+            print(f"Claude analyst: feeding {len(closed_positions)} past trade outcomes back for reflection")
     except Exception as e:
-        print(f"Claude analyst: could not load open positions: {e}")
+        print(f"Claude analyst: could not load positions: {e}")
 
     unique_items = _deduplicate_by_asset_type(
         items,
@@ -284,6 +314,7 @@ def run_analysis(
             crypto_context=crypto_context,
             price_history=price_history,
             open_positions=open_positions,
+            closed_positions=closed_positions,
         )
     except Exception as e:
         import traceback
@@ -369,6 +400,17 @@ SIGNAL QUALITY — BE RUTHLESSLY SELECTIVE:
 - It is completely fine — and often the right call — to return mostly 'watch' or an empty array on a
   weak day. Forcing buys when nothing has real, un-priced-in edge is exactly how the desk loses money.
 
+BULL vs BEAR DEBATE — ARGUE BOTH SIDES BEFORE YOU COMMIT:
+- For EVERY candidate you return (buy or watch), you must fill bull_case and bear_case.
+  - bull_case: the single strongest, most specific reason the trade works (the catalyst, the edge).
+  - bear_case: the single strongest, most specific reason it LOSES money — what a smart short-seller
+    would say. Be concrete: "already priced in after the 9% pop", "deal faces antitrust review",
+    "beat was low-quality, guidance cut", "thin volume, easily reversed". Never write "no risks".
+- Then decide HONESTLY: only keep direction='buy' if the bull case clearly outweighs the bear case
+  after that scrutiny. If the bear case is comparably strong or the edge is already gone, downgrade
+  to 'watch'. A 'watch' costs nothing; a bad 'buy' costs real money.
+- This debate is the gate for 'buy' — do not wave a candidate through just because the catalyst exists.
+
 HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
 1. The catalyst is unambiguous AND recent — it happened or was officially announced within roughly the
    last 1-2 trading days, not old news. No "may", "could", "might".
@@ -387,6 +429,28 @@ EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
 - For high volatility assets (avg daily range >3%) use stops of at least 5% to avoid noise shakeouts.
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
 
+PORTFOLIO RISK GATE — REVIEW YOUR BUYS AS ONE BOOK (final check before you answer):
+- Don't just rate candidates in isolation. Step back and look at all your 'buy' signals together,
+  PLUS what the user already holds in OPEN POSITIONS — that is the real portfolio.
+- Avoid concentration: if several buys are driven by the same theme, sector, or single macro driver
+  (e.g. all semiconductors, all rate-cut plays, all one customer's supply chain), they will crash
+  together. Keep only the strongest 1-2 as 'buy' and downgrade the rest to 'watch'.
+- If a buy would pile more exposure onto a sector/theme the user already owns heavily, prefer 'watch'
+  and say so in the bear_case.
+- Diversify the buy list across uncorrelated catalysts where possible. Quality and spread beat quantity.
+- (Budgeting note: the allocator caps any single name at 40% and double-weights highly_recommended,
+  so don't over-stuff the list — a few well-chosen, uncorrelated buys is the goal.)
+
+CATALYST TIMING FIELD — WHEN does the news actually play out:
+- Fill "catalyst_timing" with the date or window the catalyst is expected to resolve, so the user
+  knows the timeframe over which the thesis should work (and when to reassess if it hasn't).
+- If the news states or clearly implies a specific date/window, USE IT — e.g. "Earnings Jul 15",
+  "Merger expected to close ~Q3 2026", "FDA PDUFA decision Mar 1", "Investor day next week".
+- ONLY give a specific date when it is grounded in the news. Do NOT invent or guess dates. If the
+  news gives no timing, provide an honest estimate of the hold horizon instead — e.g.
+  "no fixed date — momentum trade, ~1-2 weeks" or "open-ended, re-evaluate in 2-4 weeks".
+- Keep it short (a few words). This is a TIMING field only; price targets stay in exit_condition.
+
 You must respond with ONLY a valid JSON array. No preamble, no explanation,
 no markdown code fences. Just the raw JSON array.
 
@@ -397,7 +461,10 @@ Each object in the array must have exactly these fields:
   "asset_type":         "stock" or "etf" or "crypto",
   "direction":          "buy" or "watch" or "avoid",
   "entry_rationale":    string (max 2 sentences),
+  "bull_case":          string (1-2 sentences — the strongest reason this works, see DEBATE below),
+  "bear_case":          string (1-2 sentences — the strongest reason this loses money, see DEBATE below),
   "exit_condition":     string (e.g. '10% gain' or '2 weeks' or 'earnings release'),
+  "catalyst_timing":    string — WHEN the catalyst is expected to play out (see CATALYST TIMING FIELD below),
   "risk_level":         "low" or "medium" or "high",
   "confidence_score":   number (pass through from the news item),
   "flagged":            boolean,
