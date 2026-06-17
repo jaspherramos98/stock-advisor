@@ -81,10 +81,10 @@ budget.json                   User's current budget setting
 ```python
 SOURCE_WEIGHTS = {
     "sec": 1.0,
-    "finnhub_company": 0.68,
-    "finnhub_etf": 0.68,  
-    "finnhub_general": 0.68,
+    "finnhub_company": 0.7,
+    "finnhub_etf": 0.7,
     "robinhood_news": 0.65,
+    "finnhub_general": 0.6,
     "finnhub_crypto": 0.5,
     "rss": 0.5,
     "etf_rss": 0.5,
@@ -92,6 +92,8 @@ SOURCE_WEIGHTS = {
     "reddit_rss": 0.15,
 }
 ```
+Plus a +0.08 recency bonus for items < 6h old. Thresholds: score ≥ 0.6 → HIGH
+(sent to Claude), ≥ 0.35 → MEDIUM (sent, flagged), below → LOW (discarded).
 
 ### Highly Recommended Criteria (all 4 must be met)
 1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)
