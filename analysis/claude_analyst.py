@@ -440,11 +440,19 @@ IMPORTANT RULES:
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
   Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
 
-CONFIDENCE_SCORE IS NOT EDGE:
-- confidence_score measures SOURCE CREDIBILITY (how much to trust the report) — it does NOT
-  measure how good the trade is or how much money it will make. A highly credible source
-  reporting an already-priced-in event is still a losing buy. Judge the edge and the timing
-  SEPARATELY from how trustworthy the source is.
+TWO SEPARATE NUMBERS — CREDIBILITY vs CONVICTION:
+- confidence_score (given to you, do not change it) measures SOURCE CREDIBILITY — how much to TRUST
+  the report (1.0 SEC filing … 0.15 Reddit). It does NOT measure how good or timely the trade is.
+- conviction (YOU set it, 0-100) measures the EDGE — how strong, timely, and still-open the money-making
+  opportunity is. This is your call on trade quality, and it drives ranking and position size.
+- Judge them SEPARATELY. A highly credible source reporting an already-priced-in event = high
+  confidence_score but LOW conviction (the edge is gone). A strong fresh catalyst from a decent source =
+  high conviction even if confidence_score is moderate.
+- Score conviction RELATIVE TO THE ASSET'S OWN CLASS — a great crypto/ETF setup can be high-conviction
+  even though crypto/ETF news sources never reach SEC-level credibility. Don't let a capped
+  confidence_score drag down conviction for a genuinely strong non-stock setup.
+- conviction guide: 80-100 = strong, recent, clearly un-priced-in edge; 50-79 = real but partial
+  (timing/size uncertain → usually 'watch'); below 50 = weak/priced-in (watch or skip).
 
 CATALYST TIMING — IS THE EDGE STILL THERE? (most important check)
 - The #1 way to lose money here is buying news that is already in the price. Before any 'buy',
@@ -514,7 +522,9 @@ SHORTS — BEARISH IDEAS (stocks only, same fact-based discipline):
 HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
 1. The catalyst is unambiguous AND recent — it happened or was officially announced within roughly the
    last 1-2 trading days, not old news. No "may", "could", "might".
-2. The confidence score is 0.68 or above (Finnhub company news, SEC filing, or Robinhood news).
+2. Your conviction is 75 or above (a strong, clearly un-priced-in edge) AND confidence_score is at
+   least 0.5 (a credible source, not a Reddit rumor). Conviction drives this gate; the credibility
+   floor just keeps out unverified noise.
 3. The edge is still open — the price has NOT already fully reflected the catalyst: not pinned at the
    14-day high on this same news, and not a buyout target already trading at its offer price.
 4. The price trend supports entry — not in a sharp downtrend (unless the catalyst is a genuine reversal
@@ -547,7 +557,8 @@ Each object in the array must have exactly these fields:
   "entry_rationale":    string (max 2 sentences),
   "exit_condition":     string (e.g. '10% gain' or '2 weeks' or 'earnings release'),
   "risk_level":         "low" or "medium" or "high",
-  "confidence_score":   number (pass through from the news item),
+  "confidence_score":   number (SOURCE CREDIBILITY — pass through from the news item, do not change),
+  "conviction":         number 0-100 (YOUR edge/quality score — see CREDIBILITY vs CONVICTION above),
   "flagged":            boolean,
   "source_title":       string (the news headline this is based on),
   "highly_recommended": boolean

@@ -98,9 +98,18 @@ SOURCE_WEIGHTS = {
 Plus a +0.08 recency bonus for items < 6h old. Thresholds: score ≥ 0.6 → HIGH
 (sent to Claude), ≥ 0.35 → MEDIUM (sent, flagged), below → LOW (discarded).
 
+### Conviction vs Confidence (R2)
+Two separate numbers per recommendation:
+- **`confidence_score`** (0-1, set by scorer) = SOURCE CREDIBILITY (trust the report). Unchanged;
+  still the dedup/scoring input.
+- **`conviction`** (0-100, set by the analyst) = the EDGE (how strong/timely/un-priced-in the trade
+  is). Scored *relative to the asset's own class* (so crypto/ETF can be high-conviction despite capped
+  credibility). **Conviction drives position size** (`portfolio._compute_weight`) and the HR gate.
+  Back-compat: recs without `conviction` fall back to `confidence_score × 100`.
+
 ### Highly Recommended Criteria (all 4 must be met)
 1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)
-2. Confidence score >= 0.68 (source credibility — NOT a measure of trade edge)
+2. Conviction >= 75 (strong, un-priced-in edge) AND confidence_score >= 0.5 (credible source floor)
 3. Edge still open — price has NOT already fully reflected the catalyst (not pinned at 14-day high on this same news, not a buyout target trading at offer price)
 4. Price trend supports entry (not in a sharp downtrend unless a genuine reversal catalyst)
 
@@ -111,6 +120,8 @@ target-vs-acquirer mechanics (announced cash-deal targets → `watch`, closed de
 skip), and prefers `watch`/empty over forced buys on weak days.
 
 ### Budget Allocation
+- Weight = `(conviction/100) × risk_multiplier × HR_multiplier` — sized by CONVICTION (edge),
+  not credibility (R2). Back-compat: missing conviction falls back to `confidence_score × 100`.
 - `HIGHLY_RECOMMENDED_MULTIPLIER = 2.0` — HR buys get 2x capital weight
 - `MAX_SINGLE_ALLOCATION = 0.40` — no single stock gets more than 40%
 - `MAX_SHORT_EXPOSURE = 0.30` — total short exposure capped at 30% of budget
@@ -153,7 +164,8 @@ Each recommendation must have:
   "entry_rationale": "string (max 2 sentences)",
   "exit_condition": "string (e.g. 'target 12% gain, stop loss at 5%')",
   "risk_level": "low|medium|high",
-  "confidence_score": "number (passed through from scorer)",
+  "confidence_score": "number (source credibility, passed through from scorer)",
+  "conviction": "number 0-100 (analyst's edge score — drives sizing + HR; R2)",
   "flagged": "boolean",
   "source_title": "string",
   "highly_recommended": "boolean"

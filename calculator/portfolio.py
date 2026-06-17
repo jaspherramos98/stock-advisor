@@ -20,14 +20,21 @@ MAX_SHORT_EXPOSURE = 0.30
 
 def _compute_weight(rec: dict) -> float:
     """
-    Calculates a raw weight for one BUY recommendation.
-    Weight = confidence_score x risk_multiplier x highly_recommended_boost
+    Calculates a raw weight for one BUY/SHORT recommendation.
+    Weight = (conviction/100) x risk_multiplier x highly_recommended_boost
+
+    Position size is driven by CONVICTION (the analyst's edge score), not source
+    credibility — credibility is a trust gate, not a sizing input. Back-compat:
+    recs from before the conviction field fall back to confidence_score x 100.
     """
-    confidence   = rec.get("confidence_score", 0.5)
-    risk         = rec.get("risk_level", "medium")
-    risk_mult    = RISK_MULTIPLIERS.get(risk, 0.5)
-    hr_mult      = HIGHLY_RECOMMENDED_MULTIPLIER if rec.get("highly_recommended") else 1.0
-    return confidence * risk_mult * hr_mult
+    conviction = rec.get("conviction")
+    if conviction is None:
+        conviction = rec.get("confidence_score", 0.5) * 100  # back-compat for old cached recs
+    base       = max(0.0, min(float(conviction), 100.0)) / 100.0
+    risk       = rec.get("risk_level", "medium")
+    risk_mult  = RISK_MULTIPLIERS.get(risk, 0.5)
+    hr_mult    = HIGHLY_RECOMMENDED_MULTIPLIER if rec.get("highly_recommended") else 1.0
+    return base * risk_mult * hr_mult
 
 
 def calculate_allocations(recommendations: list[dict], budget: float) -> list[dict]:
@@ -132,6 +139,7 @@ def _build_result(rec: dict, dollar_amount: float, pct: float) -> dict:
         "exit_condition":     rec.get("exit_condition"),
         "risk_level":         rec.get("risk_level"),
         "confidence_score":   rec.get("confidence_score"),
+        "conviction":         rec.get("conviction"),
         "flagged":            rec.get("flagged", False),
         "source_title":       rec.get("source_title", ""),
         "highly_recommended": rec.get("highly_recommended", False),

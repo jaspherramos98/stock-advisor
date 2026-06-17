@@ -164,7 +164,16 @@ more here.
 - Done when: analyst emits `short` w/ cover+stop; positions track inverted P&L;
   short-exposure cap + squeeze check in place.
 
-### R2. Split conviction from credibility (FOUNDATION)
+### R2. Split conviction from credibility (FOUNDATION)  ✅ implemented on `r2-conviction` (pending live test + merge)
+Done additively (kept `confidence_score` as-is = credibility; ADDED `conviction` 0-100):
+new schema field + "CREDIBILITY vs CONVICTION" prompt block (conviction = edge, scored
+per asset class); HR gate now `conviction>=75 AND confidence_score>=0.5`;
+`portfolio._compute_weight` sizes by conviction with back-compat fallback to
+`confidence_score×100`; dashboard shows Conviction beside Confidence (detail + table +
+caption, None→"—"); chatbot context + prompt explain conviction vs confidence; sheets
+export appends a Conviction column (no index shift). Verified: unit tests (conviction
+drives weight+allocation, back-compat) + mock boot. Original design notes below.
+
 `confidence_score` is overloaded (source credibility + HR gate + dedup sort key) —
 the root of the crypto ceiling. Split into: `source_credibility` (0-1 scorer weight,
 stays the dedup input) and `conviction` (0-100, analyst-set, per asset class, à la
