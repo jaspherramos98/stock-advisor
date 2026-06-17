@@ -138,6 +138,9 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 - Same anti-priced-in discipline as the analyst: catalyst-timing check ("buy the
   rumor, sell the news"), M&A target-vs-acquirer mechanics, `confidence_score` =
   source credibility (not edge); prefers watch over chasing moves that already ran
+- Aligned with the analyst's watch-floor + shorts (R1): knows the list always
+  includes watches by design and walks the user through them on weak days instead
+  of dismissing; understands `short` ideas (bearish, stocks-only, invert P&L)
 
 ## Claude Analysis JSON Schema
 Each recommendation must have:
