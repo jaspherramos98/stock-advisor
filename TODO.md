@@ -139,7 +139,15 @@ every phase: additive CONTEXT, never hard gates that drop output; verify with un
 tests + mock-mode boot (no token-wasting live runs); update CLAUDE.md + TODO as part
 of "done". R3 and R4 depend only on R2 and can swap/parallelize.
 
-### R1. Shorts (stocks) — express bearish theses
+### R1. Shorts (stocks) — express bearish theses  ✅ implemented on `r1-shorts` (pending live test + merge)
+Implemented: `short` direction (schema/prompt) with bearish-catalyst rules, squeeze
+guard, stocks-only, never highly_recommended; `portfolio.py` short sleeve capped at
+`MAX_SHORT_EXPOSURE=0.30` (buys untouched); `positions.py` + `exit_checker` invert P&L
+and target/stop; dashboard shows shorts distinctly (count, 🔻, red, "Why short", Side
+column, inverted live P&L) + manual short entry; portfolio money-graph excludes shorts.
+Verified: unit tests (buys unchanged, short cap, realized + exit-checker inversion) +
+mock boot — no live tokens. Original design notes below.
+
 Add `short` as a direction. Route strong bearish catalysts (earnings miss, guidance
 cut, dilution, fraud, death-cross + weak fundamentals) to `short` instead of passive
 `avoid`. Exit = cover target (price falls X%) + stop (price rises Y%); stops matter

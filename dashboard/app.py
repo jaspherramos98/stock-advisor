@@ -93,9 +93,12 @@ def _build_argus_context() -> str:
                 live       = live_prices.get(ticker)
                 live_price = live["price"] if live else ref_price
                 change_pct = ((live_price - ref_price) / ref_price * 100) if ref_price else 0
+                if p.get("direction") == "short":
+                    change_pct = -change_pct  # shorts profit when price falls
                 amount_inv = p.get("amount_invested", 0) or 0
+                side_tag = " [SHORT]" if p.get("direction") == "short" else ""
                 lines.append(
-                    f"  {ticker} — {p['company_name']} | "
+                    f"  {ticker}{side_tag} — {p['company_name']} | "
                     f"entry: ${ref_price:.2f} | live: ${live_price:.2f} | "
                     f"P&L: {change_pct:+.1f}% | invested: ${amount_inv:.2f} | "
                     f"exit when: {p.get('exit_condition', 'not set')}"
@@ -473,15 +476,17 @@ if True:
             else:
                 st.warning("No actionable recommendations after filtering. Try running the pipeline again.")
         else:
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             buy_count     = sum(1 for a in allocations if a["direction"] == "buy")
+            short_count   = sum(1 for a in allocations if a["direction"] == "short")
             watch_count   = sum(1 for a in allocations if a["direction"] == "watch")
             flagged_count = sum(1 for a in allocations if a["flagged"])
 
             col1.metric("Total stocks",  len(allocations))
             col2.metric("Buy signals",   buy_count)
-            col3.metric("Watch signals", watch_count)
-            col4.metric("⚠ Flagged",     flagged_count)
+            col3.metric("🔻 Short signals", short_count)
+            col4.metric("Watch signals", watch_count)
+            col5.metric("⚠ Flagged",     flagged_count)
 
             st.divider()
             st.subheader("Portfolio allocation")
@@ -515,6 +520,7 @@ if True:
 
             def color_direction(val):
                 if val == "buy":   return "color: #2ecc71; font-weight: bold"
+                if val == "short": return "color: #e74c3c; font-weight: bold"
                 if val == "watch": return "color: #f39c12"
                 return "color: #e74c3c"
 
@@ -574,16 +580,22 @@ if True:
 
             for idx, a in enumerate(allocations):
                 flag_label      = " ⚠ Unverified source" if a["flagged"] else ""
-                direction_emoji = "🟢" if a["direction"] == "buy" else "🟡"
+                direction_emoji = {"buy": "🟢", "short": "🔻", "watch": "🟡"}.get(a["direction"], "🟡")
                 hr_badge        = " ⭐ HIGHLY RECOMMENDED" if a.get("highly_recommended") else ""
+                amount_label    = f"short ${a['dollar_amount']:.2f}" if a["direction"] == "short" else f"${a['dollar_amount']:.2f}"
                 is_open         = a["ticker"] in open_tickers
 
                 with st.expander(
                     f"{direction_emoji} {a['ticker']} — {a['company_name']} "
-                    f"| ${a['dollar_amount']:.2f} ({a['percentage']:.1f}%){flag_label}{hr_badge}"
+                    f"| {amount_label} ({a['percentage']:.1f}%){flag_label}{hr_badge}"
                 ):
-                    # Colored bar — green for buy, orange for watch
-                    bar_color = "#FFD700" if a.get("highly_recommended") else ("#2ecc71" if a["direction"] == "buy" else "#f39c12")
+                    # Colored bar — green for buy, red for short, orange for watch
+                    bar_color = (
+                        "#FFD700" if a.get("highly_recommended")
+                        else "#2ecc71" if a["direction"] == "buy"
+                        else "#e74c3c" if a["direction"] == "short"
+                        else "#f39c12"
+                    )
                     st.markdown(
                         f'<div style="height:3px; background:{bar_color}; border-radius:2px; margin-bottom:12px"></div>',
                         unsafe_allow_html=True,
@@ -602,7 +614,7 @@ if True:
                     c3.metric("Confidence", f"{a['confidence_score']:.2f}",
                               help="Signal strength. 1.0 = SEC filing (highest trust). 0.68 = Finnhub verified news. 0.15 = Reddit post (lowest trust).")
 
-                    why_label = "Why buy" if a["direction"] == "buy" else "Why watch"
+                    why_label = {"buy": "Why buy", "short": "Why short", "watch": "Why watch"}.get(a["direction"], "Why watch")
                     st.markdown(f"**{why_label}:** {a['entry_rationale']}")
                     st.markdown(f"**Exit when:** {a['exit_condition']}")
                     st.markdown(f"**Based on:** _{a['source_title']}_")
@@ -739,7 +751,13 @@ if True:
         st.caption("Your real invested money across all open positions.")
 
         open_positions = get_open_positions()
-        invested_positions = [p for p in open_positions if p.get("amount_invested", 0) > 0]
+        # Long-only money graph: shorts use a different P&L model (cash in, owe shares),
+        # so exclude them here to keep the invested/current-value math correct. Shorts are
+        # still shown in My Positions with inverted P&L.
+        invested_positions = [
+            p for p in open_positions
+            if p.get("amount_invested", 0) > 0 and p.get("direction") != "short"
+        ]
 
         if not invested_positions:
             st.info(
@@ -928,7 +946,7 @@ if True:
             with m_col2:
                 m_exit    = st.text_input("Exit condition", placeholder="e.g. target 10% gain, stop loss at 5%", key="manual_exit")
                 m_date    = st.date_input("Date you bought it", value=datetime.today().date(), max_value=datetime.today().date(), key="manual_date")
-                m_direction = st.selectbox("Direction", ["buy", "watch"], key="manual_direction")
+                m_direction = st.selectbox("Direction", ["buy", "short", "watch"], key="manual_direction")
 
             if st.button("📌 Add to positions", key="manual_add_btn", use_container_width=True, type="primary"):
                 import re as _re
@@ -989,11 +1007,14 @@ if True:
                 live       = live_prices.get(ticker)
                 live_price = live["price"] if live else None
                 change_pct = ((live_price - ref_price) / ref_price * 100) if live_price else None
+                if change_pct is not None and p.get("direction") == "short":
+                    change_pct = -change_pct  # shorts profit when price falls
                 opened     = datetime.fromisoformat(p["opened_at"]).strftime("%Y-%m-%d")
 
                 rows.append({
                     "Ticker":     ticker,
                     "Company":    p["company_name"],
+                    "Side":       "SHORT" if p.get("direction") == "short" else "long",
                     "Ref Price":  f"${ref_price:.2f}",
                     "Live Price": f"${live_price:.2f}" if live_price else "N/A",
                     "Change":     f"{change_pct:+.1f}%" if change_pct is not None else "N/A",
@@ -1021,12 +1042,15 @@ if True:
                 live       = live_prices.get(ticker)
                 live_price = live["price"] if live else None
                 change_pct = ((live_price - ref_price) / ref_price * 100) if live_price else None
+                if change_pct is not None and p.get("direction") == "short":
+                    change_pct = -change_pct  # shorts profit when price falls
                 opened     = datetime.fromisoformat(p["opened_at"]).strftime("%Y-%m-%d %H:%M")
 
                 change_str = f"{change_pct:+.1f}%" if change_pct is not None else "N/A"
                 emoji      = "📈" if (change_pct or 0) >= 0 else "📉"
 
-                with st.expander(f"{emoji} {ticker} — {p['company_name']} | {change_str} since entry"):
+                side_label = " 🔻SHORT" if p.get("direction") == "short" else ""
+                with st.expander(f"{emoji} {ticker}{side_label} — {p['company_name']} | {change_str} since entry"):
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Reference price", f"${ref_price:.2f}")
                     c2.metric("Live price",       f"${live_price:.2f}" if live_price else "N/A")

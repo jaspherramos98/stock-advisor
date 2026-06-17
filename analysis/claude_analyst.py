@@ -485,6 +485,22 @@ SIGNAL QUALITY — BE RUTHLESSLY SELECTIVE:
   Forcing BUYS with no real edge loses money — but reserve a fully empty array for the rare case where
   literally nothing in the news is both credible AND actionable.
 
+SHORTS — BEARISH IDEAS (stocks only, same fact-based discipline):
+- Use direction='short' to profit from a stock you expect to FALL. This is the bearish counterpart
+  to 'buy'; the old passive 'avoid' is for ideas you simply skip, 'short' is for ones worth acting on.
+- Only short on an unambiguous, recent, FACT-BASED bearish catalyst: earnings miss WITH weak guidance,
+  guidance cut, FDA rejection, lost major customer/contract, accounting/fraud red flags, large dilution
+  or debt distress, or a clear breakdown (death cross + deteriorating fundamentals). No guessing.
+- Same priced-in check applies in reverse: if the stock already collapsed on this news, the easy money
+  is gone → 'watch' or skip, not 'short'.
+- SQUEEZE GUARD (critical): do NOT short stocks that are heavily shorted, low-float, or already a short
+  squeeze setup — those can rip upward violently. (Note: a short squeeze is a BULLISH catalyst elsewhere
+  in these rules; never short into one.) Prefer liquid, large-cap names for shorts.
+- Shorts are stocks only — never short crypto or ETFs here.
+- exit_condition for a short uses the SAME wording as a buy — "target X% gain, stop loss at Y%" —
+  where for a short "gain" means YOUR PROFIT as the stock FALLS X%, and the stop triggers if it RISES
+  Y% against you. Keep stops tight; losses on shorts are theoretically unbounded.
+
 HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
 1. The catalyst is unambiguous AND recent — it happened or was officially announced within roughly the
    last 1-2 trading days, not old news. No "may", "could", "might".
@@ -493,7 +509,8 @@ HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
    14-day high on this same news, and not a buyout target already trading at its offer price.
 4. The price trend supports entry — not in a sharp downtrend (unless the catalyst is a genuine reversal
    event such as a fresh earnings beat with room to run).
-Set highly_recommended to false for everything else, including all watch signals and all M&A targets.
+Set highly_recommended to false for everything else, including all watch signals, all M&A targets,
+and all shorts (shorts are higher-risk — never give them the 2x highly-recommended capital weight).
 
 EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
 - highly_recommended buys: gain targets 12-20%, stops 4-6% (let winners run, stops wide enough to breathe)
@@ -502,7 +519,9 @@ EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
   and if a realistic target can't clear that 2x bar, it's a 'watch', not a 'buy'.
 - For high volatility assets (avg daily range >3%) use stops of at least 5% to avoid noise shakeouts.
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
-- exit_condition must be a real price-based rule (gain target + stop). If you can't state one from
+- For 'short': use the same "target X% gain, stop loss at Y%" phrasing — "gain" = the stock dropping
+  in your favor, "stop loss" = it rising against you. Keep stops tight; reward must still be ≥2x stop.
+- exit_condition must be a real price-based rule (gain/cover target + stop). If you can't state one from
   concrete info, you don't have a thesis — skip the item. Never output "N/A", "watching for deal
   clarity", "await details", or any placeholder.
 
@@ -514,7 +533,7 @@ Each object in the array must have exactly these fields:
   "ticker":             string or null,
   "company_name":       string,
   "asset_type":         "stock" or "etf" or "crypto",
-  "direction":          "buy" or "watch" or "avoid",
+  "direction":          "buy" or "short" or "watch" or "avoid",
   "entry_rationale":    string (max 2 sentences),
   "exit_condition":     string (e.g. '10% gain' or '2 weeks' or 'earnings release'),
   "risk_level":         "low" or "medium" or "high",
