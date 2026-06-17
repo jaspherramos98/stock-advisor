@@ -139,7 +139,10 @@ every phase: additive CONTEXT, never hard gates that drop output; verify with un
 tests + mock-mode boot (no token-wasting live runs); update CLAUDE.md + TODO as part
 of "done". R3 and R4 depend only on R2 and can swap/parallelize.
 
-### R1. Shorts (stocks) — express bearish theses  ✅ implemented on `r1-shorts` (pending live test + merge)
+### R1. Shorts (stocks) — express bearish theses  ✅ DONE — merged to main (tag `stable-post-r1`)
+Shipped together with R1: the **watch floor** (analyst always returns ~10+ items so the
+user sees the full read; buys stay strict/few, rest are watches) and **chatbot alignment**
+(knows the list includes watches + shorts; walks the user through watches on weak days).
 Implemented: `short` direction (schema/prompt) with bearish-catalyst rules, squeeze
 guard, stocks-only, never highly_recommended; `portfolio.py` short sleeve capped at
 `MAX_SHORT_EXPOSURE=0.30` (buys untouched); `positions.py` + `exit_checker` invert P&L
