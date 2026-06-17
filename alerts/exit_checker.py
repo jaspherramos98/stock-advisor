@@ -41,6 +41,11 @@ def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
 
     change_pct = ((current_price - effective_ref) / effective_ref) * 100
 
+    # Shorts profit when the price FALLS, so invert: a "gain" for a short = price down,
+    # its "stop loss" = price up. With this flip the gain/stop parser below works as-is.
+    if position.get("direction") == "short":
+        change_pct = -change_pct
+
     import re
 
     # --- Check stop loss first — most important ---

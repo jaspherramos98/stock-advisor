@@ -93,9 +93,12 @@ def _build_argus_context() -> str:
                 live       = live_prices.get(ticker)
                 live_price = live["price"] if live else ref_price
                 change_pct = ((live_price - ref_price) / ref_price * 100) if ref_price else 0
+                if p.get("direction") == "short":
+                    change_pct = -change_pct  # shorts profit when price falls
                 amount_inv = p.get("amount_invested", 0) or 0
+                side_tag = " [SHORT]" if p.get("direction") == "short" else ""
                 lines.append(
-                    f"  {ticker} — {p['company_name']} | "
+                    f"  {ticker}{side_tag} — {p['company_name']} | "
                     f"entry: ${ref_price:.2f} | live: ${live_price:.2f} | "
                     f"P&L: {change_pct:+.1f}% | invested: ${amount_inv:.2f} | "
                     f"exit when: {p.get('exit_condition', 'not set')}"
@@ -473,15 +476,17 @@ if True:
             else:
                 st.warning("No actionable recommendations after filtering. Try running the pipeline again.")
         else:
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             buy_count     = sum(1 for a in allocations if a["direction"] == "buy")
+            short_count   = sum(1 for a in allocations if a["direction"] == "short")
             watch_count   = sum(1 for a in allocations if a["direction"] == "watch")
             flagged_count = sum(1 for a in allocations if a["flagged"])
 
             col1.metric("Total stocks",  len(allocations))
             col2.metric("Buy signals",   buy_count)
-            col3.metric("Watch signals", watch_count)
-            col4.metric("⚠ Flagged",     flagged_count)
+            col3.metric("🔻 Short signals", short_count)
+            col4.metric("Watch signals", watch_count)
+            col5.metric("⚠ Flagged",     flagged_count)
 
             st.divider()
             st.subheader("Portfolio allocation")
@@ -515,6 +520,7 @@ if True:
 
             def color_direction(val):
                 if val == "buy":   return "color: #2ecc71; font-weight: bold"
+                if val == "short": return "color: #e74c3c; font-weight: bold"
                 if val == "watch": return "color: #f39c12"
                 return "color: #e74c3c"
 
@@ -574,16 +580,22 @@ if True:
 
             for idx, a in enumerate(allocations):
                 flag_label      = " ⚠ Unverified source" if a["flagged"] else ""
-                direction_emoji = "🟢" if a["direction"] == "buy" else "🟡"
+                direction_emoji = {"buy": "🟢", "short": "🔻", "watch": "🟡"}.get(a["direction"], "🟡")
                 hr_badge        = " ⭐ HIGHLY RECOMMENDED" if a.get("highly_recommended") else ""
+                amount_label    = f"short ${a['dollar_amount']:.2f}" if a["direction"] == "short" else f"${a['dollar_amount']:.2f}"
                 is_open         = a["ticker"] in open_tickers
 
                 with st.expander(
                     f"{direction_emoji} {a['ticker']} — {a['company_name']} "
-                    f"| ${a['dollar_amount']:.2f} ({a['percentage']:.1f}%){flag_label}{hr_badge}"
+                    f"| {amount_label} ({a['percentage']:.1f}%){flag_label}{hr_badge}"
                 ):
-                    # Colored bar — green for buy, orange for watch
-                    bar_color = "#FFD700" if a.get("highly_recommended") else ("#2ecc71" if a["direction"] == "buy" else "#f39c12")
+                    # Colored bar — green for buy, red for short, orange for watch
+                    bar_color = (
+                        "#FFD700" if a.get("highly_recommended")
+                        else "#2ecc71" if a["direction"] == "buy"
+                        else "#e74c3c" if a["direction"] == "short"
+                        else "#f39c12"
+                    )
                     st.markdown(
                         f'<div style="height:3px; background:{bar_color}; border-radius:2px; margin-bottom:12px"></div>',
                         unsafe_allow_html=True,
@@ -602,7 +614,7 @@ if True:
                     c3.metric("Confidence", f"{a['confidence_score']:.2f}",
                               help="Signal strength. 1.0 = SEC filing (highest trust). 0.68 = Finnhub verified news. 0.15 = Reddit post (lowest trust).")
 
-                    why_label = "Why buy" if a["direction"] == "buy" else "Why watch"
+                    why_label = {"buy": "Why buy", "short": "Why short", "watch": "Why watch"}.get(a["direction"], "Why watch")
                     st.markdown(f"**{why_label}:** {a['entry_rationale']}")
                     st.markdown(f"**Exit when:** {a['exit_condition']}")
                     st.markdown(f"**Based on:** _{a['source_title']}_")
@@ -739,7 +751,13 @@ if True:
         st.caption("Your real invested money across all open positions.")
 
         open_positions = get_open_positions()
-        invested_positions = [p for p in open_positions if p.get("amount_invested", 0) > 0]
+        # Long-only money graph: shorts use a different P&L model (cash in, owe shares),
+        # so exclude them here to keep the invested/current-value math correct. Shorts are
+        # still shown in My Positions with inverted P&L.
+        invested_positions = [
+            p for p in open_positions
+            if p.get("amount_invested", 0) > 0 and p.get("direction") != "short"
+        ]
 
         if not invested_positions:
             st.info(
@@ -928,7 +946,7 @@ if True:
             with m_col2:
                 m_exit    = st.text_input("Exit condition", placeholder="e.g. target 10% gain, stop loss at 5%", key="manual_exit")
                 m_date    = st.date_input("Date you bought it", value=datetime.today().date(), max_value=datetime.today().date(), key="manual_date")
-                m_direction = st.selectbox("Direction", ["buy", "watch"], key="manual_direction")
+                m_direction = st.selectbox("Direction", ["buy", "short", "watch"], key="manual_direction")
 
             if st.button("📌 Add to positions", key="manual_add_btn", use_container_width=True, type="primary"):
                 import re as _re
@@ -989,11 +1007,14 @@ if True:
                 live       = live_prices.get(ticker)
                 live_price = live["price"] if live else None
                 change_pct = ((live_price - ref_price) / ref_price * 100) if live_price else None
+                if change_pct is not None and p.get("direction") == "short":
+                    change_pct = -change_pct  # shorts profit when price falls
                 opened     = datetime.fromisoformat(p["opened_at"]).strftime("%Y-%m-%d")
 
                 rows.append({
                     "Ticker":     ticker,
                     "Company":    p["company_name"],
+                    "Side":       "SHORT" if p.get("direction") == "short" else "long",
                     "Ref Price":  f"${ref_price:.2f}",
                     "Live Price": f"${live_price:.2f}" if live_price else "N/A",
                     "Change":     f"{change_pct:+.1f}%" if change_pct is not None else "N/A",
@@ -1021,12 +1042,15 @@ if True:
                 live       = live_prices.get(ticker)
                 live_price = live["price"] if live else None
                 change_pct = ((live_price - ref_price) / ref_price * 100) if live_price else None
+                if change_pct is not None and p.get("direction") == "short":
+                    change_pct = -change_pct  # shorts profit when price falls
                 opened     = datetime.fromisoformat(p["opened_at"]).strftime("%Y-%m-%d %H:%M")
 
                 change_str = f"{change_pct:+.1f}%" if change_pct is not None else "N/A"
                 emoji      = "📈" if (change_pct or 0) >= 0 else "📉"
 
-                with st.expander(f"{emoji} {ticker} — {p['company_name']} | {change_str} since entry"):
+                side_label = " 🔻SHORT" if p.get("direction") == "short" else ""
+                with st.expander(f"{emoji} {ticker}{side_label} — {p['company_name']} | {change_str} since entry"):
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Reference price", f"${ref_price:.2f}")
                     c2.metric("Live price",       f"${live_price:.2f}" if live_price else "N/A")
@@ -1581,7 +1605,7 @@ st_html("""
   parentDoc.body.appendChild(container);
   }
 
-  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, disciplined investment banker running the user's personal trading desk. Your mandate is to GROW the user's capital — but you keep this job by NOT losing them money, and the fastest way to lose money is buying a move that already happened. So you are equally ruthless in two directions: put capital to work when there is a real, still-open edge, and refuse to chase catalysts the market has already priced in. A trade skipped costs nothing; a top bought costs real money — when in doubt, prefer watching over buying. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing, trading, markets, and how the Argus app works. 2. If asked about anything unrelated say: "I'm here to help with your portfolio and the markets — let's stick to that." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable calls — you can say "this position is worth holding for more upside" or "that catalyst already ran, I wouldn't chase it." Always explain the money logic. 5. Always end with: "Not financial advice — always do your own research." CATALYST TIMING (most important): Before endorsing any buy, ask whether the market has already reacted. If a stock already gapped or ran on the exact news in question, the easy money is gone — call it a watch (a missed entry), not a buy. Old news that already moved the price has no edge ("buy the rumor, sell the news"). M&A / BUYOUTS: distinguish the target from the acquirer; an announced all-cash deal pins the target near the offer price (only a small arbitrage spread left) so it's a watch, not a buy, and if the deal already closed the target is being delisted — don't recommend it; flag unresolved regulatory/financing risk. CONFIDENCE IS NOT EDGE: a confidence score measures source credibility, not how good or timely the trade is — a trustworthy source reporting a priced-in event is still a bad buy. SIGNAL QUALITY HONESTY: Real bankers don't chase garbage trades. If all signals have confidence below 0.68, no highly recommended signals exist, the catalysts already ran, or the rationales are vague, tell the user straight: "Today's setups are weak — I wouldn't put fresh capital to work today." Then pivot to defending the existing book: review each position's P&L and exit condition, flag any near their stop loss or at their gain target, and give a clear hold-or-close call on each. Only lead with new buys when a signal is strong AND the edge is still open (highly recommended, confidence 0.68+, unambiguous recent catalyst that hasn't already been fully priced in).`;
+  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, disciplined investment banker running the user's personal trading desk. Your mandate is to GROW the user's capital — but you keep this job by NOT losing them money, and the fastest way to lose money is buying a move that already happened. So you are equally ruthless in two directions: put capital to work when there is a real, still-open edge, and refuse to chase catalysts the market has already priced in. A trade skipped costs nothing; a top bought costs real money — when in doubt, prefer watching over buying. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing, trading, markets, and how the Argus app works. 2. If asked about anything unrelated say: "I'm here to help with your portfolio and the markets — let's stick to that." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable calls — you can say "this position is worth holding for more upside" or "that catalyst already ran, I wouldn't chase it." Always explain the money logic. 5. Always end with: "Not financial advice — always do your own research." CATALYST TIMING (most important): Before endorsing any buy, ask whether the market has already reacted. If a stock already gapped or ran on the exact news in question, the easy money is gone — call it a watch (a missed entry), not a buy. Old news that already moved the price has no edge ("buy the rumor, sell the news"). M&A / BUYOUTS: distinguish the target from the acquirer; an announced all-cash deal pins the target near the offer price (only a small arbitrage spread left) so it's a watch, not a buy, and if the deal already closed the target is being delisted — don't recommend it; flag unresolved regulatory/financing risk. CONFIDENCE IS NOT EDGE: a confidence score measures source credibility, not how good or timely the trade is — a trustworthy source reporting a priced-in event is still a bad buy. TODAY'S LIST ALWAYS HAS A FULL READ: the recommendations always include WATCHES by design, not only buys. A watch means "notable, here is the trigger I would wait for," and it commits no capital. So never just tell the user "nothing today, sit out" and stop there. On a weak day, walk them through the watches: which stories are worth tracking and the specific price level or condition that would turn each into a buy. SHORTS: the list may also include 'short' ideas (bearish, stocks only) which profit when the price FALLS. Reason about them with the same fact-based discipline, keep stops tight because short losses are theoretically unbounded, and never endorse shorting a heavily-shorted or squeeze-prone name. SIGNAL QUALITY HONESTY: Real bankers don't chase garbage trades. If no buy has a strong, un-priced-in catalyst (confidence 0.68+, recent, edge still open), say so plainly ("no new buy worth fresh capital today") but then DO the useful work instead of dismissing the day: walk through today's watches and their triggers, and review the existing book (each position's P&L and exit, flag any near a stop or target, give a clear hold-or-close call). Only lead with new buys when a signal is genuinely strong AND the edge is still open.`;
   async function loadContext() {
     try {
       const res = await fetch('http://localhost:8502/context');

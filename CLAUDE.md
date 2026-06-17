@@ -69,7 +69,10 @@ budget.json                   User's current budget setting
    growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
    they confirm or temper a news catalyst, they don't gate or invent one.
-4. Claude returns up to 20 recommendations with `highly_recommended` field
+4. Claude returns recommendations with `highly_recommended` field. **Watch floor:** on a
+   normal news day it always returns ≥10 items (buys + shorts + watches) so the user sees a
+   full read on the day; BUYS stay strict/few (usually 0-3, never padded), the rest are
+   watches with concrete triggers. Empty array only if there's genuinely no relevant news.
 4b. `_filter_recommendations()` enforces deterministically: drops any owned ticker, any
    rec with no ticker, and any vague/placeholder exit ("N/A", "watching for deal clarity",
    "await details"). Only NEW, fact-based ideas survive. The prompt also instructs this,
@@ -110,7 +113,21 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 ### Budget Allocation
 - `HIGHLY_RECOMMENDED_MULTIPLIER = 2.0` — HR buys get 2x capital weight
 - `MAX_SINGLE_ALLOCATION = 0.40` — no single stock gets more than 40%
-- Sort order: HR buys → regular buys → watches
+- `MAX_SHORT_EXPOSURE = 0.30` — total short exposure capped at 30% of budget
+- Sort order: HR buys → regular buys → shorts → watches
+- Shorts (R1) are a **separate sleeve** (use margin, not the long cash budget) — buy
+  allocation logic is untouched. Shorts are stocks-only, never highly_recommended.
+
+### Shorts (R1)
+- Analyst emits `direction: "short"` for unambiguous, recent, fact-based BEARISH
+  catalysts (earnings miss + weak guidance, FDA rejection, fraud, dilution, death cross
+  + weak fundamentals). Same priced-in check in reverse; hard squeeze-guard (never short
+  heavily-shorted/low-float/squeeze setups). Stocks only — never crypto/ETFs.
+- `exit_condition` uses the same "target X% gain, stop loss at Y%" wording; for a short,
+  "gain" = price falling in your favor, "stop loss" = it rising against you.
+- P&L inverts everywhere: `close_position` realized P&L, `exit_checker` (negates
+  change_pct so the gain/stop parser works), and the dashboard live P&L for short
+  positions. Portfolio money-graph excludes shorts (long-only value math).
 
 ### Chatbot (Argus Assistant)
 - Injected directly into Streamlit parent DOM (bypasses iframe positioning issues)
@@ -121,6 +138,9 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 - Same anti-priced-in discipline as the analyst: catalyst-timing check ("buy the
   rumor, sell the news"), M&A target-vs-acquirer mechanics, `confidence_score` =
   source credibility (not edge); prefers watch over chasing moves that already ran
+- Aligned with the analyst's watch-floor + shorts (R1): knows the list always
+  includes watches by design and walks the user through them on weak days instead
+  of dismissing; understands `short` ideas (bearish, stocks-only, invert P&L)
 
 ## Claude Analysis JSON Schema
 Each recommendation must have:
@@ -129,7 +149,7 @@ Each recommendation must have:
   "ticker": "string or null",
   "company_name": "string",
   "asset_type": "stock|etf|crypto",
-  "direction": "buy|watch|avoid",
+  "direction": "buy|short|watch|avoid",
   "entry_rationale": "string (max 2 sentences)",
   "exit_condition": "string (e.g. 'target 12% gain, stop loss at 5%')",
   "risk_level": "low|medium|high",

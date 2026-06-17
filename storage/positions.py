@@ -112,12 +112,17 @@ def close_position(ticker: str, reason: str, close_price: float = None):
             p["close_reason"] = reason
             p["close_price"]  = close_price
 
-            # Calculate final P&L if we have a closing price
+            # Calculate final P&L if we have a closing price.
+            # Shorts invert: you profit when the price FALLS below entry.
             if close_price:
                 entry_price = get_effective_price(p)
                 if entry_price and entry_price > 0:
-                    p["pnl_pct"]     = round(((close_price - entry_price) / entry_price) * 100, 2)
-                    p["pnl_dollars"] = round(close_price - entry_price, 2)
+                    if p.get("direction") == "short":
+                        p["pnl_pct"]     = round(((entry_price - close_price) / entry_price) * 100, 2)
+                        p["pnl_dollars"] = round(entry_price - close_price, 2)
+                    else:
+                        p["pnl_pct"]     = round(((close_price - entry_price) / entry_price) * 100, 2)
+                        p["pnl_dollars"] = round(close_price - entry_price, 2)
                 else:
                     p["pnl_pct"]     = None
                     p["pnl_dollars"] = None

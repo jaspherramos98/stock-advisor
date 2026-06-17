@@ -12,6 +12,11 @@ HIGHLY_RECOMMENDED_MULTIPLIER = 2.0
 # percentage of your total budget.
 MAX_SINGLE_ALLOCATION = 0.40
 
+# Shorts are a separate, capped sleeve so the book stays long-biased. This is the
+# max TOTAL short exposure as a fraction of budget (shorts use margin, not your cash,
+# so they don't reduce the long budget — they're shown as separate "short exposure").
+MAX_SHORT_EXPOSURE = 0.30
+
 
 def _compute_weight(rec: dict) -> float:
     """
@@ -39,9 +44,10 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
         return []
 
     buys    = [r for r in recommendations if r.get("direction") == "buy"]
+    shorts  = [r for r in recommendations if r.get("direction") == "short"]
     watches = [r for r in recommendations if r.get("direction") == "watch"]
 
-    if not buys and not watches:
+    if not buys and not shorts and not watches:
         print("All recommendations were 'avoid' — nothing to allocate.")
         return []
 
@@ -81,19 +87,36 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
                 pct           = round(rec["_fraction"] * 100, 1)
                 results.append(_build_result(rec, dollar_amount, pct))
 
-    # ── WATCH — always $0, sorted after buys ─────────────────────
+    # ── SHORT allocations — separate sleeve, capped at MAX_SHORT_EXPOSURE ──
+    # Uses margin, not the long cash budget, so it does NOT reduce buy allocations.
+    # dollar_amount here = short exposure $ (how much to short).
+    if shorts:
+        short_pool = MAX_SHORT_EXPOSURE * budget
+        for rec in shorts:
+            rec["_raw_weight"] = _compute_weight(rec)
+        total_short_weight = sum(r["_raw_weight"] for r in shorts)
+        if total_short_weight > 0:
+            for rec in shorts:
+                frac          = rec["_raw_weight"] / total_short_weight
+                dollar_amount = round(min(frac * short_pool, MAX_SINGLE_ALLOCATION * budget), 2)
+                pct           = round(dollar_amount / budget * 100, 1) if budget else 0.0
+                results.append(_build_result(rec, dollar_amount, pct))
+
+    # ── WATCH — always $0, sorted after buys/shorts ──────────────
     for rec in watches:
         results.append(_build_result(rec, 0.0, 0.0))
 
-    # Sort: highly recommended first, then regular buys by amount, then watches
+    # Sort: HR buys → regular buys → shorts (by exposure) → watches
     hr_buys      = [r for r in results if r["direction"] == "buy" and r.get("highly_recommended")]
     regular_buys = [r for r in results if r["direction"] == "buy" and not r.get("highly_recommended")]
+    shorts_out   = [r for r in results if r["direction"] == "short"]
     watches_out  = [r for r in results if r["direction"] == "watch"]
 
     hr_buys.sort(key=lambda x: x["dollar_amount"], reverse=True)
     regular_buys.sort(key=lambda x: x["dollar_amount"], reverse=True)
+    shorts_out.sort(key=lambda x: x["dollar_amount"], reverse=True)
 
-    return hr_buys + regular_buys + watches_out
+    return hr_buys + regular_buys + shorts_out + watches_out
 
 
 def _build_result(rec: dict, dollar_amount: float, pct: float) -> dict:
