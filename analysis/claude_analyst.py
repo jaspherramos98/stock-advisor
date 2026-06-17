@@ -434,8 +434,8 @@ IMPORTANT RULES:
   description of WHAT it says — you cannot fact-check it, so SKIP it. Do NOT speculate, and never
   emit placeholder plans like "watching for deal clarity", "await details", or "N/A". Base every
   recommendation on an informed, evidenced movement — quality of evidence over quantity.
-- Never force buys to hit a quota. Prefer surfacing the few best-substantiated NEW ideas over a long
-  list padded with guesses.
+- Never force BUYS to hit a quota — only genuinely actionable, un-priced-in catalysts are buys
+  (usually just 0-3). But DO give the user a full read on the day via watches — see the WATCH FLOOR below.
 - Use the CRYPTO ASSET CONTEXT block to understand what each crypto asset does.
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
   Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
@@ -480,10 +480,20 @@ SIGNAL QUALITY — BE RUTHLESSLY SELECTIVE:
   Weak catalysts (use 'watch' or skip): analyst upgrades, general sector optimism, vague macro tailwinds.
 - Return 'watch' for sound theses with uncertain timing OR catalysts that already moved the price.
 - Skip (omit) anything with weak evidence, unverified sources, or no concrete detail to fact-check.
-- Prefer surfacing the strongest fact-based, NON-owned ideas as 'watch' over returning nothing. With
-  this many news items there are almost always a few well-substantiated new ideas worth flagging.
-  Forcing BUYS with no real edge loses money — but reserve a fully empty array for the rare case where
-  literally nothing in the news is both credible AND actionable.
+WATCH FLOOR — ALWAYS SHOW YOUR WORK (do not return a near-empty list):
+- ALWAYS return at least 10 items total (buys + shorts + watches), drawn from the strongest, most
+  relevant, NON-owned stories you were given. The point is to show the user your read on the WHOLE day,
+  not just trades. A 'watch' = "notable, but I'd wait for X before acting" — it commits NO capital, so
+  surfacing it is low-risk and informative. A blank/near-blank result is NOT acceptable on a normal news
+  day; it just leaves the user blind.
+- BUYS stay strict and few: only genuinely actionable, un-priced-in, fact-based catalysts qualify
+  (usually 0-3). NEVER pad the buy list to reach the floor — fill the rest with watches.
+- A WATCH must be grounded in a REAL news item from the list (never invented) and carry a concrete,
+  self-contained trigger: the price level/condition that would make it a buy, PLUS the target/stop to
+  use if entered. No vague placeholders ("monitor", "await details", "N/A").
+- Skipping is only for true noise (no ticker, unverified, zero concrete detail). Among everything that
+  is NOT noise, surface the top ~10+ as buy/watch. Return fewer than 10 ONLY if there genuinely aren't
+  that many relevant, non-owned stories to discuss (rare — you are given ~25).
 
 SHORTS — BEARISH IDEAS (stocks only, same fact-based discipline):
 - Use direction='short' to profit from a stock you expect to FALL. This is the bearish counterpart
@@ -543,7 +553,8 @@ Each object in the array must have exactly these fields:
   "highly_recommended": boolean
 }}
 
-If no assets are clearly actionable from the news provided, return an empty array: []"""
+Per the WATCH FLOOR, return at least 10 items (buys + shorts + watches) on a normal news day. Only
+return an empty array if there is genuinely no relevant, fact-based market news at all — which is very rare."""
 
     user_prompt = f"""Here are today's validated news items. Analyze them and return
 your recommendations as a JSON array.

@@ -69,7 +69,10 @@ budget.json                   User's current budget setting
    growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
    they confirm or temper a news catalyst, they don't gate or invent one.
-4. Claude returns up to 20 recommendations with `highly_recommended` field
+4. Claude returns recommendations with `highly_recommended` field. **Watch floor:** on a
+   normal news day it always returns ≥10 items (buys + shorts + watches) so the user sees a
+   full read on the day; BUYS stay strict/few (usually 0-3, never padded), the rest are
+   watches with concrete triggers. Empty array only if there's genuinely no relevant news.
 4b. `_filter_recommendations()` enforces deterministically: drops any owned ticker, any
    rec with no ticker, and any vague/placeholder exit ("N/A", "watching for deal clarity",
    "await details"). Only NEW, fact-based ideas survive. The prompt also instructs this,
