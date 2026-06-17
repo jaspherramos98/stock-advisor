@@ -11,6 +11,7 @@ HEADERS = [
     "Date", "Ticker", "Company", "Direction",
     "Amount ($)", "Allocation (%)", "Risk", "Confidence",
     "Entry Rationale", "Exit Condition", "Source Headline", "Flagged",
+    "Conviction",  # appended at the end so existing column indices (read_history) don't shift
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -205,6 +206,7 @@ def export_to_sheets(allocations: list[dict], budget: float) -> bool:
                 a.get("exit_condition",   ""),
                 a.get("source_title",     ""),
                 "Yes" if a.get("flagged") else "No",
+                a.get("conviction") if a.get("conviction") is not None else "",
             ])
 
         # Read sheet state ONCE — calculate all positions before any writes

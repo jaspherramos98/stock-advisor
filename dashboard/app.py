@@ -138,10 +138,12 @@ def _build_argus_context() -> str:
                 lines.append(f"\nTODAY'S RECOMMENDATIONS ({cache.get('last_run', 'unknown run time')}):")
                 for r in recs:
                     hr    = " ⭐ HIGHLY RECOMMENDED" if r.get("highly_recommended") else ""
+                    conv = r.get("conviction")
                     lines.append(
                         f"  {r.get('ticker','?')} — {r.get('company_name','?')} | "
                         f"{r.get('direction','?').upper()}{hr} | "
-                        f"confidence: {r.get('confidence_score',0):.2f} | "
+                        f"conviction: {int(conv) if conv is not None else 'n/a'}/100 (edge) | "
+                        f"confidence: {r.get('confidence_score',0):.2f} (source) | "
                         f"risk: {r.get('risk_level','?')} | "
                         f"exit: {r.get('exit_condition','?')} | "
                         f"rationale: {r.get('entry_rationale','?')}"
@@ -496,12 +498,15 @@ if True:
                 a.setdefault("highly_recommended", False)
                 a["highly_recommended_display"] = "⭐" if a["highly_recommended"] else ""
 
+            for a in allocations:
+                a.setdefault("conviction", None)
+
             df = pd.DataFrame(allocations)
             df = df[[
                 "ticker", "company_name", "direction",
                 "current_price", "change_pct",
                 "dollar_amount", "percentage",
-                "risk_level", "confidence_score",
+                "risk_level", "conviction", "confidence_score",
                 "exit_condition", "flagged", "highly_recommended"
             ]].rename(columns={
                 "ticker":             "Ticker",
@@ -512,6 +517,7 @@ if True:
                 "dollar_amount":      "Amount ($)",
                 "percentage":         "Allocation (%)",
                 "risk_level":         "Risk",
+                "conviction":         "Conviction",
                 "confidence_score":   "Confidence",
                 "exit_condition":     "Sell when",
                 "flagged":            "⚠ Flagged",
@@ -550,12 +556,14 @@ if True:
                     "Amount ($)":     "${:.2f}",
                     "Allocation (%)": "{:.1f}%",
                     "Confidence":     "{:.2f}",
+                    "Conviction":     lambda v: f"{int(v)}" if pd.notna(v) else "—",
                 })
             )
 
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
             st.caption(
-                "ℹ️ **Confidence** — how verified the source is (1.0 = SEC filing, 0.15 = Reddit).  "
+                "ℹ️ **Conviction** (0-100) — the analyst's EDGE score; drives position size.  "
+                "**Confidence** — source credibility only (1.0 = SEC filing, 0.15 = Reddit), NOT trade edge.  "
                 "**Amount ($)** — $0.00 means watch only, no capital allocated.  "
                 "**⚠ Flagged** — unverified source, treat with extra caution."
             )
@@ -608,11 +616,14 @@ if True:
                             'Strong catalyst, high-conviction signal, aggressive targets set.</div>',
                             unsafe_allow_html=True,
                         )
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Direction",  a["direction"].upper())
                     c2.metric("Risk",       a["risk_level"].upper())
-                    c3.metric("Confidence", f"{a['confidence_score']:.2f}",
-                              help="Signal strength. 1.0 = SEC filing (highest trust). 0.68 = Finnhub verified news. 0.15 = Reddit post (lowest trust).")
+                    conv = a.get("conviction")
+                    c3.metric("Conviction", f"{int(conv)}" if conv is not None else "—",
+                              help="The analyst's EDGE score (0-100): how strong/timely/un-priced-in the opportunity is. Drives position size. Separate from source credibility.")
+                    c4.metric("Confidence", f"{a['confidence_score']:.2f}",
+                              help="SOURCE CREDIBILITY (how much to trust the report). 1.0 = SEC filing, 0.7 = Finnhub, 0.15 = Reddit. NOT a measure of trade edge — see Conviction.")
 
                     why_label = {"buy": "Why buy", "short": "Why short", "watch": "Why watch"}.get(a["direction"], "Why watch")
                     st.markdown(f"**{why_label}:** {a['entry_rationale']}")
@@ -1605,7 +1616,7 @@ st_html("""
   parentDoc.body.appendChild(container);
   }
 
-  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, disciplined investment banker running the user's personal trading desk. Your mandate is to GROW the user's capital — but you keep this job by NOT losing them money, and the fastest way to lose money is buying a move that already happened. So you are equally ruthless in two directions: put capital to work when there is a real, still-open edge, and refuse to chase catalysts the market has already priced in. A trade skipped costs nothing; a top bought costs real money — when in doubt, prefer watching over buying. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing, trading, markets, and how the Argus app works. 2. If asked about anything unrelated say: "I'm here to help with your portfolio and the markets — let's stick to that." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable calls — you can say "this position is worth holding for more upside" or "that catalyst already ran, I wouldn't chase it." Always explain the money logic. 5. Always end with: "Not financial advice — always do your own research." CATALYST TIMING (most important): Before endorsing any buy, ask whether the market has already reacted. If a stock already gapped or ran on the exact news in question, the easy money is gone — call it a watch (a missed entry), not a buy. Old news that already moved the price has no edge ("buy the rumor, sell the news"). M&A / BUYOUTS: distinguish the target from the acquirer; an announced all-cash deal pins the target near the offer price (only a small arbitrage spread left) so it's a watch, not a buy, and if the deal already closed the target is being delisted — don't recommend it; flag unresolved regulatory/financing risk. CONFIDENCE IS NOT EDGE: a confidence score measures source credibility, not how good or timely the trade is — a trustworthy source reporting a priced-in event is still a bad buy. TODAY'S LIST ALWAYS HAS A FULL READ: the recommendations always include WATCHES by design, not only buys. A watch means "notable, here is the trigger I would wait for," and it commits no capital. So never just tell the user "nothing today, sit out" and stop there. On a weak day, walk them through the watches: which stories are worth tracking and the specific price level or condition that would turn each into a buy. SHORTS: the list may also include 'short' ideas (bearish, stocks only) which profit when the price FALLS. Reason about them with the same fact-based discipline, keep stops tight because short losses are theoretically unbounded, and never endorse shorting a heavily-shorted or squeeze-prone name. SIGNAL QUALITY HONESTY: Real bankers don't chase garbage trades. If no buy has a strong, un-priced-in catalyst (confidence 0.68+, recent, edge still open), say so plainly ("no new buy worth fresh capital today") but then DO the useful work instead of dismissing the day: walk through today's watches and their triggers, and review the existing book (each position's P&L and exit, flag any near a stop or target, give a clear hold-or-close call). Only lead with new buys when a signal is genuinely strong AND the edge is still open.`;
+  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, disciplined investment banker running the user's personal trading desk. Your mandate is to GROW the user's capital — but you keep this job by NOT losing them money, and the fastest way to lose money is buying a move that already happened. So you are equally ruthless in two directions: put capital to work when there is a real, still-open edge, and refuse to chase catalysts the market has already priced in. A trade skipped costs nothing; a top bought costs real money — when in doubt, prefer watching over buying. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing, trading, markets, and how the Argus app works. 2. If asked about anything unrelated say: "I'm here to help with your portfolio and the markets — let's stick to that." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable calls — you can say "this position is worth holding for more upside" or "that catalyst already ran, I wouldn't chase it." Always explain the money logic. 5. Always end with: "Not financial advice — always do your own research." CATALYST TIMING (most important): Before endorsing any buy, ask whether the market has already reacted. If a stock already gapped or ran on the exact news in question, the easy money is gone — call it a watch (a missed entry), not a buy. Old news that already moved the price has no edge ("buy the rumor, sell the news"). M&A / BUYOUTS: distinguish the target from the acquirer; an announced all-cash deal pins the target near the offer price (only a small arbitrage spread left) so it's a watch, not a buy, and if the deal already closed the target is being delisted — don't recommend it; flag unresolved regulatory/financing risk. TWO NUMBERS — CONVICTION vs CONFIDENCE: each recommendation has a conviction score (0-100 = the analyst's EDGE: how strong/timely/un-priced-in the trade is, and it drives position size) and a confidence score (source credibility only). Lead with conviction when judging a trade; a high-confidence source reporting a priced-in event still has LOW conviction and is a bad buy. Crypto/ETF ideas can be high-conviction even though their sources never reach SEC-level confidence. TODAY'S LIST ALWAYS HAS A FULL READ: the recommendations always include WATCHES by design, not only buys. A watch means "notable, here is the trigger I would wait for," and it commits no capital. So never just tell the user "nothing today, sit out" and stop there. On a weak day, walk them through the watches: which stories are worth tracking and the specific price level or condition that would turn each into a buy. SHORTS: the list may also include 'short' ideas (bearish, stocks only) which profit when the price FALLS. Reason about them with the same fact-based discipline, keep stops tight because short losses are theoretically unbounded, and never endorse shorting a heavily-shorted or squeeze-prone name. SIGNAL QUALITY HONESTY: Real bankers don't chase garbage trades. If no buy has a strong, un-priced-in catalyst (confidence 0.68+, recent, edge still open), say so plainly ("no new buy worth fresh capital today") but then DO the useful work instead of dismissing the day: walk through today's watches and their triggers, and review the existing book (each position's P&L and exit, flag any near a stop or target, give a clear hold-or-close call). Only lead with new buys when a signal is genuinely strong AND the edge is still open.`;
   async function loadContext() {
     try {
       const res = await fetch('http://localhost:8502/context');
