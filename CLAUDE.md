@@ -162,6 +162,7 @@ Each recommendation must have:
   "asset_type": "stock|etf|crypto",
   "direction": "buy|short|watch|avoid",
   "entry_rationale": "string (max 2 sentences)",
+  "entry_trigger": "string (watch: the buy condition/price that makes it actionable; buy/short: 'now')",
   "exit_condition": "string (e.g. 'target 12% gain, stop loss at 5%')",
   "risk_level": "low|medium|high",
   "confidence_score": "number (source credibility, passed through from scorer)",

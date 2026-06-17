@@ -136,6 +136,7 @@ def _build_result(rec: dict, dollar_amount: float, pct: float) -> dict:
         "dollar_amount":      dollar_amount,
         "percentage":         pct,
         "entry_rationale":    rec.get("entry_rationale"),
+        "entry_trigger":      rec.get("entry_trigger", ""),
         "exit_condition":     rec.get("exit_condition"),
         "risk_level":         rec.get("risk_level"),
         "confidence_score":   rec.get("confidence_score"),

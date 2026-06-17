@@ -145,6 +145,7 @@ def _build_argus_context() -> str:
                         f"conviction: {int(conv) if conv is not None else 'n/a'}/100 (edge) | "
                         f"confidence: {r.get('confidence_score',0):.2f} (source) | "
                         f"risk: {r.get('risk_level','?')} | "
+                        f"buy when: {r.get('entry_trigger') or 'now'} | "
                         f"exit: {r.get('exit_condition','?')} | "
                         f"rationale: {r.get('entry_rationale','?')}"
                     )
@@ -500,6 +501,7 @@ if True:
 
             for a in allocations:
                 a.setdefault("conviction", None)
+                a.setdefault("entry_trigger", "")
 
             df = pd.DataFrame(allocations)
             df = df[[
@@ -507,7 +509,7 @@ if True:
                 "current_price", "change_pct",
                 "dollar_amount", "percentage",
                 "risk_level", "conviction", "confidence_score",
-                "exit_condition", "flagged", "highly_recommended"
+                "entry_trigger", "exit_condition", "flagged", "highly_recommended"
             ]].rename(columns={
                 "ticker":             "Ticker",
                 "company_name":       "Company",
@@ -519,6 +521,7 @@ if True:
                 "risk_level":         "Risk",
                 "conviction":         "Conviction",
                 "confidence_score":   "Confidence",
+                "entry_trigger":      "Buy when",
                 "exit_condition":     "Sell when",
                 "flagged":            "⚠ Flagged",
                 "highly_recommended": "⭐",
@@ -627,7 +630,10 @@ if True:
 
                     why_label = {"buy": "Why buy", "short": "Why short", "watch": "Why watch"}.get(a["direction"], "Why watch")
                     st.markdown(f"**{why_label}:** {a['entry_rationale']}")
-                    st.markdown(f"**Exit when:** {a['exit_condition']}")
+                    trigger = a.get("entry_trigger")
+                    if trigger and trigger.lower() not in ("now", "n/a", ""):
+                        st.markdown(f"**Buy when:** {trigger}")
+                    st.markdown(f"**Sell when:** {a['exit_condition']}")
                     st.markdown(f"**Based on:** _{a['source_title']}_")
 
                     # White paper and info links for crypto assets
