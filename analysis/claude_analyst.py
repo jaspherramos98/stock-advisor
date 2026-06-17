@@ -496,9 +496,11 @@ WATCH FLOOR — ALWAYS SHOW YOUR WORK (do not return a near-empty list):
   day; it just leaves the user blind.
 - BUYS stay strict and few: only genuinely actionable, un-priced-in, fact-based catalysts qualify
   (usually 0-3). NEVER pad the buy list to reach the floor — fill the rest with watches.
-- A WATCH must be grounded in a REAL news item from the list (never invented) and carry a concrete,
-  self-contained trigger: the price level/condition that would make it a buy, PLUS the target/stop to
-  use if entered. No vague placeholders ("monitor", "await details", "N/A").
+- A WATCH must be grounded in a REAL news item from the list (never invented). Put its BUY TRIGGER in
+  the `entry_trigger` field (the concrete price level/condition that would make it actionable, e.g.
+  "breaks above $52 on volume" or "pulls back to ~$190"), and put ONLY the target/stop in
+  `exit_condition`. Keep the two separate — do not cram the entry condition into exit_condition. No
+  vague placeholders ("monitor", "await details", "N/A").
 - Skipping is only for true noise (no ticker, unverified, zero concrete detail). Among everything that
   is NOT noise, surface the top ~10+ as buy/watch. Return fewer than 10 ONLY if there genuinely aren't
   that many relevant, non-owned stories to discuss (rare — you are given ~25).
@@ -541,9 +543,12 @@ EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
 - For 'short': use the same "target X% gain, stop loss at Y%" phrasing — "gain" = the stock dropping
   in your favor, "stop loss" = it rising against you. Keep stops tight; reward must still be ≥2x stop.
-- exit_condition must be a real price-based rule (gain/cover target + stop). If you can't state one from
-  concrete info, you don't have a thesis — skip the item. Never output "N/A", "watching for deal
-  clarity", "await details", or any placeholder.
+- exit_condition must be a real price-based rule (gain/cover target + stop) for EVERY item. If you can't
+  state one from concrete info, you don't have a thesis — skip the item. Never output "N/A", "watching
+  for deal clarity", "await details", or any placeholder.
+- entry_trigger: for a 'watch', the concrete buy condition (price level/event that makes it actionable).
+  For a 'buy' or 'short' you act now, so set entry_trigger to "now" (or "" ). Never put the entry
+  condition inside exit_condition.
 
 You must respond with ONLY a valid JSON array. No preamble, no explanation,
 no markdown code fences. Just the raw JSON array.
@@ -555,7 +560,8 @@ Each object in the array must have exactly these fields:
   "asset_type":         "stock" or "etf" or "crypto",
   "direction":          "buy" or "short" or "watch" or "avoid",
   "entry_rationale":    string (max 2 sentences),
-  "exit_condition":     string (e.g. '10% gain' or '2 weeks' or 'earnings release'),
+  "entry_trigger":      string (for 'watch': the buy condition/price that makes it actionable; for buy/short: "now"),
+  "exit_condition":     string (target + stop only, e.g. 'target 10% gain, stop loss at 4%'),
   "risk_level":         "low" or "medium" or "high",
   "confidence_score":   number (SOURCE CREDIBILITY — pass through from the news item, do not change),
   "conviction":         number 0-100 (YOUR edge/quality score — see CREDIBILITY vs CONVICTION above),

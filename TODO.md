@@ -164,6 +164,12 @@ more here.
 - Done when: analyst emits `short` w/ cover+stop; positions track inverted P&L;
   short-exposure cap + squeeze check in place.
 
+### UX. "Buy when" column (split entry trigger from exit)  ✅ on `buy-when-trigger` (pending merge)
+A watch's `exit_condition` used to cram the buy trigger AND the target/stop together under a
+"Sell when" label. Split into a new `entry_trigger` field → "Buy when" column. Watches show their
+buy condition there; buy/short show "now"; `exit_condition` is now target/stop only. Schema + prompt +
+`portfolio._build_result` + recs table/detail + chatbot context; back-compat (old recs → blank).
+
 ### R2. Split conviction from credibility (FOUNDATION)  ✅ DONE — merged to main (tag `stable-post-r2`)
 Done additively (kept `confidence_score` as-is = credibility; ADDED `conviction` 0-100):
 new schema field + "CREDIBILITY vs CONVICTION" prompt block (conviction = edge, scored
