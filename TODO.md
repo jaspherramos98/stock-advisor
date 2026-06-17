@@ -133,13 +133,70 @@ now each filing carries real, fact-checked content.
 
 ---
 
+## Roadmap (sequenced — from session brainstorm)
+Dependency-ordered so we don't build something we have to tear up. Discipline for
+every phase: additive CONTEXT, never hard gates that drop output; verify with unit
+tests + mock-mode boot (no token-wasting live runs); update CLAUDE.md + TODO as part
+of "done". R3 and R4 depend only on R2 and can swap/parallelize.
+
+### R1. Shorts (stocks) — express bearish theses
+Add `short` as a direction. Route strong bearish catalysts (earnings miss, guidance
+cut, dilution, fraud, death-cross + weak fundamentals) to `short` instead of passive
+`avoid`. Exit = cover target (price falls X%) + stop (price rises Y%); stops matter
+more here.
+- Touches: schema/prompt (`analysis/claude_analyst.py`), `calculator/portfolio.py`
+  (short sizing + separate short-exposure cap), `storage/positions.py` + exit_checker
+  (add `side`, invert P&L), dashboard display.
+- Must check short-interest / squeeze risk before recommending (Argus treats squeezes
+  as a bullish catalyst — the short side has to guard against it).
+- Orthogonal to R2 (touches `direction`, not `confidence`) — safe to do first.
+- Done when: analyst emits `short` w/ cover+stop; positions track inverted P&L;
+  short-exposure cap + squeeze check in place.
+
+### R2. Split conviction from credibility (FOUNDATION)
+`confidence_score` is overloaded (source credibility + HR gate + dedup sort key) —
+the root of the crypto ceiling. Split into: `source_credibility` (0-1 scorer weight,
+stays the dedup input) and `conviction` (0-100, analyst-set, per asset class, à la
+ai-hedge-fund). HR gate becomes "conviction ≥ threshold AND credibility ≥ floor".
+- Touches: `validation/scorer.py`, schema, `calculator/portfolio.py`, HR block,
+  dashboard display, `storage/sheets.py` export, cache (keep back-compat).
+- Riskiest single change (schema refactor) — do AFTER R1, BEFORE R3/R4.
+- Done when: two fields exist; HR uses conviction+floor; dedup unchanged; cached data
+  still loads.
+
+### R3. ETF relative-strength / rotation (RRA)
+ETFs are macro/thematic, not single-catalyst. Compute RS-Ratio (ETF strength vs SPY)
+and RS-Momentum from the ~1y history we already fetch; rank into Leading/Weakening/
+Lagging/Improving. Swap the (meaningless-for-funds) company-fundamentals block for ETF
+facts (expense ratio, AUM, top holdings, sector weights).
+- Reuses the technicals engine (`ingestion/prices.py`) + R2's conviction field.
+- Done when: ETFs ranked by RRA quadrant; ETF-specific facts in the prompt.
+
+### R4. Crypto per-asset-class conviction
+Rides on R2: judge crypto against the best crypto sources (not the SEC), so a strong
+catalyst can earn high conviction despite capped credibility. Add crypto-native
+high-credibility signals: exchange listings, spot-ETF approvals (these ARE SEC
+filings → 1.0), on-chain/CoinGecko shifts, multi-source corroboration.
+- Done when: crypto eligible for high conviction via class-relative scoring.
+
+### R5. Options — DEFERRED (evidence-gated, income-only if ever)
+Research conclusion: AI/LLM picking option DIRECTION has no credible out-of-sample
+evidence (overfitting / "profit mirage", arxiv 2510.07920). BUT covered-call / CSP /
+"wheel" income strategies have decades of independent evidence (CBOE BXM & PUT indices;
+Whaley 2002, Ibbotson 2004, Callan 2006 — ~S&P returns at ~2/3 volatility). So if
+options are ever added, do the RULE-BASED wheel/CC/CSP slice tied to held positions
+(model after ThetaGang), NOT an LLM directional bet. Needs an option-chain/IV module.
+Lowest core-fit; do last or not at all.
+
+---
+
 ## Backlog
 
-### 11. Robinhood MCP sync
+### B1. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 12. Reactive loading screen
+### B2. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.
