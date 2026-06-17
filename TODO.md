@@ -116,15 +116,30 @@ gates that drop output, and no social-sentiment guesswork).
   death cross, short series→None; fundamentals parse + None handling) — zero API tokens.
 - `CLAUDE.md` key files + pipeline flow updated.
 
+### 10. SEC 8-K enrichment (re-applied) ✅
+Re-applied the SEC enrichment (previously reverted with the TradingAgents rollback).
+Bare "Company — keyword / Form 8-K filed" headlines gave the analyst nothing to act on;
+now each filing carries real, fact-checked content.
+- `ingestion/sec.py` — `fetch_sec_filings()` translates 8-K `items` codes to plain English
+  via `ITEM_DESCRIPTIONS` (e.g. 2.01 → "Completion of Acquisition (M&A CLOSED)", 2.02 →
+  "EARNINGS release"), extracts the real ticker from `display_names`, flags `high_signal`
+  items (earnings/M&A/exec/bankruptcy/etc), dedupes across keywords by accession number.
+- `analysis/claude_analyst.py` — news list shows a "⭐ high-signal filing" hint; summary
+  truncation raised 100→200 to keep itemized detail.
+- Directly strengthens M&A-timing: `2.01 Completion of Acquisition` is now a structured
+  "deal already closed" signal, not just an inference from price.
+- Verified: helper unit tests (no network) + one free live SEC fetch (no LLM tokens) —
+  enriched titles + tickers + high-signal flags confirmed. `CLAUDE.md` updated.
+
 ---
 
 ## Backlog
 
-### 10. Robinhood MCP sync
+### 11. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 11. Reactive loading screen
+### 12. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.

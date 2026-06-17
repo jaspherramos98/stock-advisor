@@ -45,7 +45,7 @@ ingestion/
   robinhood.py                Robinhood sync and news ingestion
   finnhub.py                  Finnhub news ingestion
   rss.py                      RSS feed ingestion
-  sec.py                      SEC EDGAR filings
+  sec.py                      SEC EDGAR 8-K filings (item codes → plain English + ticker + high-signal flag)
   coingecko.py                Crypto context
   reddit.py                   Reddit RSS
 validation/scorer.py          News scoring by source credibility

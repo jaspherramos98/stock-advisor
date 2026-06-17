@@ -213,14 +213,15 @@ def _build_prompt(
     for i, item in enumerate(items, 1):
         ticker_hint = f" [ticker: ${item['ticker']}]" if item.get("ticker") else ""
         flag_hint   = " ⚠ unverified source" if item.get("flagged") else ""
+        signal_hint = " ⭐ high-signal filing" if item.get("high_signal") else ""
         summary     = item.get("summary") or "No summary available"
         source      = item.get("source") or "Unknown"
         title       = item.get("title") or "No title"
         score       = item.get("confidence_score", 0)
         lines.append(
-            f"{i}. [{score} confidence{flag_hint}]{ticker_hint}\n"
+            f"{i}. [{score} confidence{flag_hint}{signal_hint}]{ticker_hint}\n"
             f"   Title   : {title}\n"
-            f"   Summary : {summary[:100]}\n"
+            f"   Summary : {summary[:200]}\n"
             f"   Source  : {source}"
         )
     return "\n\n".join(lines)
