@@ -139,12 +139,11 @@ def _build_prompt(
             # Open positions block — tells Claude what the user already owns
 
     if open_positions:
-        lines.append("=== YOUR CURRENT OPEN POSITIONS ===")
+        lines.append("=== YOUR CURRENT OPEN POSITIONS (EXCLUDE THESE) ===")
         lines.append(
-            "The user already owns these assets. Do NOT recommend buying more of them. "
-            "If there is strong news about an already-owned ticker, you may include it "
-            "as direction='watch' with a note about the news impact on the existing position, "
-            "but do not allocate new capital to it."
+            "The user ALREADY OWNS these assets and tracks them elsewhere. Do NOT include any of these "
+            "tickers in your output — not as 'buy', not as 'watch', not at all. Only surface NEW ideas "
+            "the user doesn't already hold."
         )
         for p in open_positions:
             lines.append(
@@ -169,6 +168,45 @@ def _build_prompt(
             f"   Source  : {source}"
         )
     return "\n\n".join(lines)
+
+
+# Phrases that signal a non-actionable guess rather than a real, evidenced plan.
+_VAGUE_EXIT_MARKERS = (
+    "n/a", "await", "watching for", "deal clarity", "tbd", "to be determined",
+    "pending", "unclear", "wait and see", "more info", "monitor for",
+)
+
+
+def _filter_recommendations(recs: list[dict], open_positions: list[dict]) -> list[dict]:
+    """
+    Enforces two rules deterministically, regardless of what the model returned:
+      1. Drop anything the user already owns (open positions are tracked elsewhere).
+      2. Drop guesses — recs with no ticker or a placeholder/vague exit_condition
+         ("N/A", "watching for deal clarity", "await details", etc.).
+    Keeps only NEW, fact-based, actionable ideas.
+    """
+    owned = {(p.get("ticker") or "").upper() for p in (open_positions or [])}
+    cleaned, dropped_owned, dropped_vague = [], 0, 0
+
+    for rec in recs:
+        ticker = (rec.get("ticker") or "").strip().upper()
+        if not ticker:
+            dropped_vague += 1
+            continue
+        if ticker in owned:
+            dropped_owned += 1
+            continue
+        exit_text = (rec.get("exit_condition") or "").lower().strip()
+        if not exit_text or any(m in exit_text for m in _VAGUE_EXIT_MARKERS):
+            dropped_vague += 1
+            continue
+        cleaned.append(rec)
+
+    if dropped_owned:
+        print(f"Filtered out {dropped_owned} already-owned ticker(s)")
+    if dropped_vague:
+        print(f"Filtered out {dropped_vague} vague/non-actionable recommendation(s)")
+    return cleaned
 
 
 def run_analysis(
@@ -318,10 +356,16 @@ IMPORTANT RULES:
 - For flagged (unverified) sources, set risk_level to 'high' regardless.
 - For crypto assets, use the standard symbol (BTC, ETH, SOL etc) as the ticker.
 - For ETFs, use the standard ticker (SPY, QQQ etc) as the ticker.
-- Check the OPEN POSITIONS block. Do not recommend 'buy' for tickers the user already owns.
-  If strong news exists about an owned ticker, include it as 'watch' only to inform the user.
-  You may surface other opportunities from the news as 'buy' OR 'watch', but never force
-  buys to hit a quota — on a weak day, returning only watches (or an empty array) is correct.
+- Check the OPEN POSITIONS block and EXCLUDE every ticker listed there — do not output it at all,
+  not as 'buy', not as 'watch'. The user already holds and tracks those; only surface NEW ideas.
+- FACT-CHECKED ONLY — NO GUESSING. Recommend an asset only when the news item gives concrete,
+  verifiable detail (actual earnings numbers, a named deal with terms, a stated approval/contract).
+  If a headline or filing has no real substance — e.g. a bare "8-K filed" or "Form 8-K" with no
+  description of WHAT it says — you cannot fact-check it, so SKIP it. Do NOT speculate, and never
+  emit placeholder plans like "watching for deal clarity", "await details", or "N/A". Base every
+  recommendation on an informed, evidenced movement — quality of evidence over quantity.
+- Never force buys to hit a quota. Prefer surfacing the few best-substantiated NEW ideas over a long
+  list padded with guesses.
 - Use the CRYPTO ASSET CONTEXT block to understand what each crypto asset does.
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
   Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
@@ -365,9 +409,11 @@ SIGNAL QUALITY — BE RUTHLESSLY SELECTIVE:
   major contract wins, short squeeze setups, insider buying at scale, SEC filings showing material events.
   Weak catalysts (use 'watch' or skip): analyst upgrades, general sector optimism, vague macro tailwinds.
 - Return 'watch' for sound theses with uncertain timing OR catalysts that already moved the price.
-- Return 'avoid' or omit entirely for anything with weak evidence or unverified sources.
-- It is completely fine — and often the right call — to return mostly 'watch' or an empty array on a
-  weak day. Forcing buys when nothing has real, un-priced-in edge is exactly how the desk loses money.
+- Skip (omit) anything with weak evidence, unverified sources, or no concrete detail to fact-check.
+- Prefer surfacing the strongest fact-based, NON-owned ideas as 'watch' over returning nothing. With
+  this many news items there are almost always a few well-substantiated new ideas worth flagging.
+  Forcing BUYS with no real edge loses money — but reserve a fully empty array for the rare case where
+  literally nothing in the news is both credible AND actionable.
 
 HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
 1. The catalyst is unambiguous AND recent — it happened or was officially announced within roughly the
@@ -386,6 +432,9 @@ EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
   and if a realistic target can't clear that 2x bar, it's a 'watch', not a 'buy'.
 - For high volatility assets (avg daily range >3%) use stops of at least 5% to avoid noise shakeouts.
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
+- exit_condition must be a real price-based rule (gain target + stop). If you can't state one from
+  concrete info, you don't have a thesis — skip the item. Never output "N/A", "watching for deal
+  clarity", "await details", or any placeholder.
 
 You must respond with ONLY a valid JSON array. No preamble, no explanation,
 no markdown code fences. Just the raw JSON array.
@@ -461,8 +510,11 @@ NEWS ITEMS:
         if len(deduped) < len(recommendations):
             print(f"Removed {len(recommendations) - len(deduped)} duplicate ticker(s)")
 
-        print(f"Claude returned {len(deduped)} recommendations")
-        return deduped
+        # Enforce: no owned tickers, no vague guesses — fact-based new ideas only.
+        cleaned = _filter_recommendations(deduped, open_positions)
+
+        print(f"Claude returned {len(cleaned)} actionable recommendations")
+        return cleaned
 
     except json.JSONDecodeError as e:
         print(f"JSON parse error: {e}")

@@ -63,8 +63,12 @@ budget.json                   User's current budget setting
 ### Pipeline Flow
 1. `main.py` runs parallel ingestion via `ThreadPoolExecutor` (max_workers=5)
 2. `validation/scorer.py` scores each item by source weight
-3. Top 25 deduplicated stories sent to Claude
+3. Top 25 deduplicated stories sent to Claude (with the user's OPEN POSITIONS to exclude)
 4. Claude returns up to 20 recommendations with `highly_recommended` field
+4b. `_filter_recommendations()` enforces deterministically: drops any owned ticker, any
+   rec with no ticker, and any vague/placeholder exit ("N/A", "watching for deal clarity",
+   "await details"). Only NEW, fact-based ideas survive. The prompt also instructs this,
+   but the code filter is the guarantee.
 5. `calculator/portfolio.py` allocates budget (HR signals get 2x weight)
 6. Results cached to `pipeline_cache.json`
 

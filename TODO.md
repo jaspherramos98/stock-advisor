@@ -84,15 +84,30 @@ output, crashes to 0 on cp1252. Latent bug, surfaced by the launch console's cod
 - Verified: 3 runs on the default cp1252 console returned 10/8/9 recs, no crash.
 - `CLAUDE.md` Known Issues updated. Pure bug fix — no analyst/feature behavior changed.
 
+### 8. Exclude owned tickers + drop guesses (fact-checked recs only) ✅
+After the crash fix, runs surfaced owned tickers (ISBA/PAYO/ROKU) as 'watch' and
+contentless SEC 8-Ks as vague guesses ("N/A - watching for deal clarity"). Per
+request: only NEW, fact-based, informed ideas. Changes in `analysis/claude_analyst.py`:
+- Prompt: EXCLUDE owned tickers entirely (not even 'watch'); recommend only when the
+  news has concrete verifiable detail; never guess on bare "8-K filed" items; banned
+  placeholder exits ("N/A", "watching for deal clarity", "await details").
+- Open-positions block reworded to "EXCLUDE THESE".
+- New `_filter_recommendations()` — deterministic guard run after Claude: drops any
+  owned ticker, any rec with no ticker, and any vague/placeholder exit_condition.
+  Unit-tested with synthetic data (no API): drops owned+vague, keeps real ideas.
+- Prefer surfacing the best fact-based NEW ideas over an empty list (empty reserved
+  for genuinely nothing credible+actionable).
+- `CLAUDE.md` updated. Verified by unit test + mock-mode boot (no live tokens spent).
+
 ---
 
 ## Backlog
 
-### 8. Robinhood MCP sync
+### 9. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 9. Reactive loading screen
+### 10. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.
