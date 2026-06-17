@@ -164,7 +164,7 @@ more here.
 - Done when: analyst emits `short` w/ cover+stop; positions track inverted P&L;
   short-exposure cap + squeeze check in place.
 
-### R2. Split conviction from credibility (FOUNDATION)  ✅ implemented on `r2-conviction` (pending live test + merge)
+### R2. Split conviction from credibility (FOUNDATION)  ✅ DONE — merged to main (tag `stable-post-r2`)
 Done additively (kept `confidence_score` as-is = credibility; ADDED `conviction` 0-100):
 new schema field + "CREDIBILITY vs CONVICTION" prompt block (conviction = edge, scored
 per asset class); HR gate now `conviction>=75 AND confidence_score>=0.5`;
