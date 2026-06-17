@@ -40,7 +40,8 @@ dashboard/app.py              Main Streamlit app + Flask proxy + chatbot
 analysis/claude_analyst.py    Claude analysis prompt and JSON schema
 calculator/portfolio.py       Budget allocation with HR 2x weighting
 ingestion/
-  prices.py                   Live price fetching (Robinhood primary, yfinance fallback)
+  prices.py                   Live prices + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
+  fundamentals.py             Fact-based company fundamentals (valuation/growth/margins) via yfinance
   robinhood.py                Robinhood sync and news ingestion
   finnhub.py                  Finnhub news ingestion
   rss.py                      RSS feed ingestion
@@ -63,7 +64,11 @@ budget.json                   User's current budget setting
 ### Pipeline Flow
 1. `main.py` runs parallel ingestion via `ThreadPoolExecutor` (max_workers=5)
 2. `validation/scorer.py` scores each item by source weight
-3. Top 25 deduplicated stories sent to Claude (with the user's OPEN POSITIONS to exclude)
+3. Top 25 deduplicated stories sent to Claude, plus per-ticker TECHNICAL INDICATORS
+   (RSI/MACD/SMA50-200/52w/volume from ~1y of prices) and FUNDAMENTALS (valuation,
+   growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
+   POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
+   they confirm or temper a news catalyst, they don't gate or invent one.
 4. Claude returns up to 20 recommendations with `highly_recommended` field
 4b. `_filter_recommendations()` enforces deterministically: drops any owned ticker, any
    rec with no ticker, and any vague/placeholder exit ("N/A", "watching for deal clarity",

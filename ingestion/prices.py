@@ -100,11 +100,91 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
     return results
 
 
+def _compute_technicals(closes, highs, lows, volumes) -> dict:
+    """
+    Computes standard technical indicators from daily OHLCV history
+    (lists ordered oldest → newest). Pure deterministic math on real prices —
+    no opinion, fully "fact-checked". Any indicator lacking enough history is None.
+    Kept separate from yfinance so it can be unit-tested with synthetic data.
+    """
+    import pandas as pd
+
+    close = pd.Series([float(c) for c in closes], dtype="float64")
+    n = len(close)
+    last = float(close.iloc[-1])
+    out: dict = {}
+
+    # RSI(14) with Wilder smoothing — >70 overbought, <30 oversold
+    if n >= 15:
+        delta = close.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        ag = float(gain.ewm(alpha=1 / 14, adjust=False).mean().iloc[-1])
+        al = float(loss.ewm(alpha=1 / 14, adjust=False).mean().iloc[-1])
+        if al == 0:
+            rsi_val = 100.0 if ag > 0 else 50.0  # no losses → max; flat → neutral
+        else:
+            rsi_val = 100 - (100 / (1 + ag / al))
+        out["rsi_14"] = round(rsi_val, 1)
+    else:
+        out["rsi_14"] = None
+
+    # MACD (12/26/9) — trend/momentum state + recent crossover
+    if n >= 26:
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        signal = macd_line.ewm(span=9, adjust=False).mean()
+        hist = macd_line - signal
+        out["macd_state"] = "bullish" if macd_line.iloc[-1] > signal.iloc[-1] else "bearish"
+        if len(hist) >= 2 and (hist.iloc[-1] > 0) != (hist.iloc[-2] > 0):
+            out["macd_cross"] = "bullish crossover" if hist.iloc[-1] > 0 else "bearish crossover"
+        else:
+            out["macd_cross"] = "none recent"
+    else:
+        out["macd_state"] = None
+        out["macd_cross"] = None
+
+    # Moving averages — trend context
+    sma50 = float(close.tail(50).mean()) if n >= 50 else None
+    sma200 = float(close.tail(200).mean()) if n >= 200 else None
+    out["sma_50"] = round(sma50, 2) if sma50 else None
+    out["sma_200"] = round(sma200, 2) if sma200 else None
+    out["price_vs_sma50"] = None if sma50 is None else ("above" if last >= sma50 else "below")
+    out["price_vs_sma200"] = None if sma200 is None else ("above" if last >= sma200 else "below")
+    if sma50 and sma200:
+        out["ma_trend"] = "golden cross (50>200, bullish)" if sma50 > sma200 else "death cross (50<200, bearish)"
+    else:
+        out["ma_trend"] = None
+
+    # 52-week range (intraday highs/lows)
+    try:
+        hi = max(float(h) for h in highs)
+        lo = min(float(l) for l in lows)
+        out["high_52w"] = round(hi, 2)
+        out["low_52w"] = round(lo, 2)
+        out["pct_from_52w_high"] = round((last - hi) / hi * 100, 1) if hi else None
+        out["pct_from_52w_low"] = round((last - lo) / lo * 100, 1) if lo else None
+    except (ValueError, ZeroDivisionError):
+        out.update(high_52w=None, low_52w=None, pct_from_52w_high=None, pct_from_52w_low=None)
+
+    # Volume vs 30-day average — is the move backed by real participation?
+    if volumes and len(volumes) >= 5:
+        vol = pd.Series([float(v) for v in volumes], dtype="float64")
+        avg30 = float(vol.tail(30).mean())
+        out["vol_vs_avg"] = round(float(vol.iloc[-1]) / avg30, 2) if avg30 else None
+    else:
+        out["vol_vs_avg"] = None
+
+    return out
+
+
 def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[str, dict]:
     """
-    Fetches 14 days of daily price history using Yahoo Finance (yfinance).
-    Free, no API key needed, works for stocks and crypto.
-    Returns trend analysis Claude can use to calibrate exit conditions.
+    Fetches ~1 year of daily price history using Yahoo Finance (yfinance).
+    Free, no API key needed, works for stocks and crypto. Returns 14-day trend
+    metrics PLUS technical indicators (RSI, MACD, SMA50/200, 52w range, volume)
+    that Claude can use to calibrate entries/exits.
     """
     import yfinance as yf
 
@@ -121,20 +201,19 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
             else:
                 yahoo_symbol = ticker
 
-            # Fetch 20 days to ensure we get at least 14 trading days
-            hist = yf.Ticker(yahoo_symbol).history(period="20d", interval="1d")
+            # Fetch ~1 year so there's enough history for SMA200 / RSI / MACD.
+            hist = yf.Ticker(yahoo_symbol).history(period="1y", interval="1d")
 
             if hist.empty or len(hist) < 3:
                 print(f"Price history: insufficient data for {ticker}")
                 results[ticker] = None
                 continue
 
-            # Take last 14 rows
-            hist = hist.tail(14)
-
-            closes = hist["Close"].tolist()
-            highs  = hist["High"].tolist()
-            lows   = hist["Low"].tolist()
+            # --- 14-day trend metrics (unchanged): most recent 14 rows ---
+            recent = hist.tail(14)
+            closes = recent["Close"].tolist()
+            highs  = recent["High"].tolist()
+            lows   = recent["Low"].tolist()
 
             first_price = closes[0]
             last_price  = closes[-1]
@@ -158,6 +237,14 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
             pct_from_high = ((last_price - high_14d) / high_14d) * 100
             pct_from_low  = ((last_price - low_14d) / low_14d) * 100
 
+            # --- Technical indicators: computed from the full ~1y series ---
+            tech = _compute_technicals(
+                hist["Close"].tolist(),
+                hist["High"].tolist(),
+                hist["Low"].tolist(),
+                hist["Volume"].tolist() if "Volume" in hist else [],
+            )
+
             results[ticker] = {
                 "ticker":              ticker,
                 "current_price":       round(last_price, 4),
@@ -170,11 +257,12 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
                 "avg_daily_range_pct": round(avg_daily_range_pct, 2),
                 "volatility":          "high" if avg_daily_range_pct > 3 else "medium" if avg_daily_range_pct > 1.5 else "low",
                 "data_points":         len(closes),
+                **tech,
             }
 
             print(f"Price history: {ticker} — {trend} {pct_change:+.1f}% over 14d, "
-                  f"volatility: {results[ticker]['volatility']}, "
-                  f"avg daily range: {avg_daily_range_pct:.1f}%")
+                  f"RSI {tech.get('rsi_14')}, MACD {tech.get('macd_state')}, "
+                  f"vol vs avg {tech.get('vol_vs_avg')}")
 
         except Exception as e:
             print(f"Price history error for {ticker}: {e}")

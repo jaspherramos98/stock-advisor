@@ -99,6 +99,7 @@ def _build_prompt(
     crypto_context: dict = None,
     price_history:  dict = None,
     open_positions:  list = None,
+    fundamentals:   dict = None,
 ) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
@@ -136,7 +137,62 @@ def _build_prompt(
                     f"14d low: ${data['low_14d']} ({data['pct_from_low']:+.1f}% from now)"
                 )
             lines.append("=== END TREND DATA ===\n")
+
+            # Technical indicators block — deterministic math on real prices.
+            # Use as CONTEXT to confirm/temper a thesis, not as a hard filter.
+            tech_lines = []
+            for ticker, data in available.items():
+                if data.get("rsi_14") is None and data.get("sma_50") is None:
+                    continue  # not enough history for this ticker
+                rsi = data.get("rsi_14")
+                rsi_tag = ""
+                if rsi is not None:
+                    rsi_tag = " (overbought)" if rsi >= 70 else " (oversold)" if rsi <= 30 else ""
+                tech_lines.append(
+                    f"${ticker}: RSI14 {rsi}{rsi_tag} | MACD {data.get('macd_state')}"
+                    f" ({data.get('macd_cross')}) | price {data.get('price_vs_sma50')} 50d-SMA,"
+                    f" {data.get('price_vs_sma200')} 200d-SMA | {data.get('ma_trend')} | "
+                    f"{data.get('pct_from_52w_high')}% from 52w high | "
+                    f"volume {data.get('vol_vs_avg')}x 30d avg"
+                )
+            if tech_lines:
+                lines.append("=== TECHNICAL INDICATORS (confirmation/timing context) ===")
+                lines.append(
+                    "Deterministic indicators from ~1y of real prices. Use them to TIME and CONFIRM "
+                    "a news thesis, not to invent one: RSI>70 = overbought (don't chase a buy; supports "
+                    "'already ran' / watch), RSI<30 = oversold. MACD bullish + a recent bullish crossover "
+                    "supports entry timing; bearish does the opposite. Price above both SMAs with a golden "
+                    "cross = healthy uptrend; below with a death cross = weak. Near the 52w high = stretched; "
+                    "high volume vs average = the move has real participation. These confirm or temper the "
+                    "catalyst — they do NOT override a strong fact-based catalyst."
+                )
+                lines.extend(tech_lines)
+                lines.append("=== END TECHNICAL INDICATORS ===\n")
             # Open positions block — tells Claude what the user already owns
+
+    # Fundamentals block — reported financials as a quality check.
+    if fundamentals:
+        fund_avail = {k: v for k, v in fundamentals.items() if v}
+        if fund_avail:
+            lines.append("=== FUNDAMENTALS (quality check — reported financials) ===")
+            lines.append(
+                "Use these reported numbers to judge company QUALITY and temper conviction — not to "
+                "invent a thesis. Rich valuation (high P/E) + slowing growth → be cautious / prefer watch. "
+                "Strong margins, positive earnings growth, manageable debt, positive free cash flow → "
+                "quality name. Tiny market cap + thin fundamentals → treat as higher risk (pump-prone). "
+                "Missing values just mean Yahoo had no data; don't penalize for that alone."
+            )
+            for ticker, f in fund_avail.items():
+                mc = f.get("market_cap")
+                mc_str = f"${mc/1e9:.1f}B" if isinstance(mc, (int, float)) and mc else "n/a"
+                lines.append(
+                    f"${ticker}: {f.get('sector') or 'n/a'} / {f.get('industry') or 'n/a'} | "
+                    f"mkt cap {mc_str} | P/E trail {f.get('trailing_pe')} fwd {f.get('forward_pe')} | "
+                    f"P/B {f.get('price_to_book')} | margin {f.get('profit_margin_pct')}% | "
+                    f"rev growth {f.get('revenue_growth_pct')}% | earnings growth {f.get('earnings_growth_pct')}% | "
+                    f"debt/equity {f.get('debt_to_equity')} | FCF {f.get('free_cash_flow')}"
+                )
+            lines.append("=== END FUNDAMENTALS ===\n")
 
     if open_positions:
         lines.append("=== YOUR CURRENT OPEN POSITIONS (EXCLUDE THESE) ===")
@@ -285,6 +341,7 @@ def run_analysis(
     # Fetch 14-day price history for all recommended tickers
     # Fetch 14-day price history — only for tickers that appear in the news
     price_history = {}
+    stock_news_tickers = []  # also reused for the fundamentals fetch below
     try:
         from ingestion.prices import fetch_price_history
 
@@ -316,12 +373,24 @@ def run_analysis(
     except Exception as e:
         print(f"Claude analyst: price history fetch failed: {e}")
 
+    # Fetch fundamentals (quality check) for stock tickers mentioned in the news.
+    fundamentals = {}
+    try:
+        if stock_news_tickers and (include_stocks or include_etfs):
+            from ingestion.fundamentals import fetch_fundamentals
+            fundamentals = fetch_fundamentals(stock_news_tickers)
+            loaded = sum(1 for v in fundamentals.values() if v)
+            print(f"Claude analyst: loaded fundamentals for {loaded} tickers")
+    except Exception as e:
+        print(f"Claude analyst: fundamentals fetch failed: {e}")
+
     try:
         news_block = _build_prompt(
             unique_items,
             crypto_context=crypto_context,
             price_history=price_history,
             open_positions=open_positions,
+            fundamentals=fundamentals,
         )
     except Exception as e:
         import traceback

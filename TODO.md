@@ -99,15 +99,32 @@ request: only NEW, fact-based, informed ideas. Changes in `analysis/claude_analy
   for genuinely nothing credible+actionable).
 - `CLAUDE.md` updated. Verified by unit test + mock-mode boot (no live tokens spent).
 
+### 9. Fact-based analyst inputs — technicals + fundamentals ✅
+Added two deterministic, fact-based context streams for the analyst (adapted from
+TradingAgents' analyst roles, but as CONTEXT the model reasons over — never hard
+gates that drop output, and no social-sentiment guesswork).
+- **Technicals** (`ingestion/prices.py`): `fetch_price_history()` now pulls ~1y and
+  computes RSI(14, Wilder), MACD(12/26/9) state + crossover, SMA50/200 + price-vs-MA
+  + golden/death cross, 52-week range, and volume-vs-30d-avg via a unit-tested
+  `_compute_technicals()` helper. New "TECHNICAL INDICATORS" prompt block with timing
+  guidance (RSI>70 don't chase, MACD/SMA confirm entry, etc.).
+- **Fundamentals** (`ingestion/fundamentals.py`, new): `fetch_fundamentals()` pulls
+  valuation (P/E, P/B), growth, margins, debt/equity, FCF, market cap, sector from
+  yfinance `.info`; cached per process; None-safe. Fetched for stock news tickers in
+  `run_analysis`; new "FUNDAMENTALS" prompt block as a quality check.
+- Verified with synthetic unit tests (uptrend→RSI100/golden cross, downtrend→RSI0/
+  death cross, short series→None; fundamentals parse + None handling) — zero API tokens.
+- `CLAUDE.md` key files + pipeline flow updated.
+
 ---
 
 ## Backlog
 
-### 9. Robinhood MCP sync
+### 10. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of
 the unofficial robin_stocks library. More stable long-term.
 
-### 10. Reactive loading screen
+### 11. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user
 can see progress. Currently just a spinner. Deferred — complex to implement
 with Streamlit's execution model.
