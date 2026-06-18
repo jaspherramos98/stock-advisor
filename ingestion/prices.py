@@ -179,6 +179,115 @@ def _compute_technicals(closes, highs, lows, volumes) -> dict:
     return out
 
 
+def _compute_rrg(etf_closes, bench_closes, window: int = 50, mom_window: int = 10) -> dict:
+    """
+    Simplified JdK-style Relative Rotation Graph (RRG) for one ETF vs a benchmark.
+    Inputs are aligned daily closes (oldest → newest, same dates).
+
+    - RS-Ratio    = 100 × relative / SMA(relative): >100 means the ETF is
+      outperforming its own recent relative trend vs the benchmark.
+    - RS-Momentum = 100 × RS-Ratio / SMA(RS-Ratio): >100 means that relative
+      strength is still accelerating.
+    - Quadrant    = the classic RRG read (Leading / Weakening / Lagging / Improving).
+    - rel_perf_63d = plain relative return vs the benchmark over ~3 months (intuitive %).
+
+    Pure deterministic math on real prices — fully unit-testable, no opinion.
+    Returns all-None if there isn't enough aligned history.
+    """
+    import pandas as pd
+
+    e = pd.Series([float(c) for c in etf_closes], dtype="float64")
+    b = pd.Series([float(c) for c in bench_closes], dtype="float64")
+    n = min(len(e), len(b))
+    out = {"rs_ratio": None, "rs_momentum": None, "quadrant": None, "rel_perf_63d": None}
+    if n < window + mom_window + 1:
+        return out
+
+    e = e.iloc[-n:].reset_index(drop=True)
+    b = b.iloc[-n:].reset_index(drop=True)
+
+    relative        = e / b
+    rs_ratio_series = 100 * relative / relative.rolling(window).mean()
+    rs_mom_series   = 100 * rs_ratio_series / rs_ratio_series.rolling(mom_window).mean()
+
+    rs_ratio = rs_ratio_series.iloc[-1]
+    rs_mom   = rs_mom_series.iloc[-1]
+    if pd.isna(rs_ratio) or pd.isna(rs_mom):
+        return out
+    rs_ratio = float(rs_ratio)
+    rs_mom   = float(rs_mom)
+
+    if rs_ratio >= 100 and rs_mom >= 100:
+        quad = "Leading"
+    elif rs_ratio >= 100 and rs_mom < 100:
+        quad = "Weakening"
+    elif rs_ratio < 100 and rs_mom < 100:
+        quad = "Lagging"
+    else:
+        quad = "Improving"
+
+    look     = min(63, n - 1)
+    rel_perf = ((e.iloc[-1] / e.iloc[-1 - look]) - (b.iloc[-1] / b.iloc[-1 - look])) * 100
+
+    return {
+        "rs_ratio":     round(rs_ratio, 1),
+        "rs_momentum":  round(rs_mom, 1),
+        "quadrant":     quad,
+        "rel_perf_63d": round(float(rel_perf), 1),
+    }
+
+
+def fetch_etf_relative_strength(etf_tickers: list[str], benchmark: str = "SPY") -> dict[str, dict]:
+    """
+    Computes each ETF's relative rotation vs a benchmark (default SPY) from ~1y of
+    Yahoo Finance history. Aligns each ETF to the benchmark on shared trading days,
+    then runs `_compute_rrg`. ETFs that error out or lack history map to None.
+
+    ETFs are macro/thematic, not single-catalyst, so rotation vs the market is the
+    right lens — this is the R3 analog of fundamentals (which are meaningless for funds).
+    """
+    import pandas as pd
+    import yfinance as yf
+
+    results: dict[str, dict | None] = {}
+    if not etf_tickers:
+        return results
+
+    try:
+        bench_hist = yf.Ticker(benchmark).history(period="1y", interval="1d")
+        if bench_hist.empty or len(bench_hist) < 60:
+            print(f"ETF RS: benchmark {benchmark} history unavailable — skipping rotation.")
+            return results
+        bench_close = bench_hist["Close"]
+    except Exception as e:
+        print(f"ETF RS: benchmark fetch error — {e}")
+        return results
+
+    for ticker in etf_tickers:
+        try:
+            hist = yf.Ticker(ticker).history(period="1y", interval="1d")
+            if hist.empty or len(hist) < 60:
+                results[ticker] = None
+                continue
+            # Align ETF and benchmark on shared dates only.
+            joined = pd.DataFrame({"e": hist["Close"], "b": bench_close}).dropna()
+            if len(joined) < 60:
+                results[ticker] = None
+                continue
+            rrg = _compute_rrg(joined["e"].tolist(), joined["b"].tolist())
+            results[ticker] = rrg if rrg.get("quadrant") else None
+            if results[ticker]:
+                print(f"ETF RS: {ticker} — {rrg['quadrant']} | RS-Ratio {rrg['rs_ratio']} "
+                      f"RS-Mom {rrg['rs_momentum']} | {rrg['rel_perf_63d']:+}% vs {benchmark} (3mo)")
+        except Exception as e:
+            print(f"ETF RS error for {ticker}: {e}")
+            results[ticker] = None
+
+    fetched = sum(1 for v in results.values() if v)
+    print(f"ETF RS: computed rotation for {fetched}/{len(etf_tickers)} ETFs vs {benchmark}")
+    return results
+
+
 def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[str, dict]:
     """
     Fetches ~1 year of daily price history using Yahoo Finance (yfinance).
