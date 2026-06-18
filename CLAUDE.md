@@ -180,7 +180,11 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 
 ### Chatbot (Argus Assistant)
 - Injected directly into Streamlit parent DOM (bypasses iframe positioning issues)
-- Flask proxy on port 8502 keeps API key server-side
+- Assistant replies are HTML-escaped BEFORE the **bold**/newline formatting is applied,
+  so model output (which can carry prompt-injected content from news/Reddit) can't inject
+  active markup into the DOM (XSS guard). User messages render via `textContent`.
+- Flask proxy on port 8502 keeps API key server-side; bound to 127.0.0.1, debug=False,
+  CORS locked to localhost:8501
 - `/context` endpoint builds live portfolio snapshot on every chat open
 - System prompt includes: budget, open positions with P&L, closed position stats, today's recommendations, watchlist
 - Gives direct actionable advice; honest about weak signal days
