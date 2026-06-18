@@ -190,13 +190,26 @@ ai-hedge-fund). HR gate becomes "conviction ≥ threshold AND credibility ≥ fl
 - Done when: two fields exist; HR uses conviction+floor; dedup unchanged; cached data
   still loads.
 
-### R3. ETF relative-strength / rotation (RRA)
-ETFs are macro/thematic, not single-catalyst. Compute RS-Ratio (ETF strength vs SPY)
-and RS-Momentum from the ~1y history we already fetch; rank into Leading/Weakening/
-Lagging/Improving. Swap the (meaningless-for-funds) company-fundamentals block for ETF
-facts (expense ratio, AUM, top holdings, sector weights).
-- Reuses the technicals engine (`ingestion/prices.py`) + R2's conviction field.
-- Done when: ETFs ranked by RRA quadrant; ETF-specific facts in the prompt.
+### R3. ETF relative-strength / rotation (RRA)  ✅ on `r3-etf-rrs` (pending live test + merge)
+Done additively (CONTEXT only — no new recommendation fields, output schema unchanged):
+- `ingestion/prices.py` — `_compute_rrg()` (simplified JdK RRG) + `fetch_etf_relative_strength()`:
+  from ~1y yfinance history aligned to SPY, computes RS-Ratio (>100 = outperforming market trend),
+  RS-Momentum (>100 = accelerating), quadrant (Leading/Weakening/Lagging/Improving), and rel-perf
+  vs SPY over ~3mo. Pure deterministic math.
+- `ingestion/etf_facts.py` (new) — `fetch_etf_facts()`: category, sponsor, AUM, expense ratio,
+  yield, top holdings, sector weights (holdings/sectors via yfinance `funds_data`, wrapped). Unit
+  scales normalized (expense already-percent vs yield decimal; ytdReturn dropped as unreliable).
+- `analysis/claude_analyst.py` — news tickers classified stock/etf/crypto; ETFs get rotation+facts
+  INSTEAD of company fundamentals; two new prompt blocks (ETF RELATIVE STRENGTH, ETF FACTS) + a
+  rules line telling the analyst to judge ETFs on rotation (favor Leading, avoid Lagging), not by
+  forcing a news catalyst onto them.
+- Verified: RRG math unit tests (outperform→Leading, accel-down→Lagging, short→None), ETF-facts
+  unit-scale tests, prompt-block render, mock boot, + one free live yfinance fetch (XLK/XLE/XLU
+  rotation + facts, no LLM tokens). `CLAUDE.md` updated.
+
+Original design notes: Compute RS-Ratio (ETF strength vs SPY) and RS-Momentum from the ~1y history
+we already fetch; rank into Leading/Weakening/Lagging/Improving. Swap the (meaningless-for-funds)
+company-fundamentals block for ETF facts. Reuses the technicals engine + R2's conviction field.
 
 ### R4. Crypto per-asset-class conviction
 Rides on R2: judge crypto against the best crypto sources (not the SEC), so a strong

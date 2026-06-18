@@ -41,7 +41,9 @@ analysis/claude_analyst.py    Claude analysis prompt and JSON schema
 calculator/portfolio.py       Budget allocation with HR 2x weighting
 ingestion/
   prices.py                   Live prices + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
+                              + ETF relative-strength rotation vs SPY (RRG: RS-Ratio/RS-Momentum/quadrant)
   fundamentals.py             Fact-based company fundamentals (valuation/growth/margins) via yfinance
+  etf_facts.py                Fact-based ETF facts (category/AUM/expense/yield/top holdings/sectors) via yfinance
   robinhood.py                Robinhood sync and news ingestion
   finnhub.py                  Finnhub news ingestion
   rss.py                      RSS feed ingestion
@@ -68,7 +70,9 @@ budget.json                   User's current budget setting
    (RSI/MACD/SMA50-200/52w/volume from ~1y of prices) and FUNDAMENTALS (valuation,
    growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
-   they confirm or temper a news catalyst, they don't gate or invent one.
+   they confirm or temper a news catalyst, they don't gate or invent one. For ETF
+   tickers (R3) the analyst additionally gets ETF RELATIVE STRENGTH (rotation vs SPY)
+   and ETF FACTS instead of company fundamentals — see "ETF rotation (R3)" below.
 4. Claude returns recommendations with `highly_recommended` field. **Watch floor:** on a
    normal news day it always returns ≥10 items (buys + shorts + watches) so the user sees a
    full read on the day; BUYS stay strict/few (usually 0-3, never padded), the rest are
@@ -106,6 +110,25 @@ Two separate numbers per recommendation:
   is). Scored *relative to the asset's own class* (so crypto/ETF can be high-conviction despite capped
   credibility). **Conviction drives position size** (`portfolio._compute_weight`) and the HR gate.
   Back-compat: recs without `conviction` fall back to `confidence_score × 100`.
+
+### ETF rotation (R3)
+ETFs are macro/thematic baskets, not single-catalyst trades, so for ETF tickers the analyst
+gets two ETF-specific context blocks instead of (meaningless) company fundamentals:
+- **ETF RELATIVE STRENGTH vs SPY** — a simplified JdK Relative Rotation Graph (RRG) computed in
+  `ingestion/prices.py` (`_compute_rrg` / `fetch_etf_relative_strength`) from ~1y of yfinance
+  history aligned to SPY. Outputs `rs_ratio` (>100 = outperforming the market trend),
+  `rs_momentum` (>100 = that outperformance is accelerating), a `quadrant`
+  (Leading → Weakening → Lagging → Improving), and `rel_perf_63d` (plain % vs SPY over ~3mo).
+  The analyst favors `Leading`, avoids `Lagging`; a leading ETF on a real theme can be
+  high-conviction even with no single news catalyst. Pure deterministic math (unit-tested).
+- **ETF FACTS** — `ingestion/etf_facts.py` (`fetch_etf_facts`): category, sponsor, AUM, expense
+  ratio, yield, top holdings, sector weights (top holdings/sectors via yfinance `funds_data`,
+  wrapped so a missing API never costs the rest). Units normalized (`yield` is decimal→×100;
+  expense ratio is already-percent on most versions; ytdReturn omitted as unreliable).
+
+These are CONTEXT only — R3 added no new recommendation fields; the output schema is unchanged.
+In `run_analysis`, news tickers are classified stock/etf/crypto: stocks get fundamentals, ETFs
+get rotation+facts, both get technicals/price history, crypto keeps its own path.
 
 ### Highly Recommended Criteria (all 4 must be met)
 1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)

@@ -100,6 +100,8 @@ def _build_prompt(
     price_history:  dict = None,
     open_positions:  list = None,
     fundamentals:   dict = None,
+    etf_strength:   dict = None,
+    etf_facts:      dict = None,
 ) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
@@ -193,6 +195,56 @@ def _build_prompt(
                     f"debt/equity {f.get('debt_to_equity')} | FCF {f.get('free_cash_flow')}"
                 )
             lines.append("=== END FUNDAMENTALS ===\n")
+
+    # ETF relative strength (rotation vs SPY) — the right lens for macro/thematic funds.
+    if etf_strength:
+        rs_avail = {k: v for k, v in etf_strength.items() if v}
+        if rs_avail:
+            lines.append("=== ETF RELATIVE STRENGTH vs SPY (rotation) ===")
+            lines.append(
+                "ETFs are macro/thematic baskets, not single-catalyst trades — judge them by ROTATION "
+                "vs the market (SPY), not by hunting a news catalyst. RS-Ratio >100 = the ETF is "
+                "outperforming the market's trend; RS-Momentum >100 = that outperformance is still "
+                "accelerating. Quadrant read: Leading (strong + accelerating → favor longs / higher "
+                "conviction) → Weakening (strong but fading → take profits / watch) → Lagging (weak + "
+                "still falling → avoid longs, short-bias) → Improving (weak but turning up → early watch "
+                "for a long). Use this to set ETF direction and conviction; a leading ETF on a real "
+                "thematic tailwind can be high-conviction even without a single news catalyst."
+            )
+            for ticker, rs in rs_avail.items():
+                lines.append(
+                    f"${ticker}: {rs.get('quadrant')} | RS-Ratio {rs.get('rs_ratio')} | "
+                    f"RS-Momentum {rs.get('rs_momentum')} | {rs.get('rel_perf_63d'):+}% vs SPY (3mo)"
+                )
+            lines.append("=== END ETF RELATIVE STRENGTH ===\n")
+
+    # ETF facts — fund quality (use INSTEAD of company fundamentals for ETFs).
+    if etf_facts:
+        ef_avail = {k: v for k, v in etf_facts.items() if v}
+        if ef_avail:
+            lines.append("=== ETF FACTS (fund quality — use instead of company fundamentals for ETFs) ===")
+            lines.append(
+                "Reported fund facts. Lower expense ratio = less drag; larger AUM = more liquid/established. "
+                "Top holdings and sector weights tell you what the fund is REALLY exposed to — make sure the "
+                "thesis matches the actual basket (e.g. don't buy a 'tech' ETF for an AI catalyst if its top "
+                "weights are utilities). Missing values just mean Yahoo had no data; don't penalize for that."
+            )
+            for ticker, f in ef_avail.items():
+                aum = f.get("aum")
+                aum_str = f"${aum/1e9:.1f}B" if isinstance(aum, (int, float)) and aum else "n/a"
+                holdings = ", ".join(f["top_holdings"]) if f.get("top_holdings") else "n/a"
+                sectors = (
+                    ", ".join(f"{k} {v}%" for k, v in f["sector_weights"].items())
+                    if f.get("sector_weights") else "n/a"
+                )
+                lines.append(
+                    f"${ticker}: {f.get('category') or 'n/a'} | {f.get('fund_family') or 'n/a'} | "
+                    f"AUM {aum_str} | expense {f.get('expense_ratio_pct')}% | yield {f.get('yield_pct')}% | "
+                    f"beta3y {f.get('beta_3y')}\n"
+                    f"   top: {holdings}\n"
+                    f"   sectors: {sectors}"
+                )
+            lines.append("=== END ETF FACTS ===\n")
 
     if open_positions:
         lines.append("=== YOUR CURRENT OPEN POSITIONS (EXCLUDE THESE) ===")
@@ -339,51 +391,72 @@ def run_analysis(
         except Exception as e:
             print(f"Claude analyst: crypto context fetch failed: {e}")
 
-    # Fetch 14-day price history for all recommended tickers
-    # Fetch 14-day price history — only for tickers that appear in the news
+    # Classify each news ticker by asset type so we fetch the right context for it:
+    # stocks/ETFs get price history; stocks get company fundamentals; ETFs get
+    # relative-strength rotation + fund facts (R3); crypto gets its own history path.
+    def _item_asset_type(item: dict) -> str:
+        st = item.get("source_type", "")
+        at = item.get("asset_type", "")
+        if at == "crypto" or st in ("finnhub_crypto", "crypto_rss"):
+            return "crypto"
+        if at == "etf" or st in ("finnhub_etf", "etf_rss"):
+            return "etf"
+        return "stock"
+
+    ticker_types: dict[str, str] = {}
+    for item in unique_items:
+        t = item.get("ticker")
+        if not t:
+            continue
+        ty = _item_asset_type(item)
+        # If any item tags the ticker as etf/crypto, prefer that over plain "stock".
+        if t not in ticker_types or ticker_types[t] == "stock":
+            ticker_types[t] = ty
+
+    stock_news_tickers  = [t for t, ty in ticker_types.items() if ty == "stock"]
+    etf_news_tickers    = [t for t, ty in ticker_types.items() if ty == "etf"]
+    crypto_news_tickers = [t for t, ty in ticker_types.items() if ty == "crypto"]
+
+    # Fetch ~1y price history (+ technicals) — only for tickers that appear in the news.
     price_history = {}
-    stock_news_tickers = []  # also reused for the fundamentals fetch below
     try:
         from ingestion.prices import fetch_price_history
 
-        # Only fetch history for tickers actually mentioned in the news
-        news_tickers = list({
-            item.get("ticker") for item in unique_items
-            if item.get("ticker")
-        })
-
-        stock_news_tickers  = [t for t in news_tickers if not any(
-            item.get("asset_type") == "crypto"
-            for item in unique_items if item.get("ticker") == t
-        )]
-        crypto_news_tickers = [t for t in news_tickers if any(
-            item.get("asset_type") == "crypto"
-            for item in unique_items if item.get("ticker") == t
-        )]
-
-        if stock_news_tickers and (include_stocks or include_etfs):
-            stock_history = fetch_price_history(stock_news_tickers, asset_type="stock")
-            price_history.update(stock_history)
+        equity_tickers = stock_news_tickers + etf_news_tickers  # both use the yfinance stock path
+        if equity_tickers and (include_stocks or include_etfs):
+            price_history.update(fetch_price_history(equity_tickers, asset_type="stock"))
 
         if crypto_news_tickers and include_crypto:
-            crypto_history = fetch_price_history(crypto_news_tickers, asset_type="crypto")
-            price_history.update(crypto_history)
+            price_history.update(fetch_price_history(crypto_news_tickers, asset_type="crypto"))
 
         fetched = sum(1 for v in price_history.values() if v is not None)
         print(f"Claude analyst: loaded 14-day price history for {fetched} tickers")
     except Exception as e:
         print(f"Claude analyst: price history fetch failed: {e}")
 
-    # Fetch fundamentals (quality check) for stock tickers mentioned in the news.
+    # Fetch fundamentals (quality check) for STOCK tickers only — meaningless for ETFs.
     fundamentals = {}
     try:
-        if stock_news_tickers and (include_stocks or include_etfs):
+        if stock_news_tickers and include_stocks:
             from ingestion.fundamentals import fetch_fundamentals
             fundamentals = fetch_fundamentals(stock_news_tickers)
             loaded = sum(1 for v in fundamentals.values() if v)
             print(f"Claude analyst: loaded fundamentals for {loaded} tickers")
     except Exception as e:
         print(f"Claude analyst: fundamentals fetch failed: {e}")
+
+    # R3: ETF relative-strength rotation (vs SPY) + ETF fund facts — for ETF tickers.
+    etf_strength, etf_facts = {}, {}
+    try:
+        if etf_news_tickers and include_etfs:
+            from ingestion.prices    import fetch_etf_relative_strength
+            from ingestion.etf_facts import fetch_etf_facts
+            etf_strength = fetch_etf_relative_strength(etf_news_tickers)
+            etf_facts    = fetch_etf_facts(etf_news_tickers)
+            print(f"Claude analyst: loaded ETF rotation for {sum(1 for v in etf_strength.values() if v)} "
+                  f"and facts for {sum(1 for v in etf_facts.values() if v)} ETFs")
+    except Exception as e:
+        print(f"Claude analyst: ETF context fetch failed: {e}")
 
     try:
         news_block = _build_prompt(
@@ -392,6 +465,8 @@ def run_analysis(
             price_history=price_history,
             open_positions=open_positions,
             fundamentals=fundamentals,
+            etf_strength=etf_strength,
+            etf_facts=etf_facts,
         )
     except Exception as e:
         import traceback
@@ -425,7 +500,9 @@ IMPORTANT RULES:
 - Do not invent tickers. If you are unsure of the ticker, use null.
 - For flagged (unverified) sources, set risk_level to 'high' regardless.
 - For crypto assets, use the standard symbol (BTC, ETH, SOL etc) as the ticker.
-- For ETFs, use the standard ticker (SPY, QQQ etc) as the ticker.
+- For ETFs, use the standard ticker (SPY, QQQ etc) as the ticker. ETFs are macro/thematic, not
+  single-catalyst — judge them on ROTATION using the ETF RELATIVE STRENGTH block (favor 'Leading',
+  avoid 'Lagging') and the ETF FACTS block, not by forcing a news catalyst onto them.
 - Check the OPEN POSITIONS block and EXCLUDE every ticker listed there — do not output it at all,
   not as 'buy', not as 'watch'. The user already holds and tracks those; only surface NEW ideas.
 - FACT-CHECKED ONLY — NO GUESSING. Recommend an asset only when the news item gives concrete,
