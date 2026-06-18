@@ -48,7 +48,7 @@ ingestion/
   finnhub.py                  Finnhub news ingestion
   rss.py                      RSS feed ingestion
   sec.py                      SEC EDGAR 8-K filings (item codes → plain English + ticker + high-signal flag)
-  coingecko.py                Crypto context
+  coingecko.py                Crypto context (what each coin is) + market data (cap/rank/momentum/volume/ATH, R4)
   reddit.py                   Reddit RSS
 validation/scorer.py          News scoring by source credibility
 storage/
@@ -72,7 +72,8 @@ budget.json                   User's current budget setting
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
    they confirm or temper a news catalyst, they don't gate or invent one. For ETF
    tickers (R3) the analyst additionally gets ETF RELATIVE STRENGTH (rotation vs SPY)
-   and ETF FACTS instead of company fundamentals — see "ETF rotation (R3)" below.
+   and ETF FACTS instead of company fundamentals — see "ETF rotation (R3)" below. For
+   crypto tickers (R4) it also gets CRYPTO MARKET DATA — see "Crypto conviction (R4)".
 4. Claude returns recommendations with `highly_recommended` field. **Watch floor:** on a
    normal news day it always returns ≥10 items (buys + shorts + watches) so the user sees a
    full read on the day; BUYS stay strict/few (usually 0-3, never padded), the rest are
@@ -129,6 +130,20 @@ gets two ETF-specific context blocks instead of (meaningless) company fundamenta
 These are CONTEXT only — R3 added no new recommendation fields; the output schema is unchanged.
 In `run_analysis`, news tickers are classified stock/etf/crypto: stocks get fundamentals, ETFs
 get rotation+facts, both get technicals/price history, crypto keeps its own path.
+
+### Crypto conviction (R4)
+Crypto rides on R2's conviction/credibility split: crypto sources never reach SEC-level credibility,
+so a capped `confidence_score` must NOT cap `conviction` — crypto ideas are scored RELATIVE TO CRYPTO.
+To give the analyst fact-based crypto inputs (the analog of fundamentals / ETF facts):
+- **CRYPTO MARKET DATA** — `ingestion/coingecko.py` (`fetch_coin_market_data`, `_extract_market_data`):
+  one batched `/coins/markets` call → price, market cap + rank, 24h/7d/30d momentum, 24h volume,
+  % from all-time high. Used like technicals (don't chase a coin already run-up or near ATH; oversold
+  pullback in an uptrend = better entry). The existing `fetch_crypto_context` (what the coin IS) stays.
+- A **CRYPTO prompt section** tells the analyst: take the genuinely high-credibility crypto catalysts
+  seriously (spot-ETF approvals / SEC filings = 1.0, major exchange listings, shipped protocol upgrades,
+  verifiable on-chain shifts, multi-source corroboration); require corroboration before high conviction
+  from a lone low-credibility source; crypto is long/watch only (never short — shorts are stocks-only).
+Context only — R4 added no new recommendation fields; output schema unchanged.
 
 ### Highly Recommended Criteria (all 4 must be met)
 1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)

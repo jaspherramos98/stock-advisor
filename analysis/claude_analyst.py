@@ -102,6 +102,7 @@ def _build_prompt(
     fundamentals:   dict = None,
     etf_strength:   dict = None,
     etf_facts:      dict = None,
+    crypto_market:  dict = None,
 ) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
@@ -120,6 +121,32 @@ def _build_prompt(
                 f"What it is: {ctx['description']}"
             )
         lines.append("=== END CONTEXT ===\n")
+
+    # Crypto market data block (R4) — quantitative, fact-based crypto facts.
+    if crypto_market:
+        cm_avail = {k: v for k, v in crypto_market.items() if v}
+        if cm_avail:
+            lines.append("=== CRYPTO MARKET DATA (momentum / size — confirm timing, don't chase) ===")
+            lines.append(
+                "The fact-based, quantitative read on each crypto asset (the crypto analog of company "
+                "fundamentals). Treat momentum like technicals: a coin already up big over 7d/30d or pinned "
+                "near its all-time high has likely priced in the catalyst → 'watch', don't chase; an oversold "
+                "pullback within an uptrend is a better entry. Larger market cap + higher volume = more "
+                "established/liquid; deep below ATH = more room but a weaker trend. Score conviction on the "
+                "strength and timeliness of the crypto-native catalyst RELATIVE TO CRYPTO — a capped source "
+                "credibility must NOT cap conviction for a genuinely strong crypto setup."
+            )
+            for ticker, m in cm_avail.items():
+                mc = m.get("market_cap")
+                mc_str = f"${mc/1e9:.1f}B" if isinstance(mc, (int, float)) and mc else "n/a"
+                vol = m.get("volume_24h")
+                vol_str = f"${vol/1e9:.1f}B" if isinstance(vol, (int, float)) and vol else "n/a"
+                lines.append(
+                    f"${ticker}: rank #{m.get('market_cap_rank')} | ${m.get('price')} | mkt cap {mc_str} | "
+                    f"24h {m.get('change_24h_pct')}% / 7d {m.get('change_7d_pct')}% / 30d {m.get('change_30d_pct')}% | "
+                    f"vol(24h) {vol_str} | {m.get('pct_from_ath')}% from ATH"
+                )
+            lines.append("=== END CRYPTO MARKET DATA ===\n")
 
     # 14-day price trend block
     if price_history:
@@ -458,6 +485,18 @@ def run_analysis(
     except Exception as e:
         print(f"Claude analyst: ETF context fetch failed: {e}")
 
+    # R4: crypto market data (price/cap/rank/momentum/volume/ATH) — for crypto tickers.
+    # Quantitative facts so a strong crypto-native catalyst can earn high conviction
+    # despite capped source credibility (judged relative to crypto, not the SEC).
+    crypto_market = {}
+    try:
+        if crypto_news_tickers and include_crypto:
+            from ingestion.coingecko import fetch_coin_market_data
+            crypto_market = fetch_coin_market_data(crypto_news_tickers)
+            print(f"Claude analyst: loaded market data for {sum(1 for v in crypto_market.values() if v)} crypto assets")
+    except Exception as e:
+        print(f"Claude analyst: crypto market data fetch failed: {e}")
+
     try:
         news_block = _build_prompt(
             unique_items,
@@ -467,6 +506,7 @@ def run_analysis(
             fundamentals=fundamentals,
             etf_strength=etf_strength,
             etf_facts=etf_facts,
+            crypto_market=crypto_market,
         )
     except Exception as e:
         import traceback
@@ -597,6 +637,21 @@ SHORTS — BEARISH IDEAS (stocks only, same fact-based discipline):
 - exit_condition for a short uses the SAME wording as a buy — "target X% gain, stop loss at Y%" —
   where for a short "gain" means YOUR PROFIT as the stock FALLS X%, and the stop triggers if it RISES
   Y% against you. Keep stops tight; losses on shorts are theoretically unbounded.
+
+CRYPTO — JUDGE ON ITS OWN TERMS (R4, long/watch only — never short crypto):
+- Crypto news sources never reach SEC-level credibility, so a capped confidence_score must NOT cap
+  conviction. Score a crypto idea's conviction RELATIVE TO CRYPTO: how strong, recent, and still-open
+  is the crypto-native catalyst? A great crypto setup can be high-conviction (even 75+) on a moderate-
+  credibility source — that is the whole point of separating conviction from credibility.
+- The genuinely high-credibility crypto catalysts (treat these seriously): a spot-ETF approval or other
+  SEC filing (those ARE 1.0 credibility), a major exchange listing (Coinbase/Binance), a shipped protocol
+  upgrade/hard fork or mainnet launch, a large verifiable on-chain/flows shift, or the SAME catalyst
+  corroborated across multiple independent crypto outlets. For a low-credibility single source (e.g. a
+  lone Reddit post), require corroboration before high conviction — otherwise it's a 'watch'.
+- Use the CRYPTO MARKET DATA block like technicals: don't chase a coin already up big over 7d/30d or
+  pinned near its all-time high (the move is priced in → 'watch'); an oversold pullback inside an uptrend
+  is a better entry. Bigger cap + higher volume = more established; deep below ATH = more room, weaker trend.
+- Same priced-in / catalyst-timing discipline as everywhere else. Crypto is long or watch here only.
 
 HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
 1. The catalyst is unambiguous AND recent — it happened or was officially announced within roughly the

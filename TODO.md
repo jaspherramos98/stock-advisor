@@ -211,12 +211,24 @@ Original design notes: Compute RS-Ratio (ETF strength vs SPY) and RS-Momentum fr
 we already fetch; rank into Leading/Weakening/Lagging/Improving. Swap the (meaningless-for-funds)
 company-fundamentals block for ETF facts. Reuses the technicals engine + R2's conviction field.
 
-### R4. Crypto per-asset-class conviction
-Rides on R2: judge crypto against the best crypto sources (not the SEC), so a strong
-catalyst can earn high conviction despite capped credibility. Add crypto-native
-high-credibility signals: exchange listings, spot-ETF approvals (these ARE SEC
-filings → 1.0), on-chain/CoinGecko shifts, multi-source corroboration.
-- Done when: crypto eligible for high conviction via class-relative scoring.
+### R4. Crypto per-asset-class conviction  ✅ on `r4-crypto-conviction` (pending live test + merge)
+Done additively (CONTEXT only — no new recommendation fields, output schema unchanged):
+- `ingestion/coingecko.py` — `fetch_coin_market_data()` + `_extract_market_data()`: one batched
+  `/coins/markets` call → price, market cap + rank, 24h/7d/30d momentum, 24h volume, % from ATH.
+  The crypto analog of fundamentals/ETF-facts; existing `fetch_crypto_context` (what the coin is) kept.
+- `analysis/claude_analyst.py` — new CRYPTO MARKET DATA prompt block (used like technicals: don't chase
+  a coin already run-up / near ATH) + a CRYPTO system-prompt section: score conviction RELATIVE TO CRYPTO
+  so capped source credibility doesn't cap conviction; take real high-credibility crypto catalysts
+  seriously (spot-ETF/SEC filings = 1.0, major exchange listings, shipped protocol upgrades, on-chain
+  shifts, multi-source corroboration); require corroboration before high conviction from a lone
+  low-credibility source; crypto is long/watch only (never short). Wired into run_analysis for crypto
+  news tickers when crypto is enabled.
+- Verified: extractor unit test (synthetic + missing-field), prompt-block render, mock boot, + one free
+  live CoinGecko fetch (BTC/ETH/SOL market data, no LLM tokens). `CLAUDE.md` updated.
+
+Original design notes: Rides on R2 — judge crypto against the best crypto sources (not the SEC), so a
+strong catalyst can earn high conviction despite capped credibility. Done when: crypto eligible for high
+conviction via class-relative scoring.
 
 ### R5. Options — DEFERRED (evidence-gated, income-only if ever)
 Research conclusion: AI/LLM picking option DIRECTION has no credible out-of-sample
