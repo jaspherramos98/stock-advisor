@@ -1650,7 +1650,13 @@ st_html("""
     const d = parentDoc.createElement('div');
     d.className = 'argus-msg argus-' + role;
     if (role === 'assistant') {
-      d.innerHTML = text.replace(/\\n/g,'<br>').replace(/[*][*](.*?)[*][*]/g,'<strong>$1</strong>') +
+      // Escape HTML FIRST so model output can never inject active markup (DOM XSS),
+      // then apply our own safe **bold** / newline formatting on the escaped text.
+      const esc = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      d.innerHTML = esc.replace(/\\n/g,'<br>').replace(/[*][*](.*?)[*][*]/g,'<strong>$1</strong>') +
         '<div class="argus-disclaimer">Not financial advice — always do your own research.</div>';
     } else {
       d.textContent = text;
