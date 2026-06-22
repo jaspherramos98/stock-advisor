@@ -276,7 +276,9 @@ Each recommendation must have:
 ## Dashboard Tabs
 1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders, add to positions
 2. **Portfolio** — invested money, P&L trend graph (yfinance), position breakdown
-3. **My Positions** — open/closed positions, manual entry, price updates, snooze alerts
+3. **My Positions** — open/closed positions, manual entry, price updates, snooze alerts. Open-positions
+   table + each expander show a computed **Stop @** price (`_stop_loss_price` parses "stop loss at X%"
+   from exit_condition × reference price; long = ref×(1−X), short = ref×(1+X))
 4. **Watch List** — Finnhub ticker watchlist editor per asset type
 5. **History** — Google Sheets export history with charts
 

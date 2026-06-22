@@ -99,6 +99,23 @@ def _live_buying_power(force: bool = False):
     return bp
 
 
+def _stop_loss_price(exit_condition: str, ref_price: float, direction: str = "buy"):
+    """
+    Parse "stop loss at X%" from an exit_condition and return the trigger PRICE, or
+    None if there's no parseable stop or no reference price.
+    - Long:  ref × (1 − X/100)  (you exit when price falls X% below entry)
+    - Short: ref × (1 + X/100)  (you exit when price rises X% against you)
+    """
+    import re
+    if not exit_condition or not ref_price:
+        return None
+    m = re.search(r"stop\s*loss\s*at\s*(\d+(?:\.\d+)?)\s*%", exit_condition.lower())
+    if not m:
+        return None
+    pct = float(m.group(1)) / 100.0
+    return round(ref_price * (1 + pct), 2) if direction == "short" else round(ref_price * (1 - pct), 2)
+
+
 def _build_argus_context() -> str:
     """
     Builds a real-time snapshot of the user's portfolio and today's
@@ -1089,6 +1106,7 @@ if True:
                 if change_pct is not None and p.get("direction") == "short":
                     change_pct = -change_pct  # shorts profit when price falls
                 opened     = datetime.fromisoformat(p["opened_at"]).strftime("%Y-%m-%d")
+                stop_px    = _stop_loss_price(p["exit_condition"], ref_price, p.get("direction", "buy"))
 
                 rows.append({
                     "Ticker":     ticker,
@@ -1097,6 +1115,7 @@ if True:
                     "Ref Price":  f"${ref_price:.2f}",
                     "Live Price": f"${live_price:.2f}" if live_price else "N/A",
                     "Change":     f"{change_pct:+.1f}%" if change_pct is not None else "N/A",
+                    "Stop @":     f"${stop_px:.2f}" if stop_px is not None else "—",
                     "Exit when":  p["exit_condition"],
                     "Bought":     p.get("entry_date") or opened,
                 })
@@ -1138,6 +1157,9 @@ if True:
                     c4.metric("Bought on", entry_date_display)
 
                     st.markdown(f"**Exit when:** {p['exit_condition']}")
+                    stop_px = _stop_loss_price(p["exit_condition"], ref_price, p.get("direction", "buy"))
+                    if stop_px is not None:
+                        st.markdown(f"**Stop-loss price:** \\${stop_px:.2f}  _(from {ref_price:.2f} reference)_")
                     st.markdown(f"**Based on:** _{p['source_title']}_")
 
                     # White paper link for crypto positions
