@@ -5,6 +5,7 @@ import json
 import pandas as pd
 from datetime import datetime
 import datetime as dt
+from functools import lru_cache
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -64,12 +65,71 @@ def load_budget() -> float:
 import threading
 import requests as _requests
 
+@lru_cache(maxsize=8)
+def _nyse_holidays(year: int) -> dict:
+    """
+    {date: holiday_name} of NYSE full-closure holidays for `year`, built from pandas'
+    holiday primitives (no extra dependency). Good Friday is derived from Easter; the
+    weekend-observance rules match NYSE (Sat→Fri for most; New Year's only shifts
+    Sun→Mon, since NYSE stays open the preceding Friday when Jan 1 is a Saturday).
+    Cached per year.
+    """
+    from pandas.tseries.holiday import (
+        AbstractHolidayCalendar, Holiday, nearest_workday, sunday_to_monday,
+        USMartinLutherKingJr, USPresidentsDay, USMemorialDay, USLaborDay,
+        USThanksgivingDay, GoodFriday,
+    )
+
+    class _NYSECal(AbstractHolidayCalendar):
+        rules = [
+            Holiday("New Year's Day", month=1, day=1, observance=sunday_to_monday),
+            USMartinLutherKingJr,
+            USPresidentsDay,
+            GoodFriday,
+            USMemorialDay,
+            Holiday("Juneteenth", month=6, day=19, start_date="2021-06-18", observance=nearest_workday),
+            Holiday("Independence Day", month=7, day=4, observance=nearest_workday),
+            USLaborDay,
+            USThanksgivingDay,
+            Holiday("Christmas", month=12, day=25, observance=nearest_workday),
+        ]
+
+    series = _NYSECal().holidays(start=f"{year}-01-01", end=f"{year}-12-31", return_name=True)
+    return {ts.date(): name for ts, name in series.items()}
+
+
+@lru_cache(maxsize=8)
+def _nyse_early_closes(year: int) -> frozenset:
+    """
+    Dates NYSE closes early (1:00 PM ET) for `year`: the day after Thanksgiving,
+    Christmas Eve, and July 3 — each only when it's a weekday and not itself a full
+    holiday. Cached per year.
+    """
+    import datetime as _dt
+    import pandas as pd
+    from pandas.tseries.holiday import USThanksgivingDay
+
+    closes = set()
+    tg = USThanksgivingDay.dates(f"{year}-01-01", f"{year}-12-31")
+    if len(tg):
+        closes.add((tg[0] + pd.Timedelta(days=1)).date())  # Friday after Thanksgiving
+    for m, d in ((12, 24), (7, 3)):
+        try:
+            day = _dt.date(year, m, d)
+            if day.weekday() < 5:
+                closes.add(day)
+        except ValueError:
+            pass
+    closes -= set(_nyse_holidays(year))  # a full holiday is never an "early close"
+    return frozenset(closes)
+
+
 def _market_status() -> str:
     """
     Returns a human-readable US market-session status line in Eastern time so the
-    chatbot can time advice to the session. Covers regular hours, pre-/after-market,
-    and weekends; notes crypto trades 24/7. Does NOT account for market holidays
-    (treated as a normal weekday) — good enough for timing guidance, not execution.
+    chatbot can time advice to the session: regular hours, pre-/after-market, weekends,
+    NYSE holidays, and half-day (1 PM ET) early closes. Crypto noted as 24/7. The
+    holiday lookup is wrapped so any failure degrades gracefully to weekday/time logic.
     """
     from datetime import datetime, time as _time
     try:
@@ -79,16 +139,41 @@ def _market_status() -> str:
         now = datetime.now()  # fall back to local time if tz data is unavailable
 
     stamp = now.strftime("%A %Y-%m-%d %I:%M %p ET")
-    t, wd = now.time(), now.weekday()  # wd: 0=Mon .. 6=Sun
+    t, wd, today = now.time(), now.weekday(), now.date()  # wd: 0=Mon .. 6=Sun
 
     if wd >= 5:
-        return (f"MARKET STATUS: CLOSED (weekend) — {stamp}. US stocks/ETFs are closed until "
-                f"Monday 9:30 AM ET. Crypto trades 24/7.")
+        return (f"MARKET STATUS: CLOSED (weekend) — {stamp}. US stocks/ETFs are closed until the "
+                f"next weekday session (9:30 AM ET). Crypto trades 24/7.")
+
+    # Holidays / early closes (defensive — never let this break the chatbot).
+    try:
+        holidays     = _nyse_holidays(today.year)
+        early_closes = _nyse_early_closes(today.year)
+    except Exception:
+        holidays, early_closes = {}, frozenset()
+
+    if today in holidays:
+        return (f"MARKET STATUS: CLOSED ({holidays[today]} — market holiday) — {stamp}. US stocks/ETFs "
+                f"are closed today. Crypto trades 24/7.")
+
+    is_early = today in early_closes
+    if _time(4, 0) <= t < _time(9, 30):
+        extra = " NOTE: half-day — early close at 1:00 PM ET." if is_early else ""
+        return (f"MARKET STATUS: PRE-MARKET — {stamp}. Regular session opens 9:30 AM ET; pre-market "
+                f"liquidity is thin and gaps are common.{extra}")
+
+    if is_early:
+        if _time(9, 30) <= t < _time(13, 0):
+            return (f"MARKET STATUS: OPEN — HALF DAY — {stamp}. US stocks/ETFs trading now but close "
+                    f"early at 1:00 PM ET (not 4:00).")
+        if _time(13, 0) <= t < _time(20, 0):
+            return (f"MARKET STATUS: AFTER-HOURS (half-day) — {stamp}. The shortened session closed at "
+                    f"1:00 PM ET; after-hours liquidity is thin.")
+        return (f"MARKET STATUS: CLOSED — {stamp}. Today was a half-day (1:00 PM ET close). "
+                f"Crypto trades 24/7.")
+
     if _time(9, 30) <= t < _time(16, 0):
         return f"MARKET STATUS: OPEN — regular session — {stamp}. US stocks/ETFs are trading now."
-    if _time(4, 0) <= t < _time(9, 30):
-        return (f"MARKET STATUS: PRE-MARKET — {stamp}. Regular session opens 9:30 AM ET; pre-market "
-                f"liquidity is thin and gaps are common.")
     if _time(16, 0) <= t < _time(20, 0):
         return (f"MARKET STATUS: AFTER-HOURS — {stamp}. Regular session closed at 4:00 PM ET; "
                 f"after-hours liquidity is thin and gaps are common.")
