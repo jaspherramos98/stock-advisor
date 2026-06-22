@@ -5,11 +5,14 @@
     "asset_type": "stock",
     "direction": "buy",
     "entry_rationale": "MOCK: Strong AI product pipeline driving services revenue growth.",
+    "entry_trigger": "now",
     "exit_condition": "target 8% gain, stop loss at 3%",
     "risk_level": "low",
     "confidence_score": 0.78,
+    "conviction": 72,
     "flagged": false,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   },
   {
     "ticker": "NVDA",
@@ -17,11 +20,14 @@
     "asset_type": "stock",
     "direction": "buy",
     "entry_rationale": "MOCK: Data center demand accelerating on AI infrastructure buildout.",
+    "entry_trigger": "now",
     "exit_condition": "target 10% gain, stop loss at 5%",
     "risk_level": "medium",
     "confidence_score": 0.72,
+    "conviction": 78,
     "flagged": false,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   },
   {
     "ticker": "GOOGL",
@@ -29,11 +35,14 @@
     "asset_type": "stock",
     "direction": "watch",
     "entry_rationale": "MOCK: Antitrust concerns creating uncertainty despite strong ad revenue.",
-    "exit_condition": "clarity on antitrust ruling or 3 weeks, stop loss at 4%",
+    "entry_trigger": "breaks above $185 on above-average volume",
+    "exit_condition": "target 7% gain, stop loss at 4%",
     "risk_level": "medium",
     "confidence_score": 0.65,
+    "conviction": 45,
     "flagged": false,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   },
   {
     "ticker": "TSLA",
@@ -41,23 +50,29 @@
     "asset_type": "stock",
     "direction": "watch",
     "entry_rationale": "MOCK: EV market share recovery signals but execution risk remains.",
-    "exit_condition": "post-earnings reaction or 2 weeks, stop loss at 5%",
+    "entry_trigger": "post-earnings pullback to ~$240 that holds",
+    "exit_condition": "target 9% gain, stop loss at 5%",
     "risk_level": "medium",
     "confidence_score": 0.58,
+    "conviction": 40,
     "flagged": false,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   },
   {
     "ticker": "SPY",
     "company_name": "SPDR S&P 500 ETF Trust",
-    "asset_type": "stock",
+    "asset_type": "etf",
     "direction": "buy",
     "entry_rationale": "MOCK: Broad market strength on positive jobs data.",
+    "entry_trigger": "now",
     "exit_condition": "target 3% gain, stop loss at 1.5%",
     "risk_level": "low",
     "confidence_score": 0.80,
+    "conviction": 60,
     "flagged": false,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   },
   {
     "ticker": "BTC",
@@ -65,11 +80,14 @@
     "asset_type": "crypto",
     "direction": "watch",
     "entry_rationale": "MOCK: Institutional adoption growing but currently in 14% downtrend.",
+    "entry_trigger": "reclaims $65k and downtrend breaks",
     "exit_condition": "target 8% gain, stop loss at 6% given high volatility",
     "risk_level": "high",
     "confidence_score": 0.52,
+    "conviction": 50,
     "flagged": false,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   },
   {
     "ticker": "ETH",
@@ -77,10 +95,13 @@
     "asset_type": "crypto",
     "direction": "watch",
     "entry_rationale": "MOCK: Layer 2 adoption accelerating but unverified price target source.",
+    "entry_trigger": "second independent source confirms the catalyst",
     "exit_condition": "target 10% gain, stop loss at 5%",
     "risk_level": "high",
     "confidence_score": 0.48,
+    "conviction": 35,
     "flagged": true,
-    "source_title": "MOCK DATA — Claude API not called"
+    "source_title": "MOCK DATA — Claude API not called",
+    "highly_recommended": false
   }
 ]
