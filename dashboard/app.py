@@ -38,7 +38,11 @@ load_dotenv()
 CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache.json")
 CACHE_BACKUP_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache_backup.json")
 BUDGET_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "budget.json")
-MIN_BUDGET  = 10.0  # must match the number_input min_value below
+# Budget can be set to any value >= 0 (manual entry). Dollar allocation only kicks in
+# at MIN_ALLOCATION_BUDGET (enforced in calculator/portfolio.py); below that the budget
+# is still saved and recommendations show with $0.
+MIN_BUDGET  = 0.0  # number_input floor
+from calculator.portfolio import MIN_ALLOCATION_BUDGET
 
 
 # --- Helper functions (must be defined before any UI code) ---
@@ -52,8 +56,8 @@ def load_budget() -> float:
     try:
         with open(BUDGET_FILE, "r") as f:
             value = float(json.load(f).get("budget", 1000.0))
-        # Never hand the widget a value below its minimum (e.g. a synced
-        # $0 buying power) — that crashes st.number_input.
+        # Never hand the widget a value below its minimum (0) — negatives would
+        # crash st.number_input.
         return max(value, MIN_BUDGET)
     except Exception:
         return 1000.0
@@ -359,7 +363,7 @@ try:
         if _rh_avail():
             _bp = _live_buying_power()
             if _bp is not None:
-                st.markdown(f"**💵 Buying power:** ${_bp:,.2f}")
+                st.markdown(f"**💵 Buying power:** \\${_bp:,.2f}")
 except Exception:
     pass  # badge is informational — never block the dashboard on it
 
@@ -379,21 +383,9 @@ with st.sidebar:
         step=50.0,
         help="Only buy signals receive allocations. Watch signals show $0. This tool is experimental — only invest what you're comfortable with.",
     )
-    st.caption("⚠️ Experimental. Start small.")
+    st.caption(f"⚠️ Experimental. Start small. Dollar allocation runs at \\${MIN_ALLOCATION_BUDGET:,.0f}+; "
+               f"below that, ideas still show with \\$0.")
     save_budget(budget)
-
-    # Warn if the allocation budget exceeds the real cash available to deploy.
-    try:
-        from ingestion.robinhood import is_available as _rh_avail2
-        if _rh_avail2():
-            _bp_chk = _live_buying_power()
-            if _bp_chk is not None and budget > _bp_chk:
-                st.warning(
-                    f"Your budget (${budget:,.2f}) is above your Robinhood buying power "
-                    f"(${_bp_chk:,.2f}). Allocations may exceed the cash you can actually deploy."
-                )
-    except Exception:
-        pass
 
     st.divider()
 
@@ -421,12 +413,6 @@ with st.sidebar:
                 bp = _live_buying_power(force=True)
             if bp is None:
                 st.error("Could not read buying power. Check credentials in .env.")
-            elif bp < MIN_BUDGET:
-                st.warning(
-                    f"Your Robinhood buying power is ${bp:,.2f} — below the ${MIN_BUDGET:,.0f} "
-                    "minimum, so the budget was left unchanged. You're likely fully invested; "
-                    "free up cash or set the budget manually."
-                )
             else:
                 save_budget(bp)
                 st.success(f"Budget set to your Robinhood buying power: ${bp:,.2f}")

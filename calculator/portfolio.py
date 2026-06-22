@@ -17,6 +17,11 @@ MAX_SINGLE_ALLOCATION = 0.40
 # so they don't reduce the long budget — they're shown as separate "short exposure").
 MAX_SHORT_EXPOSURE = 0.30
 
+# Below this budget we don't allocate dollars — the budget can still be set to any
+# value >= 0 (manual entry), but recommendations just show with $0 until it reaches
+# this floor. Keeps tiny/placeholder budgets from producing meaningless sub-dollar buys.
+MIN_ALLOCATION_BUDGET = 10.0
+
 
 def _compute_weight(rec: dict) -> float:
     """
@@ -57,6 +62,18 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
     if not buys and not shorts and not watches:
         print("All recommendations were 'avoid' — nothing to allocate.")
         return []
+
+    # Below the allocation floor: keep the budget but allocate no dollars. Surface every
+    # rec at $0 (still sorted) so the user sees the analysis without sub-dollar buys.
+    if budget < MIN_ALLOCATION_BUDGET:
+        print(f"Budget ${budget:,.2f} is below the ${MIN_ALLOCATION_BUDGET:,.0f} allocation floor — "
+              f"showing recommendations with $0 allocation.")
+        zero = [_build_result(rec, 0.0, 0.0) for rec in (buys + shorts + watches)]
+        hr_b = [r for r in zero if r["direction"] == "buy" and r.get("highly_recommended")]
+        rb   = [r for r in zero if r["direction"] == "buy" and not r.get("highly_recommended")]
+        sh   = [r for r in zero if r["direction"] == "short"]
+        wt   = [r for r in zero if r["direction"] == "watch"]
+        return hr_b + rb + sh + wt
 
     results = []
 
