@@ -65,120 +65,33 @@ def load_budget() -> float:
 import threading
 import requests as _requests
 
-@lru_cache(maxsize=8)
-def _nyse_holidays(year: int) -> dict:
+# Market-session logic lives in the shared market_hours module (used by the dashboard
+# header badge, the chatbot context, and the alert checker — one source of truth).
+from market_hours import market_session, market_status_line
+
+
+# Live buying power is read on every chat open AND for the header badge; cache it for a
+# short TTL so reopening the chat / reruns don't re-hit Robinhood each time.
+_BP_CACHE = {"value": None, "ts": 0.0}
+_BP_TTL_SECONDS = 60
+
+
+def _live_buying_power(force: bool = False):
     """
-    {date: holiday_name} of NYSE full-closure holidays for `year`, built from pandas'
-    holiday primitives (no extra dependency). Good Friday is derived from Easter; the
-    weekend-observance rules match NYSE (Sat→Fri for most; New Year's only shifts
-    Sun→Mon, since NYSE stays open the preceding Friday when Jan 1 is a Saturday).
-    Cached per year.
+    Returns live Robinhood buying power (float) or None, cached for _BP_TTL_SECONDS.
+    `force=True` bypasses the cache (used by the sidebar 'Sync' button).
     """
-    from pandas.tseries.holiday import (
-        AbstractHolidayCalendar, Holiday, nearest_workday, sunday_to_monday,
-        USMartinLutherKingJr, USPresidentsDay, USMemorialDay, USLaborDay,
-        USThanksgivingDay, GoodFriday,
-    )
-
-    class _NYSECal(AbstractHolidayCalendar):
-        rules = [
-            Holiday("New Year's Day", month=1, day=1, observance=sunday_to_monday),
-            USMartinLutherKingJr,
-            USPresidentsDay,
-            GoodFriday,
-            USMemorialDay,
-            Holiday("Juneteenth", month=6, day=19, start_date="2021-06-18", observance=nearest_workday),
-            Holiday("Independence Day", month=7, day=4, observance=nearest_workday),
-            USLaborDay,
-            USThanksgivingDay,
-            Holiday("Christmas", month=12, day=25, observance=nearest_workday),
-        ]
-
-    series = _NYSECal().holidays(start=f"{year}-01-01", end=f"{year}-12-31", return_name=True)
-    return {ts.date(): name for ts, name in series.items()}
-
-
-@lru_cache(maxsize=8)
-def _nyse_early_closes(year: int) -> frozenset:
-    """
-    Dates NYSE closes early (1:00 PM ET) for `year`: the day after Thanksgiving,
-    Christmas Eve, and July 3 — each only when it's a weekday and not itself a full
-    holiday. Cached per year.
-    """
-    import datetime as _dt
-    import pandas as pd
-    from pandas.tseries.holiday import USThanksgivingDay
-
-    closes = set()
-    tg = USThanksgivingDay.dates(f"{year}-01-01", f"{year}-12-31")
-    if len(tg):
-        closes.add((tg[0] + pd.Timedelta(days=1)).date())  # Friday after Thanksgiving
-    for m, d in ((12, 24), (7, 3)):
-        try:
-            day = _dt.date(year, m, d)
-            if day.weekday() < 5:
-                closes.add(day)
-        except ValueError:
-            pass
-    closes -= set(_nyse_holidays(year))  # a full holiday is never an "early close"
-    return frozenset(closes)
-
-
-def _market_status() -> str:
-    """
-    Returns a human-readable US market-session status line in Eastern time so the
-    chatbot can time advice to the session: regular hours, pre-/after-market, weekends,
-    NYSE holidays, and half-day (1 PM ET) early closes. Crypto noted as 24/7. The
-    holiday lookup is wrapped so any failure degrades gracefully to weekday/time logic.
-    """
-    from datetime import datetime, time as _time
+    import time as _t
+    now = _t.monotonic()
+    if not force and _BP_CACHE["value"] is not None and (now - _BP_CACHE["ts"]) < _BP_TTL_SECONDS:
+        return _BP_CACHE["value"]
     try:
-        from zoneinfo import ZoneInfo
-        now = datetime.now(ZoneInfo("America/New_York"))
+        from ingestion.robinhood import fetch_buying_power, is_available
+        bp = fetch_buying_power() if is_available() else None
     except Exception:
-        now = datetime.now()  # fall back to local time if tz data is unavailable
-
-    stamp = now.strftime("%A %Y-%m-%d %I:%M %p ET")
-    t, wd, today = now.time(), now.weekday(), now.date()  # wd: 0=Mon .. 6=Sun
-
-    if wd >= 5:
-        return (f"MARKET STATUS: CLOSED (weekend) — {stamp}. US stocks/ETFs are closed until the "
-                f"next weekday session (9:30 AM ET). Crypto trades 24/7.")
-
-    # Holidays / early closes (defensive — never let this break the chatbot).
-    try:
-        holidays     = _nyse_holidays(today.year)
-        early_closes = _nyse_early_closes(today.year)
-    except Exception:
-        holidays, early_closes = {}, frozenset()
-
-    if today in holidays:
-        return (f"MARKET STATUS: CLOSED ({holidays[today]} — market holiday) — {stamp}. US stocks/ETFs "
-                f"are closed today. Crypto trades 24/7.")
-
-    is_early = today in early_closes
-    if _time(4, 0) <= t < _time(9, 30):
-        extra = " NOTE: half-day — early close at 1:00 PM ET." if is_early else ""
-        return (f"MARKET STATUS: PRE-MARKET — {stamp}. Regular session opens 9:30 AM ET; pre-market "
-                f"liquidity is thin and gaps are common.{extra}")
-
-    if is_early:
-        if _time(9, 30) <= t < _time(13, 0):
-            return (f"MARKET STATUS: OPEN — HALF DAY — {stamp}. US stocks/ETFs trading now but close "
-                    f"early at 1:00 PM ET (not 4:00).")
-        if _time(13, 0) <= t < _time(20, 0):
-            return (f"MARKET STATUS: AFTER-HOURS (half-day) — {stamp}. The shortened session closed at "
-                    f"1:00 PM ET; after-hours liquidity is thin.")
-        return (f"MARKET STATUS: CLOSED — {stamp}. Today was a half-day (1:00 PM ET close). "
-                f"Crypto trades 24/7.")
-
-    if _time(9, 30) <= t < _time(16, 0):
-        return f"MARKET STATUS: OPEN — regular session — {stamp}. US stocks/ETFs are trading now."
-    if _time(16, 0) <= t < _time(20, 0):
-        return (f"MARKET STATUS: AFTER-HOURS — {stamp}. Regular session closed at 4:00 PM ET; "
-                f"after-hours liquidity is thin and gaps are common.")
-    return (f"MARKET STATUS: CLOSED — {stamp}. US stocks/ETFs are closed (next regular session "
-            f"9:30 AM ET). Crypto trades 24/7.")
+        bp = None
+    _BP_CACHE["value"], _BP_CACHE["ts"] = bp, now
+    return bp
 
 
 def _build_argus_context() -> str:
@@ -189,7 +102,7 @@ def _build_argus_context() -> str:
     lines = []
 
     # --- Market session (so advice can be timed to the session) ---
-    lines.append(_market_status())
+    lines.append(market_status_line())
 
     # --- Budget ---
     try:
@@ -200,9 +113,9 @@ def _build_argus_context() -> str:
 
     # --- Live Robinhood buying power (real cash available now — not the sync button) ---
     try:
-        from ingestion.robinhood import fetch_buying_power, is_available
+        from ingestion.robinhood import is_available
         if is_available():
-            bp = fetch_buying_power()
+            bp = _live_buying_power()
             if bp is not None:
                 lines.append(f"ROBINHOOD BUYING POWER (live, real cash available now): ${bp:,.2f}")
             else:
@@ -435,6 +348,21 @@ st.set_page_config(
 st.title("🔍 Argus")
 st.caption("AI-powered market intelligence. Experimental — not financial advice.")
 
+# --- Market session + live buying power badge (at-a-glance, mirrors the chatbot) ---
+try:
+    _sess = market_session()
+    _hdr_l, _hdr_r = st.columns([3, 2])
+    with _hdr_l:
+        st.markdown(f"**{_sess['badge']}**  ·  {_sess['stamp']}")
+    with _hdr_r:
+        from ingestion.robinhood import is_available as _rh_avail
+        if _rh_avail():
+            _bp = _live_buying_power()
+            if _bp is not None:
+                st.markdown(f"**💵 Buying power:** ${_bp:,.2f}")
+except Exception:
+    pass  # badge is informational — never block the dashboard on it
+
 # Mock mode banner
 if os.getenv("MOCK_MODE", "false").lower() == "true":
     st.warning("⚠️ MOCK MODE active — showing test data. No real Claude API calls. Set MOCK_MODE=false in .env for real analysis.")
@@ -453,6 +381,19 @@ with st.sidebar:
     )
     st.caption("⚠️ Experimental. Start small.")
     save_budget(budget)
+
+    # Warn if the allocation budget exceeds the real cash available to deploy.
+    try:
+        from ingestion.robinhood import is_available as _rh_avail2
+        if _rh_avail2():
+            _bp_chk = _live_buying_power()
+            if _bp_chk is not None and budget > _bp_chk:
+                st.warning(
+                    f"Your budget (${budget:,.2f}) is above your Robinhood buying power "
+                    f"(${_bp_chk:,.2f}). Allocations may exceed the cash you can actually deploy."
+                )
+    except Exception:
+        pass
 
     st.divider()
 
@@ -477,7 +418,7 @@ with st.sidebar:
 
         if st.button("💰 Sync budget to buying power", use_container_width=True):
             with st.spinner("Reading Robinhood buying power..."):
-                bp = rh_buying_power()
+                bp = _live_buying_power(force=True)
             if bp is None:
                 st.error("Could not read buying power. Check credentials in .env.")
             elif bp < MIN_BUDGET:
