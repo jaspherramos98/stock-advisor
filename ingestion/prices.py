@@ -288,6 +288,66 @@ def fetch_etf_relative_strength(etf_tickers: list[str], benchmark: str = "SPY") 
     return results
 
 
+def fetch_market_regime() -> dict | None:
+    """
+    Overall US market regime from SPY (~1y history) + VIX — deterministic context so the
+    analyst doesn't fight the tape. Returns SPY trend (vs 50/200-day SMA, golden/death
+    cross), distance from the 52-week high, RSI, the VIX level + bucket, and an overall
+    risk-on / neutral / risk-off read. Returns None on failure (never raises to caller).
+    """
+    import yfinance as yf
+
+    try:
+        spy = yf.Ticker("SPY").history(period="1y", interval="1d")
+        if spy.empty or len(spy) < 60:
+            print("Market regime: SPY history unavailable.")
+            return None
+
+        closes = spy["Close"].tolist()
+        last   = float(closes[-1])
+        tech   = _compute_technicals(
+            closes, spy["High"].tolist(), spy["Low"].tolist(),
+            spy["Volume"].tolist() if "Volume" in spy else [],
+        )
+
+        vix = None
+        try:
+            v = yf.Ticker("^VIX").history(period="5d", interval="1d")
+            if not v.empty:
+                vix = round(float(v["Close"].iloc[-1]), 1)
+        except Exception:
+            vix = None
+
+        if   vix is None: vix_state = "unknown"
+        elif vix < 15:    vix_state = "calm"
+        elif vix < 20:    vix_state = "normal"
+        elif vix < 30:    vix_state = "elevated"
+        else:             vix_state = "high"
+
+        above200 = tech.get("price_vs_sma200")
+        if above200 == "above" and vix_state in ("calm", "normal", "unknown"):
+            regime = "risk-on (favorable for longs)"
+        elif above200 == "below" or vix_state == "high":
+            regime = "risk-off (defensive)"
+        else:
+            regime = "neutral / mixed"
+
+        return {
+            "spy_price":         round(last, 2),
+            "price_vs_sma50":    tech.get("price_vs_sma50"),
+            "price_vs_sma200":   above200,
+            "ma_trend":          tech.get("ma_trend"),
+            "pct_from_52w_high": tech.get("pct_from_52w_high"),
+            "rsi_14":            tech.get("rsi_14"),
+            "vix":               vix,
+            "vix_state":         vix_state,
+            "regime":            regime,
+        }
+    except Exception as e:
+        print(f"Market regime fetch error: {e}")
+        return None
+
+
 def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[str, dict]:
     """
     Fetches ~1 year of daily price history using Yahoo Finance (yfinance).

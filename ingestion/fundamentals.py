@@ -48,10 +48,48 @@ def _extract_fundamentals(info: dict) -> dict:
     }
 
 
+def _next_earnings(tk) -> tuple:
+    """
+    (next_earnings_date_str, days_to_earnings) from a yfinance Ticker, or (None, None).
+    Earnings within a few days = binary gap risk, so the analyst should size down / wait.
+    yfinance exposes this inconsistently across versions, so it's wrapped and best-effort.
+    """
+    import datetime as _dt
+
+    def _to_date(x):
+        if isinstance(x, _dt.datetime):
+            return x.date()
+        if isinstance(x, _dt.date):
+            return x
+        try:
+            return _dt.date.fromisoformat(str(x)[:10])
+        except Exception:
+            return None
+
+    try:
+        cal = tk.calendar
+        edate = None
+        if isinstance(cal, dict):
+            ed = cal.get("Earnings Date")
+            edate = _to_date(ed[0] if isinstance(ed, (list, tuple)) and ed else ed)
+        elif cal is not None and hasattr(cal, "loc"):  # older yfinance: DataFrame
+            try:
+                edate = _to_date(cal.loc["Earnings Date"][0])
+            except Exception:
+                edate = None
+        if edate is None:
+            return (None, None)
+        days = (edate - _dt.date.today()).days
+        return (edate.isoformat(), days)
+    except Exception:
+        return (None, None)
+
+
 def fetch_fundamentals(tickers: list[str]) -> dict[str, dict]:
     """
     Returns {ticker: fundamentals_dict} for the given stock tickers. Tickers that
     error out (or have no data — e.g. crypto, obscure symbols) map to None.
+    Each dict also carries next_earnings_date / days_to_earnings (event risk).
     Cached per process so repeated lookups in a session are free.
     """
     import yfinance as yf
@@ -62,10 +100,15 @@ def fetch_fundamentals(tickers: list[str]) -> dict[str, dict]:
             results[ticker] = _CACHE[ticker]
             continue
         try:
-            info = yf.Ticker(ticker).info
+            tk   = yf.Ticker(ticker)
+            info = tk.info
             data = _extract_fundamentals(info)
-            # Treat an all-empty result as no data.
-            results[ticker] = data if any(v is not None for v in data.values()) else None
+            edate, days = _next_earnings(tk)
+            data["next_earnings_date"] = edate
+            data["days_to_earnings"]   = days
+            # Treat an all-empty result as no data (ignore the earnings keys for that test).
+            core = {k: v for k, v in data.items() if k not in ("next_earnings_date", "days_to_earnings")}
+            results[ticker] = data if any(v is not None for v in core.values()) else None
         except Exception as e:
             print(f"Fundamentals error for {ticker}: {e}")
             results[ticker] = None
