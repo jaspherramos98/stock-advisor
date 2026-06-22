@@ -166,6 +166,9 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 - `HIGHLY_RECOMMENDED_MULTIPLIER = 2.0` — HR buys get 2x capital weight
 - `MAX_SINGLE_ALLOCATION = 0.40` — no single stock gets more than 40%
 - `MAX_SHORT_EXPOSURE = 0.30` — total short exposure capped at 30% of budget
+- `MIN_ALLOCATION_BUDGET = 10.0` — budget can be set to any value ≥ 0 (the dashboard
+  `number_input` floor is `MIN_BUDGET = 0.0`), but dollar allocation only runs at ≥ $10;
+  below that `calculate_allocations` returns every rec at $0 (analysis still shown).
 - Sort order: HR buys → regular buys → shorts → watches
 - Shorts (R1) are a **separate sleeve** (use margin, not the long cash budget) — buy
   allocation logic is untouched. Shorts are stocks-only, never highly_recommended.
