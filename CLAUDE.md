@@ -1,5 +1,15 @@
 # Argus Stock Advisor — Claude Context
 
+## Working Rules (ALWAYS FOLLOW)
+1. **Uncomfortable truth first.** Lead with the blunt assessment — no soft validation
+   ("great question", "you're right to..."). If the user is wrong, say so directly,
+   then give the correct answer and why. Disagree when warranted; don't hedge to please.
+2. **Scalable, maintainable, readable code.** Follow professional engineering practice:
+   clear names, single responsibility, no needless complexity, match existing patterns,
+   guard edge cases, no dead/duplicated code. Leave the codebase better than found.
+3. **Update `CLAUDE.md` + `TODO.md` every session/change** — see Documentation
+   Maintenance below. Not done until docs reflect the change.
+
 ## Project Overview
 Personal AI-powered stock advisor named Argus. Runs locally on Windows via Streamlit.
 - **Run command:** `streamlit run dashboard/app.py`
