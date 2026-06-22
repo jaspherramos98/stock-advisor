@@ -146,6 +146,22 @@ status/is_open/badge/line/action_note and degrades gracefully). Wired into four 
 Verified: `market_session` unit checks across regular/pre/after/weekend/holiday/half-day, exit-alert
 annotation (open vs closed vs after-hours), headless mock-mode dashboard boot, py_compile. CLAUDE.md updated.
 
+### 12. Analyst trading-logic improvements (R6) ✅
+Five additive, deterministic context streams (no new recommendation fields; schema unchanged), all
+guarded so a fetch failure degrades silently:
+1. **Market regime** — `prices.fetch_market_regime()` (SPY vs 50/200-SMA + cross + %-from-52w-high +
+   RSI, VIX level/bucket → risk-on/neutral/risk-off). MARKET REGIME prompt block: don't fight the tape.
+2. **Earnings proximity** — `fundamentals._next_earnings()` adds next earnings date + days; ⚠ flag in
+   FUNDAMENTALS when within ~5 days (binary gap risk → don't open a fresh swing long right before a report).
+3. **ATR-based stops** — EXIT CONDITIONS prompt now sizes stops to ~1.5-2× avg daily range (already in
+   the trend block), not arbitrary round numbers.
+4. **Concentration** — owned STOCK positions tagged with sector + a sector tally; analyst avoids piling
+   new buys onto a heavy sector or stacking correlated (same-theme) buys.
+5. **Calibration** — `_summarize_track_record()` from closed positions (win rate / avg P&L overall + by
+   direction) → YOUR REALIZED TRACK RECORD block; calibrate to what has worked without overfitting.
+Verified: track-record + prompt-block render unit tests, free live SPY/VIX regime + AAPL earnings-date
+fetch (no LLM tokens), mock boot. `CLAUDE.md` updated.
+
 ---
 
 ## Roadmap (sequenced — from session brainstorm)

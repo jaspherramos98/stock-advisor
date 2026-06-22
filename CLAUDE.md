@@ -41,8 +41,8 @@ analysis/claude_analyst.py    Claude analysis prompt and JSON schema
 calculator/portfolio.py       Budget allocation with HR 2x weighting
 ingestion/
   prices.py                   Live prices + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
-                              + ETF relative-strength rotation vs SPY (RRG: RS-Ratio/RS-Momentum/quadrant)
-  fundamentals.py             Fact-based company fundamentals (valuation/growth/margins) via yfinance
+                              + ETF relative-strength rotation vs SPY (RRG) + market regime (SPY/VIX, R6)
+  fundamentals.py             Fact-based company fundamentals (valuation/growth/margins) + next earnings date (R6) via yfinance
   etf_facts.py                Fact-based ETF facts (category/AUM/expense/yield/top holdings/sectors) via yfinance
   robinhood.py                Robinhood sync and news ingestion
   finnhub.py                  Finnhub news ingestion
@@ -76,7 +76,9 @@ budget.json                   User's current budget setting
    they confirm or temper a news catalyst, they don't gate or invent one. For ETF
    tickers (R3) the analyst additionally gets ETF RELATIVE STRENGTH (rotation vs SPY)
    and ETF FACTS instead of company fundamentals — see "ETF rotation (R3)" below. For
-   crypto tickers (R4) it also gets CRYPTO MARKET DATA — see "Crypto conviction (R4)".
+   crypto tickers (R4) it also gets CRYPTO MARKET DATA — see "Crypto conviction (R4)". Every run also
+   includes MARKET REGIME (SPY/VIX), earnings-date flags, sector-concentration of owned positions, and
+   the user's realized TRACK RECORD — see "Analyst risk/context improvements (R6)".
 4. Claude returns recommendations with `highly_recommended` field. **Watch floor:** on a
    normal news day it always returns ≥10 items (buys + shorts + watches) so the user sees a
    full read on the day; BUYS stay strict/few (usually 0-3, never padded), the rest are
@@ -147,6 +149,23 @@ To give the analyst fact-based crypto inputs (the analog of fundamentals / ETF f
   verifiable on-chain shifts, multi-source corroboration); require corroboration before high conviction
   from a lone low-credibility source; crypto is long/watch only (never short — shorts are stocks-only).
 Context only — R4 added no new recommendation fields; output schema unchanged.
+
+### Analyst risk/context improvements (R6)
+Five additive, deterministic context streams (no new recommendation fields; output schema unchanged):
+- **Market regime** (`ingestion/prices.py` `fetch_market_regime`): SPY vs 50/200-day SMA + golden/death
+  cross + % from 52w high + RSI, and VIX level/bucket → an overall risk-on / neutral / risk-off read.
+  MARKET REGIME prompt block tells the analyst to be defensive in risk-off, press catalysts in risk-on
+  ("don't fight the tape"). Fetched once per run.
+- **Earnings proximity** (`ingestion/fundamentals.py` `_next_earnings`): next earnings date +
+  `days_to_earnings` per stock; flagged ⚠ in the FUNDAMENTALS block when within ~5 days (binary gap
+  risk → don't open a fresh swing long right before a report unless the thesis IS the earnings).
+- **ATR-based stops** (prompt, EXIT CONDITIONS): stops sized to ~1.5-2× the asset's avg daily range
+  (ATR proxy already in the trend block), not arbitrary round numbers, so noise doesn't shake you out.
+- **Concentration** (open-positions block): owned STOCK positions tagged with sector + a sector tally;
+  analyst avoids piling new buys onto an already-heavy sector or stacking correlated (same-theme) buys.
+- **Calibration** (`_summarize_track_record` from closed positions): realized win rate / avg P&L overall
+  and by direction → YOUR REALIZED TRACK RECORD block; analyst calibrates to what has actually worked
+  for the user (without overfitting a small sample). All guarded so any fetch failure degrades silently.
 
 ### Highly Recommended Criteria (all 4 must be met)
 1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)

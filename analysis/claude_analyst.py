@@ -103,6 +103,8 @@ def _build_prompt(
     etf_strength:   dict = None,
     etf_facts:      dict = None,
     crypto_market:  dict = None,
+    market_regime:  dict = None,
+    track_record:   dict = None,
 ) -> str:
     """
     Formats the news items into a clean numbered list for Claude.
@@ -110,6 +112,42 @@ def _build_prompt(
     so Claude can generate calibrated exit conditions and stop loss levels.
     """
     lines = []
+
+    # Market regime (overall tape) — context so the analyst doesn't fight the trend.
+    if market_regime:
+        m = market_regime
+        vix_str = f"{m.get('vix')} ({m.get('vix_state')})" if m.get("vix") is not None else m.get("vix_state", "n/a")
+        lines.append("=== MARKET REGIME (overall tape — don't fight it) ===")
+        lines.append(
+            f"SPY ${m.get('spy_price')} | price {m.get('price_vs_sma50')} 50d-SMA, {m.get('price_vs_sma200')} "
+            f"200d-SMA | {m.get('ma_trend')} | {m.get('pct_from_52w_high')}% from 52w high | RSI {m.get('rsi_14')} | "
+            f"VIX {vix_str}\nOVERALL REGIME: {m.get('regime')}."
+        )
+        lines.append(
+            "Weight this against every idea. RISK-OFF (SPY below its 200d-SMA or VIX high) → be defensive: "
+            "favor watches, size smaller, demand cleaner/stronger catalysts, keep stops tight, and give shorts "
+            "more leeway. RISK-ON (SPY above 200d, calm VIX) → longs with a real, un-priced-in catalyst can be "
+            "pressed. A market-wide risk-off drags most longs (incl. ETFs/most crypto) regardless of the single "
+            "story — don't fight the tape."
+        )
+        lines.append("=== END MARKET REGIME ===\n")
+
+    # Calibration — the analyst's own realized track record, so it can self-correct.
+    if track_record and track_record.get("total"):
+        tr = track_record
+        lines.append("=== YOUR REALIZED TRACK RECORD (calibrate to what has actually worked) ===")
+        line = (f"Closed trades: {tr['total']} | win rate {tr['win_rate']}% | avg P&L {tr['avg_pnl']:+.1f}% "
+                f"(avg win {tr['avg_win']:+.1f}%, avg loss {tr['avg_loss']:+.1f}%)")
+        if tr.get("by_direction"):
+            for d, s in tr["by_direction"].items():
+                line += f"\n  {d}: {s['count']} trades, {s['win_rate']}% win, avg {s['avg_pnl']:+.1f}%"
+        lines.append(line)
+        lines.append(
+            "Use this to calibrate, not to overfit a small sample: if a trade type (e.g. shorts, or chasing "
+            "earnings beats) has a poor realized hit rate for this user, demand a stronger setup before "
+            "recommending more of it; lean into the catalyst types that have actually paid."
+        )
+        lines.append("=== END TRACK RECORD ===\n")
 
     # Crypto asset context block
     if crypto_context:
@@ -209,17 +247,27 @@ def _build_prompt(
                 "invent a thesis. Rich valuation (high P/E) + slowing growth → be cautious / prefer watch. "
                 "Strong margins, positive earnings growth, manageable debt, positive free cash flow → "
                 "quality name. Tiny market cap + thin fundamentals → treat as higher risk (pump-prone). "
-                "Missing values just mean Yahoo had no data; don't penalize for that alone."
+                "EARNINGS-DATE RISK: a ticker reporting within ~5 trading days carries binary gap risk — "
+                "don't open a fresh swing long right before it unless the thesis IS the earnings; otherwise "
+                "size down or wait until after the print. Missing values just mean Yahoo had no data; don't "
+                "penalize for that alone."
             )
             for ticker, f in fund_avail.items():
                 mc = f.get("market_cap")
                 mc_str = f"${mc/1e9:.1f}B" if isinstance(mc, (int, float)) and mc else "n/a"
+                days = f.get("days_to_earnings")
+                if isinstance(days, int) and 0 <= days <= 5:
+                    earn_str = f" | ⚠ EARNINGS in {days}d ({f.get('next_earnings_date')})"
+                elif f.get("next_earnings_date"):
+                    earn_str = f" | next earnings {f.get('next_earnings_date')}"
+                else:
+                    earn_str = ""
                 lines.append(
                     f"${ticker}: {f.get('sector') or 'n/a'} / {f.get('industry') or 'n/a'} | "
                     f"mkt cap {mc_str} | P/E trail {f.get('trailing_pe')} fwd {f.get('forward_pe')} | "
                     f"P/B {f.get('price_to_book')} | margin {f.get('profit_margin_pct')}% | "
                     f"rev growth {f.get('revenue_growth_pct')}% | earnings growth {f.get('earnings_growth_pct')}% | "
-                    f"debt/equity {f.get('debt_to_equity')} | FCF {f.get('free_cash_flow')}"
+                    f"debt/equity {f.get('debt_to_equity')} | FCF {f.get('free_cash_flow')}{earn_str}"
                 )
             lines.append("=== END FUNDAMENTALS ===\n")
 
@@ -274,18 +322,30 @@ def _build_prompt(
             lines.append("=== END ETF FACTS ===\n")
 
     if open_positions:
-        lines.append("=== YOUR CURRENT OPEN POSITIONS (EXCLUDE THESE) ===")
+        lines.append("=== YOUR CURRENT OPEN POSITIONS (EXCLUDE THESE + WATCH CONCENTRATION) ===")
         lines.append(
             "The user ALREADY OWNS these assets and tracks them elsewhere. Do NOT include any of these "
             "tickers in your output — not as 'buy', not as 'watch', not at all. Only surface NEW ideas "
-            "the user doesn't already hold."
+            "the user doesn't already hold. CONCENTRATION: note the sectors below — do NOT push new buys "
+            "that pile onto a sector the user is already heavy in, and don't recommend several new buys "
+            "that are really the same bet (highly correlated — same sector/theme). Diversification is risk "
+            "control; flag it in the rationale when a new idea adds to existing concentration."
         )
+        # Sector tally so the analyst can see where the book is already concentrated.
+        sector_counts: dict[str, int] = {}
         for p in open_positions:
+            sec = p.get("sector")
+            if sec:
+                sector_counts[sec] = sector_counts.get(sec, 0) + 1
+            sec_str = f" | sector: {sec}" if sec else ""
             lines.append(
-                f"${p['ticker']} — {p['company_name']} | "
+                f"${p['ticker']} — {p['company_name']}{sec_str} | "
                 f"entry: ${p.get('reference_price', 0):.2f} | "
                 f"exit when: {p.get('exit_condition', 'not set')}"
             )
+        if sector_counts:
+            tally = ", ".join(f"{s} ×{c}" for s, c in sorted(sector_counts.items(), key=lambda kv: -kv[1]))
+            lines.append(f"Current sector exposure: {tally}.")
         lines.append("=== END OPEN POSITIONS ===\n")
 
     # News items
@@ -311,6 +371,41 @@ _VAGUE_EXIT_MARKERS = (
     "n/a", "await", "watching for", "deal clarity", "tbd", "to be determined",
     "pending", "unclear", "wait and see", "more info", "monitor for",
 )
+
+
+def _summarize_track_record(closed: list[dict]) -> dict:
+    """
+    Aggregates realized P&L from closed positions into calibration stats: overall
+    win rate / avg P&L / avg win / avg loss, plus a breakdown by direction (buy/short).
+    Only counts positions with a numeric pnl_pct. Returns {"total": 0} if none.
+    """
+    rows = [p for p in (closed or []) if isinstance(p.get("pnl_pct"), (int, float))]
+    if not rows:
+        return {"total": 0}
+
+    def _stats(group):
+        n = len(group)
+        pnls = [p["pnl_pct"] for p in group]
+        wins = [x for x in pnls if x > 0]
+        losses = [x for x in pnls if x <= 0]
+        return {
+            "count":    n,
+            "win_rate": round(len(wins) / n * 100) if n else 0,
+            "avg_pnl":  round(sum(pnls) / n, 1) if n else 0.0,
+            "avg_win":  round(sum(wins) / len(wins), 1) if wins else 0.0,
+            "avg_loss": round(sum(losses) / len(losses), 1) if losses else 0.0,
+        }
+
+    overall = _stats(rows)
+    by_dir = {}
+    for d in ("buy", "short"):
+        g = [p for p in rows if (p.get("direction") or "buy") == d]
+        if g:
+            s = _stats(g)
+            by_dir[d] = {"count": s["count"], "win_rate": s["win_rate"], "avg_pnl": s["avg_pnl"]}
+
+    return {"total": overall["count"], "win_rate": overall["win_rate"], "avg_pnl": overall["avg_pnl"],
+            "avg_win": overall["avg_win"], "avg_loss": overall["avg_loss"], "by_direction": by_dir}
 
 
 def _filter_recommendations(recs: list[dict], open_positions: list[dict]) -> list[dict]:
@@ -394,6 +489,17 @@ def run_analysis(
             print(f"Claude analyst: user has {len(open_positions)} open positions ({', '.join(tickers)}) — passing to Claude")
     except Exception as e:
         print(f"Claude analyst: could not load open positions: {e}")
+
+    # Calibration: summarize the user's realized track record from closed positions.
+    track_record = {"total": 0}
+    try:
+        from storage.positions import get_closed_positions
+        track_record = _summarize_track_record(get_closed_positions())
+        if track_record.get("total"):
+            print(f"Claude analyst: track record — {track_record['total']} closed, "
+                  f"{track_record['win_rate']}% win, avg {track_record['avg_pnl']:+.1f}%")
+    except Exception as e:
+        print(f"Claude analyst: could not summarize track record: {e}")
 
     unique_items = _deduplicate_by_asset_type(
         items,
@@ -497,6 +603,35 @@ def run_analysis(
     except Exception as e:
         print(f"Claude analyst: crypto market data fetch failed: {e}")
 
+    # Market regime (overall tape) — fetched once, regardless of asset types.
+    market_regime = None
+    try:
+        from ingestion.prices import fetch_market_regime
+        market_regime = fetch_market_regime()
+        if market_regime:
+            print(f"Claude analyst: market regime — {market_regime['regime']} "
+                  f"(SPY {market_regime['price_vs_sma200']} 200d, VIX {market_regime.get('vix')})")
+    except Exception as e:
+        print(f"Claude analyst: market regime fetch failed: {e}")
+
+    # Concentration: tag owned STOCK positions with their sector so the analyst can
+    # avoid piling new buys onto an already-heavy sector (fundamentals are cached).
+    try:
+        owned_stock_tickers = [
+            p["ticker"] for p in open_positions
+            if p.get("ticker") and (p.get("direction") or "buy") != "short"
+        ]
+        owned_stock_tickers = [t for t in owned_stock_tickers if t not in crypto_news_tickers]
+        if owned_stock_tickers:
+            from ingestion.fundamentals import fetch_fundamentals
+            owned_fund = fetch_fundamentals(owned_stock_tickers)
+            for p in open_positions:
+                f = owned_fund.get(p.get("ticker"))
+                if f and f.get("sector"):
+                    p["sector"] = f["sector"]
+    except Exception as e:
+        print(f"Claude analyst: owned-position sector tagging failed: {e}")
+
     try:
         news_block = _build_prompt(
             unique_items,
@@ -507,6 +642,8 @@ def run_analysis(
             etf_strength=etf_strength,
             etf_facts=etf_facts,
             crypto_market=crypto_market,
+            market_regime=market_regime,
+            track_record=track_record,
         )
     except Exception as e:
         import traceback
@@ -556,6 +693,14 @@ IMPORTANT RULES:
 - Use the CRYPTO ASSET CONTEXT block to understand what each crypto asset does.
 - Use the 14-DAY PRICE TREND DATA block to calibrate exit targets and stop loss levels.
   Always include a stop loss in the exit_condition field, e.g. "target 8% gain, stop loss at 4%".
+- Weigh the MARKET REGIME block (overall tape) on every idea — be defensive in risk-off, press
+  real catalysts in risk-on; don't fight the trend.
+- Respect the OPEN POSITIONS sector exposure — don't pile new buys onto a sector the user is
+  already heavy in, and avoid recommending several new buys that are really the same (correlated) bet.
+- Note any ⚠ EARNINGS-in-Nd flag in FUNDAMENTALS: don't open a fresh swing long right before a
+  report unless the thesis IS the earnings.
+- If a YOUR REALIZED TRACK RECORD block is present, calibrate to it (demand stronger setups for
+  trade types that have underperformed for this user) without overfitting a small sample.
 
 TWO SEPARATE NUMBERS — CREDIBILITY vs CONVICTION:
 - confidence_score (given to you, do not change it) measures SOURCE CREDIBILITY — how much to TRUST
@@ -671,7 +816,12 @@ EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
 - Regular buys: gain targets 6-10%, stops 2-4%
 - Upside must be at least 2x the stop loss distance. If it isn't, widen the target not the stop —
   and if a realistic target can't clear that 2x bar, it's a 'watch', not a 'buy'.
-- For high volatility assets (avg daily range >3%) use stops of at least 5% to avoid noise shakeouts.
+- SIZE STOPS TO VOLATILITY (ATR-based), not a round number. Use the asset's avg daily range
+  (in the 14-DAY PRICE TREND DATA) as an ATR proxy and set the stop ~1.5-2x that range, so normal
+  daily noise doesn't shake you out: e.g. a stock with a 1% avg daily range can use a ~2-3% stop,
+  but one with a 4% avg daily range needs a ~6-8% stop. A stop tighter than ~1.5x daily range is
+  just noise and will get hit at random. (High volatility, avg daily range >3% → stop of at least 5%.)
+  Keep the reward ≥2x the stop AFTER widening it for volatility; if that no longer clears 2x, it's a 'watch'.
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
 - For 'short': use the same "target X% gain, stop loss at Y%" phrasing — "gain" = the stock dropping
   in your favor, "stop loss" = it rising against you. Keep stops tight; reward must still be ≥2x stop.
