@@ -186,7 +186,13 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 - Flask proxy on port 8502 keeps API key server-side; bound to 127.0.0.1, debug=False,
   CORS locked to localhost:8501
 - `/context` endpoint builds live portfolio snapshot on every chat open
-- System prompt includes: budget, open positions with P&L, closed position stats, today's recommendations, watchlist
+- System prompt includes: current US MARKET STATUS (Eastern-time session via `_market_status()`:
+  open/pre-market/after-hours/weekend; ignores holidays), live Robinhood BUYING POWER
+  (`fetch_buying_power()` read on every chat open — not the sidebar sync button), the budget
+  setting, open positions with P&L, closed position stats, today's recommendations, watchlist
+- Times advice to the session (CLOSED → "at the open"/limit order; thin pre/after-hours) and sizes
+  every suggestion to the live buying power; crypto noted as 24/7. Tuned for the user's recurring
+  "what moves should I make with my current buying power" question.
 - Gives direct actionable advice; honest about weak signal days
 - Same anti-priced-in discipline as the analyst: catalyst-timing check ("buy the
   rumor, sell the news"), M&A target-vs-acquirer mechanics, `confidence_score` =
