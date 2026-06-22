@@ -69,6 +69,7 @@ alerts/snooze.py              Alert snooze/dismiss logic
 alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-aware (tags actionable_now)
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
+config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
 main.py                       Pipeline orchestrator
 pipeline_cache.json           Today's recommendations cache
 budget.json                   User's current budget setting

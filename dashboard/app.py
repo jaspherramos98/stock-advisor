@@ -23,6 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # --- Local imports after path is set ---
+from config import CLAUDE_MODEL
 from ingestion.prices import fetch_prices
 from ingestion.coingecko import TICKER_TO_COINGECKO_ID
 from main import run_ingestion_and_analysis
@@ -257,7 +258,7 @@ def _start_proxy_server():
                     "anthropic-version": "2023-06-01",
                 },
                 json={
-                    "model":      "claude-sonnet-4-5",
+                    "model":      CLAUDE_MODEL,
                     "max_tokens": 512,
                     "system":     system,
                     "messages":   messages,

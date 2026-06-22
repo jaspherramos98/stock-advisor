@@ -5,6 +5,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 from dotenv import load_dotenv
 
+from config import CLAUDE_MODEL
+
 load_dotenv()
 
 MAX_STORIES = 25
@@ -512,7 +514,6 @@ def run_analysis(
         return []
 
     # Fetch CoinGecko context for crypto tickers if crypto is enabled
-    # Fetch CoinGecko context for crypto tickers if crypto is enabled
     crypto_context = {}
     if include_crypto:
         try:
@@ -864,7 +865,7 @@ NEWS ITEMS:
     print(f"\nSending {len(unique_items)} stories to Claude for analysis...")
     try:
         message = client.messages.create(
-            model="claude-sonnet-4-5",
+            model=CLAUDE_MODEL,
             max_tokens=4000,
             messages=[{"role": "user", "content": user_prompt}],
             system=system_prompt,

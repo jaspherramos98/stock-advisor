@@ -17,6 +17,7 @@ from ingestion.prices import fetch_prices
 from ingestion.finnhub_news import fetch_finnhub_news
 from ingestion.rss import fetch_rss_news
 from market_hours import market_session
+from config import CLAUDE_MODEL
 
 load_dotenv()
 
@@ -255,7 +256,7 @@ Check if any headlines signal that an exit condition has been met."""
     try:
         print("Event checker: asking Claude to evaluate exit conditions...")
         message = client.messages.create(
-            model="claude-sonnet-4-5",
+            model=CLAUDE_MODEL,
             max_tokens=1000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
@@ -314,7 +315,6 @@ def run_exit_checks() -> list[dict]:
     # --- Percentage and time checks (no API cost) ---
     from alerts.snooze import is_snoozed
 
-    # --- Percentage and time checks (no API cost) ---
     for position in positions:
         ticker     = position["ticker"]
         price_data = prices.get(ticker)
