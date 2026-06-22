@@ -131,6 +131,21 @@ now each filing carries real, fact-checked content.
 - Verified: helper unit tests (no network) + one free live SEC fetch (no LLM tokens) —
   enriched titles + tickers + high-signal flags confirmed. `CLAUDE.md` updated.
 
+### 11. Market-hours & buying-power awareness (chatbot + dashboard + alerts) ✅
+Shared `market_hours.py` (NYSE session: regular/pre/after/weekend + holidays + half-day early
+closes; pandas holiday primitives, no new dep, cached per year; `market_session()` returns
+status/is_open/badge/line/action_note and degrades gracefully). Wired into four places:
+- **Chatbot** — context already carried live market status + live Robinhood buying power (read on
+  every chat open) and prompt guidance to size to buying power + time to the session.
+- **Dashboard header badge** — 🟢/🟡/🔴 session badge + timestamp and a live buying-power readout.
+- **Budget guardrail** — sidebar warns when the allocation budget exceeds real buying power.
+- **Session-aware exit alerts** — `exit_checker` tags each alert `actionable_now`/`market_status`
+  and appends an "act at next open / extended-hours only" caveat when the market isn't open.
+- **TTL cache** — `_live_buying_power()` caches Robinhood buying power for 60s (sidebar Sync forces
+  refresh) so the badge + chatbot don't re-hit Robinhood on every rerun.
+Verified: `market_session` unit checks across regular/pre/after/weekend/holiday/half-day, exit-alert
+annotation (open vs closed vs after-hours), headless mock-mode dashboard boot, py_compile. CLAUDE.md updated.
+
 ---
 
 ## Roadmap (sequenced — from session brainstorm)

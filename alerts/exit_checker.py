@@ -16,6 +16,7 @@ from storage.positions import (
 from ingestion.prices import fetch_prices
 from ingestion.finnhub_news import fetch_finnhub_news
 from ingestion.rss import fetch_rss_news
+from market_hours import market_session
 
 load_dotenv()
 
@@ -344,6 +345,17 @@ def run_exit_checks() -> list[dict]:
     # --- Event check (one Claude call for all positions) ---
     event_alerts = _check_event_exits(positions)
     all_alerts.extend(event_alerts)
+
+    # --- Session awareness: an exit alert means "consider closing", which needs the
+    # market open. Tag each alert with whether it's actionable right now and, if not,
+    # append the session caveat so the user doesn't act on an unexecutable signal. ---
+    if all_alerts:
+        sess = market_session()
+        for a in all_alerts:
+            a["market_status"]  = sess["status"]
+            a["actionable_now"] = sess["is_open"]
+            if sess["action_note"]:
+                a["message"] += f"\n⏰ {sess['action_note']}"
 
     # Mark alerts as sent so we don't duplicate on the next check
     if all_alerts:

@@ -56,6 +56,9 @@ storage/
   watchlist.py                Ticker watchlist
   sheets.py                   Google Sheets export/read
 alerts/snooze.py              Alert snooze/dismiss logic
+alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-aware (tags actionable_now)
+market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
+                              header badge, chatbot context, and exit_checker
 main.py                       Pipeline orchestrator
 pipeline_cache.json           Today's recommendations cache
 budget.json                   User's current budget setting
@@ -186,10 +189,9 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 - Flask proxy on port 8502 keeps API key server-side; bound to 127.0.0.1, debug=False,
   CORS locked to localhost:8501
 - `/context` endpoint builds live portfolio snapshot on every chat open
-- System prompt includes: current US MARKET STATUS (Eastern-time session via `_market_status()`:
-  open/pre-market/after-hours/weekend, plus NYSE holidays + half-day early closes via
-  `_nyse_holidays`/`_nyse_early_closes` — built from pandas holiday primitives, no extra dep,
-  cached per year), live Robinhood BUYING POWER
+- System prompt includes: current US MARKET STATUS (Eastern-time session from the shared
+  `market_hours.market_session()`: open/pre-market/after-hours/weekend + NYSE holidays + half-day
+  early closes; pandas holiday primitives, no extra dep, cached per year), live Robinhood BUYING POWER
   (`fetch_buying_power()` read on every chat open — not the sidebar sync button), the budget
   setting, open positions with P&L, closed position stats, today's recommendations, watchlist
 - Times advice to the session (CLOSED → "at the open"/limit order; thin pre/after-hours) and sizes
@@ -227,6 +229,16 @@ Each recommendation must have:
 - Highly recommended: gain targets 12-20%, stops 4-6%
 - Regular buy: gain targets 6-10%, stops 2-4%
 - Upside must be at least 2x the stop distance
+
+## Dashboard Header & Alerts
+- **Header badge** (under the title): live market-session badge (`market_hours.market_session()` →
+  🟢/🟡/🔴 + timestamp) and live Robinhood buying power. The sidebar warns when the allocation
+  budget exceeds real buying power. Buying power is read via `_live_buying_power()` with a 60s TTL
+  cache (the sidebar "Sync" button forces a refresh).
+- **Session-aware exit alerts** (`alerts/exit_checker.py`): each alert is tagged `actionable_now`
+  and `market_status`; when the market is closed/extended-hours the alert message appends a caveat
+  ("act at the next open" / "extended-hours only, use a limit order") so the user never acts on an
+  unexecutable signal.
 
 ## Dashboard Tabs
 1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders, add to positions
