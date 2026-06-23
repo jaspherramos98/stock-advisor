@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Deliberately a minimal, explicit dep set — NOT `pip install -r requirements.txt`.
+      # requirements.txt is UTF-16 (breaks pip on Linux) and pulls the full runtime stack
+      # (streamlit/yfinance/robin_stocks/gspread) that the deterministic tests don't need.
+      # These cover every module the tests import; heavier deps are lazy-imported at runtime.
+      - name: Install test dependencies
+        run: pip install pytest pandas anthropic requests python-dotenv
+
+      # Byte-compile everything — catches syntax errors in modules pytest can't import
+      # (e.g. dashboard/app.py runs Streamlit code at import time).
+      - name: Byte-compile all modules
+        run: python -m compileall -q analysis ingestion calculator storage alerts validation dashboard market_hours.py config.py main.py
+
+      - name: Run deterministic tests
+        run: pytest -q

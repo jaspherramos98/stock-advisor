@@ -24,6 +24,10 @@ __pycache__/
 # Claude Code local workspace (memory, project notes — never commit)
 .claude/
 
+# Playwright MCP session artifacts + ad-hoc screenshots
+.playwright-mcp/
+argus-header-verify.png
+
 # Windows
 Thumbs.db
 desktop.ini

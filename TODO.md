@@ -2,6 +2,16 @@
 
 ## Done
 
+### 13. CI pipeline + first committed test suite ✅
+First real automated tests (was zero). `tests/test_deterministic.py` — 19 pytest cases over the
+pure formula/data layer (technicals, RRG, key levels, fund/ETF/crypto extractors + unit normalization,
+NYSE market-session/holidays, portfolio allocation + budget floor, track-record + filter guards). No
+network/secrets/LLM — only the parts that CAN be validated. `pytest.ini` sets `pythonpath=.`.
+`.github/workflows/ci.yml` runs on every push + PRs to main: setup-python 3.12 → install a minimal
+explicit dep set (pandas/anthropic/requests/python-dotenv/pytest — NOT the UTF-16 requirements.txt,
+which breaks pip on Linux) → `compileall` (catches syntax errors in dashboard/app.py which pytest
+can't import) → `pytest`. KNOWN FOLLOW-UP: re-save `requirements.txt` as UTF-8 (currently UTF-16).
+
 ### 1. Fix Finnhub depletion — switch prices to Robinhood ✅
 `fetch_prices()` now uses Robinhood as the primary quote source (no free-tier
 cap, prices match the trading platform exactly) and falls back to Yahoo Finance
