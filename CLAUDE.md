@@ -52,6 +52,7 @@ calculator/portfolio.py       Budget allocation with HR 2x weighting
 ingestion/
   prices.py                   Live prices + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
                               + ETF relative-strength rotation vs SPY (RRG) + market regime (SPY/VIX, R6)
+                              + key price levels (support/resistance) anchoring watch entry triggers (R7)
   fundamentals.py             Fact-based company fundamentals (valuation/growth/margins) + next earnings date (R6) via yfinance
   etf_facts.py                Fact-based ETF facts (category/AUM/expense/yield/top holdings/sectors) via yfinance
   robinhood.py                Robinhood sync and news ingestion
@@ -177,6 +178,16 @@ Five additive, deterministic context streams (no new recommendation fields; outp
 - **Calibration** (`_summarize_track_record` from closed positions): realized win rate / avg P&L overall
   and by direction → YOUR REALIZED TRACK RECORD block; analyst calibrates to what has actually worked
   for the user (without overfitting a small sample). All guarded so any fetch failure degrades silently.
+
+### Data-anchored entry triggers (R7)
+Watch `entry_trigger` ("Buy when") used to be an LLM-eyeballed price — the worst unbacked output.
+Now anchored to real price structure: `ingestion/prices.py` `_compute_key_levels` derives, per ticker,
+nearest support/resistance (from recent + 52w highs/lows + SMA50/200), the ATR in dollars (avg daily
+range), and two reference entries — `breakout_buy` (resistance + 0.5×ATR) and `pullback_buy` (support).
+Surfaced in a KEY PRICE LEVELS prompt block; the analyst MUST anchor a watch's entry_trigger to one of
+these computed levels (breakout vs pullback chosen per the catalyst), not invent a number. Formula owns
+the level, Claude owns which one fits — context only, no schema change. (Full pipeline backtesting was
+weighed and deferred: it needs point-in-time historical news + LLM replay, a research effort.)
 
 ### Highly Recommended Criteria (all 4 must be met)
 1. Catalyst is unambiguous AND recent (~last 1-2 trading days; earnings beat, M&A, FDA approval, major contract)
