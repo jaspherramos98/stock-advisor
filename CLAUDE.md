@@ -32,7 +32,7 @@ part of "done," not an afterthought.
   (or explicitly note "no doc change needed") in your summary.
 
 ## Tech Stack
-- Python, Streamlit, Flask, Claude API (claude-sonnet-4-5)
+- Python, Streamlit, Flask, Claude API (model in `config.py` `CLAUDE_MODEL`, currently claude-sonnet-4-6)
 - robin_stocks (unofficial Robinhood API)
 - Finnhub API, SEC EDGAR, Reddit RSS, CoinGecko
 - Google Sheets API for history export

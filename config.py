@@ -8,4 +8,4 @@ previously hardcoded in the analyst, the exit checker, and the chatbot proxy).
 
 # Claude model used everywhere Argus calls the Anthropic API (analyst, exit-event
 # checker, chatbot proxy). Change here only.
-CLAUDE_MODEL = "claude-sonnet-4-5"
+CLAUDE_MODEL = "claude-sonnet-4-6"
