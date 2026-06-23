@@ -10,7 +10,8 @@ network/secrets/LLM — only the parts that CAN be validated. `pytest.ini` sets 
 `.github/workflows/ci.yml` runs on every push + PRs to main: setup-python 3.12 → install a minimal
 explicit dep set (pandas/anthropic/requests/python-dotenv/pytest — NOT the UTF-16 requirements.txt,
 which breaks pip on Linux) → `compileall` (catches syntax errors in dashboard/app.py which pytest
-can't import) → `pytest`. KNOWN FOLLOW-UP: re-save `requirements.txt` as UTF-8 (currently UTF-16).
+can't import) → `pytest`. Also re-saved `requirements.txt` as UTF-8 (was UTF-16, broke `pip -r` on
+Linux/clean installs); CI still uses the minimal explicit set for speed.
 
 ### 1. Fix Finnhub depletion — switch prices to Robinhood ✅
 `fetch_prices()` now uses Robinhood as the primary quote source (no free-tier
