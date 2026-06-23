@@ -17,6 +17,7 @@ from ingestion.coingecko import _extract_market_data
 import market_hours as mh
 from calculator.portfolio import calculate_allocations, _compute_weight, MIN_ALLOCATION_BUDGET
 from analysis.claude_analyst import _summarize_track_record, _filter_recommendations
+from backtest.exit_backtest import simulate_trade, summarize
 
 
 # ── technicals ──────────────────────────────────────────────────────────────
@@ -160,3 +161,41 @@ def test_filter_recommendations_drops_owned_and_vague():
     ]
     out = _filter_recommendations(recs, [{"ticker": "MSFT"}])
     assert [r["ticker"] for r in out] == ["AAPL"]
+
+
+# ── exit-band backtester ──────────────────────────────────────────────────────
+def test_simulate_long_target_hit():
+    # day 2 high reaches +8% on a 100 entry
+    r = simulate_trade([102, 109, 103], [99, 105, 101], [101, 108, 102],
+                       100, target_pct=8, stop_pct=3, max_days=3)
+    assert r["outcome"] == "target" and r["pnl_pct"] == 8 and r["days"] == 2
+
+def test_simulate_long_stop_hit():
+    r = simulate_trade([101, 100], [99, 96], [100, 97],
+                       100, target_pct=8, stop_pct=3, max_days=5)
+    assert r["outcome"] == "stop" and r["pnl_pct"] == -3 and r["days"] == 2
+
+def test_simulate_same_bar_stop_wins_tie():
+    # one bar that reaches BOTH +8% and -3% → conservative stop
+    r = simulate_trade([108], [97], [100], 100, target_pct=8, stop_pct=3, max_days=1)
+    assert r["outcome"] == "stop"
+
+def test_simulate_time_exit():
+    r = simulate_trade([101, 102, 103], [99, 100, 101], [100.5, 101.5, 104.0],
+                       100, target_pct=20, stop_pct=20, max_days=3)
+    assert r["outcome"] == "time" and r["days"] == 3 and r["pnl_pct"] == 4.0
+
+def test_simulate_short_target_on_fall():
+    # short from 100, price falls → low hits -8% target
+    r = simulate_trade([101, 99], [98, 91], [99, 92],
+                       100, target_pct=8, stop_pct=3, max_days=5, direction="short")
+    assert r["outcome"] == "target" and r["pnl_pct"] == 8
+
+def test_summarize_counts():
+    trades = [{"outcome": "target", "pnl_pct": 8, "days": 3},
+              {"outcome": "stop", "pnl_pct": -3, "days": 1},
+              {"outcome": "time", "pnl_pct": 1, "days": 20}]
+    s = summarize(trades)
+    assert s["trades"] == 3 and s["target_hits"] == 1 and s["stop_hits"] == 1
+    assert s["win_rate"] == round(2 / 3 * 100, 1)
+    assert summarize([]) == {"trades": 0}

@@ -175,6 +175,17 @@ fetch (no LLM tokens), mock boot. `CLAUDE.md` updated.
 
 ---
 
+### 14. Exit-band backtester (the tractable slice of validation) ✅
+`backtest/exit_backtest.py` — `simulate_trade()` walks forward on real OHLC from an entry and records
+target-hit / stop-hit / time-exit + P&L (conservative: stop wins a same-bar tie; no lookahead);
+`backtest_exit_bands()` samples entries every N days over ~2y yfinance history and aggregates win
+rate / avg P&L / outcome mix per band. Validates the (previously arbitrary) target/stop %s.
+**Scope (honest):** entries are SAMPLED, not Argus news signals, and the LLM is NOT replayed — so it
+measures whether a stop/target band is sane vs alternatives, NOT whether Argus is profitable. Full
+point-in-time news + LLM replay remains deferred (research effort). First real finding: tight stops
+(3% / 1.5%) get whipsawed on higher-vol names — confirms the R6 ATR-stop rationale with data. 6 unit
+tests added (target/stop/time/short/same-bar-tie/summarize). No LLM tokens; free price data.
+
 ## Roadmap (sequenced — from session brainstorm)
 Dependency-ordered so we don't build something we have to tear up. Discipline for
 every phase: additive CONTEXT, never hard gates that drop output; verify with unit

@@ -71,6 +71,8 @@ alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-a
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
+backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
+                              exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
 pipeline_cache.json           Today's recommendations cache
 budget.json                   User's current budget setting
