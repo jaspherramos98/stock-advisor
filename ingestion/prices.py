@@ -288,6 +288,37 @@ def fetch_etf_relative_strength(etf_tickers: list[str], benchmark: str = "SPY") 
     return results
 
 
+def _compute_key_levels(last, high_14d, low_14d, high_52w, low_52w, sma50, sma200, adr_pct):
+    """
+    Deterministic support/resistance levels so a watch's entry trigger anchors to REAL
+    price structure instead of an LLM-invented number. From values already computed in
+    fetch_price_history (recent + 52w highs/lows, SMA50/200, avg daily range as an ATR
+    proxy). Pure math, unit-testable.
+
+    Returns:
+      atr_abs            — avg daily range in dollars (volatility buffer)
+      nearest_resistance — closest level ABOVE current price (breakout reference)
+      nearest_support    — closest level BELOW current price (pullback reference)
+      breakout_buy       — resistance + 0.5×ATR (enter on a confirmed break above)
+      pullback_buy       — support (enter on a dip back to it)
+    """
+    last = float(last)
+    atr = round(last * (float(adr_pct or 0) / 100), 2)
+
+    res_cands = [x for x in (high_14d, high_52w, sma50, sma200) if x and x > last]
+    sup_cands = [x for x in (low_14d, low_52w, sma50, sma200) if x and x < last]
+    resistance = round(min(res_cands), 2) if res_cands else None
+    support    = round(max(sup_cands), 2) if sup_cands else None
+
+    return {
+        "atr_abs":            atr,
+        "nearest_resistance": resistance,
+        "nearest_support":    support,
+        "breakout_buy":       round(resistance + 0.5 * atr, 2) if resistance is not None else None,
+        "pullback_buy":       support,
+    }
+
+
 def fetch_market_regime() -> dict | None:
     """
     Overall US market regime from SPY (~1y history) + VIX — deterministic context so the
@@ -414,6 +445,13 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
                 hist["Volume"].tolist() if "Volume" in hist else [],
             )
 
+            key_levels = _compute_key_levels(
+                last_price, high_14d, low_14d,
+                tech.get("high_52w"), tech.get("low_52w"),
+                tech.get("sma_50"), tech.get("sma_200"),
+                avg_daily_range_pct,
+            )
+
             results[ticker] = {
                 "ticker":              ticker,
                 "current_price":       round(last_price, 4),
@@ -426,6 +464,7 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
                 "avg_daily_range_pct": round(avg_daily_range_pct, 2),
                 "volatility":          "high" if avg_daily_range_pct > 3 else "medium" if avg_daily_range_pct > 1.5 else "low",
                 "data_points":         len(closes),
+                "key_levels":          key_levels,
                 **tech,
             }
 

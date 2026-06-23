@@ -237,6 +237,33 @@ def _build_prompt(
                 )
                 lines.extend(tech_lines)
                 lines.append("=== END TECHNICAL INDICATORS ===\n")
+
+            # Key price levels — anchor watch entry triggers to real support/resistance,
+            # not LLM-invented numbers (the formula gives the levels; the analyst picks
+            # which one fits the catalyst).
+            level_lines = []
+            for ticker, data in available.items():
+                kl = data.get("key_levels") or {}
+                if kl.get("nearest_resistance") is None and kl.get("nearest_support") is None:
+                    continue
+                level_lines.append(
+                    f"${ticker}: price ${data.get('current_price')} | ATR ${kl.get('atr_abs')} | "
+                    f"resistance ${kl.get('nearest_resistance')} (breakout buy ${kl.get('breakout_buy')}) | "
+                    f"support ${kl.get('nearest_support')} (pullback buy ${kl.get('pullback_buy')})"
+                )
+            if level_lines:
+                lines.append("=== KEY PRICE LEVELS (anchor entry triggers here — don't invent numbers) ===")
+                lines.append(
+                    "Deterministic support/resistance from real prices (recent + 52w highs/lows, SMAs) "
+                    "with ATR = avg daily range in dollars. For a WATCH 'buy when' (entry_trigger), anchor "
+                    "to a REAL level here instead of an arbitrary number: a BREAKOUT thesis → buy on a "
+                    "confirmed break above nearest resistance (use the breakout buy = resistance + 0.5×ATR, "
+                    "confirm on volume); a PULLBACK thesis → buy on a dip to nearest support (pullback buy). "
+                    "Pick whichever fits the catalyst, and phrase the trigger around that computed level "
+                    "(± ATR is fine). These are reference levels, not predictions."
+                )
+                lines.extend(level_lines)
+                lines.append("=== END KEY PRICE LEVELS ===\n")
             # Open positions block — tells Claude what the user already owns
 
     # Fundamentals block — reported financials as a quality check.
@@ -760,10 +787,11 @@ WATCH FLOOR — ALWAYS SHOW YOUR WORK (do not return a near-empty list):
 - BUYS stay strict and few: only genuinely actionable, un-priced-in, fact-based catalysts qualify
   (usually 0-3). NEVER pad the buy list to reach the floor — fill the rest with watches.
 - A WATCH must be grounded in a REAL news item from the list (never invented). Put its BUY TRIGGER in
-  the `entry_trigger` field (the concrete price level/condition that would make it actionable, e.g.
-  "breaks above $52 on volume" or "pulls back to ~$190"), and put ONLY the target/stop in
-  `exit_condition`. Keep the two separate — do not cram the entry condition into exit_condition. No
-  vague placeholders ("monitor", "await details", "N/A").
+  the `entry_trigger` field — and ANCHOR that price to a real level from the KEY PRICE LEVELS block
+  (breakout buy above resistance, or pullback buy at support), NOT an arbitrary number you made up.
+  E.g. "breaks above $52.10 on volume" (the computed breakout buy) or "pulls back to ~$190" (the
+  computed support). Put ONLY the target/stop in `exit_condition`. Keep the two separate — do not cram
+  the entry condition into exit_condition. No vague placeholders ("monitor", "await details", "N/A").
 - Skipping is only for true noise (no ticker, unverified, zero concrete detail). Among everything that
   is NOT noise, surface the top ~10+ as buy/watch. Return fewer than 10 ONLY if there genuinely aren't
   that many relevant, non-owned stories to discuss (rare — you are given ~25).
