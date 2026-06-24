@@ -1270,21 +1270,65 @@ if True:
             st.divider()
             st.subheader("Closed positions")
 
-            # Summary metrics
-            with_pnl    = [p for p in closed_positions if p.get("pnl_pct") is not None]
-            winners     = [p for p in with_pnl if p["pnl_pct"] > 0]
-            losers      = [p for p in with_pnl if p["pnl_pct"] <= 0]
-            win_rate    = round(len(winners) / len(with_pnl) * 100) if with_pnl else 0
-            avg_pnl     = round(sum(p["pnl_pct"] for p in with_pnl) / len(with_pnl), 1) if with_pnl else 0
-            best        = max(with_pnl, key=lambda x: x["pnl_pct"]) if with_pnl else None
-            worst       = min(with_pnl, key=lambda x: x["pnl_pct"]) if with_pnl else None
+            # ── Scorecard: the honest read on whether Argus is actually earning ──
+            from analysis.scorecard import compute_scorecard, spy_benchmark
+            sc = compute_scorecard(closed_positions)
 
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("Total closed",  len(closed_positions))
-            m2.metric("Win rate",      f"{win_rate}%")
-            m3.metric("Avg P&L",       f"{avg_pnl:+.1f}%")
-            m4.metric("Best trade",    f"{best['ticker']} {best['pnl_pct']:+.1f}%" if best else "—")
-            m5.metric("Worst trade",   f"{worst['ticker']} {worst['pnl_pct']:+.1f}%" if worst else "—")
+            if sc.get("trades"):
+                net      = sc["net_dollars"]
+                pf       = sc["profit_factor"]
+                payoff   = sc["payoff_ratio"]
+                disc     = sc["discipline"]
+
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Net realized",  f"${net:+,.2f}")
+                m2.metric("Win rate",      f"{sc['win_rate']}%")
+                m3.metric("Profit factor", f"{pf:.2f}" if pf is not None else "—",
+                          help="Gross profit ÷ gross loss. >1 = profitable; >2 = strong.")
+                m4.metric("Payoff ratio",  f"{payoff:.2f}" if payoff is not None else "—",
+                          help="Avg win ÷ avg loss. >1 means winners are bigger than losers — "
+                               "you can be profitable below a 50% win rate.")
+                m5.metric("Expectancy",    f"{sc['expectancy_pct']:+.2f}%",
+                          help="Average % you make per trade taken, long-run.")
+
+                # Discipline callout — the headline leak. Let-run vs closed-early.
+                lr_n, lr_avg = disc["let_run_count"], disc["let_run_avg"]
+                e_n,  e_avg  = disc["early_count"],   disc["early_avg"]
+                if e_n and lr_n and lr_avg - e_avg >= 2.0:
+                    st.error(
+                        f"⚠️ **Discipline leak — you're closing trades early.** "
+                        f"The **{lr_n}** trade(s) you let run to their target/stop averaged "
+                        f"**{lr_avg:+.1f}%**. The **{e_n}** you manually closed *before* either "
+                        f"band averaged just **{e_avg:+.1f}%**. The picks work; cutting them early "
+                        f"at breakeven is what's flattening your P&L. Let the exit plan play out."
+                    )
+                elif e_n:
+                    st.caption(
+                        f"Let-run trades: {lr_n} (avg {lr_avg:+.1f}%) · "
+                        f"Closed early: {e_n} (avg {e_avg:+.1f}%)."
+                    )
+
+                # Concentration — is the profit one lucky trade or a repeatable process?
+                top = sc.get("top_trade")
+                share = sc.get("top_trade_profit_share")
+                if top and share and share >= 50:
+                    st.warning(
+                        f"📌 **Concentration risk:** {top['ticker']} alone "
+                        f"(${top['pnl_dollars']:+,.2f}) is **{share}%** of all gross profit. "
+                        f"Strip it and the rest of the book is near breakeven — the edge isn't "
+                        f"proven across trades yet, so don't over-trust a single winner."
+                    )
+
+                # SPY opportunity cost — did active trading beat just holding the index?
+                bench = spy_benchmark(closed_positions)
+                if bench:
+                    edge = bench["edge"]
+                    verdict = "beat" if edge >= 0 else "LAGGED"
+                    st.caption(
+                        f"vs SPY over the same dates ({bench['trades']} trades): Argus "
+                        f"${bench['argus_net']:+,.2f} vs SPY ${bench['spy_net']:+,.2f} → "
+                        f"you **{verdict}** the index by ${abs(edge):,.2f}."
+                    )
 
             st.divider()
 

@@ -18,6 +18,7 @@ import market_hours as mh
 from calculator.portfolio import calculate_allocations, _compute_weight, MIN_ALLOCATION_BUDGET
 from analysis.claude_analyst import _summarize_track_record, _filter_recommendations
 from backtest.exit_backtest import simulate_trade, summarize
+from analysis.scorecard import parse_band, classify_exit, compute_scorecard
 
 
 # ── technicals ──────────────────────────────────────────────────────────────
@@ -199,3 +200,41 @@ def test_summarize_counts():
     assert s["trades"] == 3 and s["target_hits"] == 1 and s["stop_hits"] == 1
     assert s["win_rate"] == round(2 / 3 * 100, 1)
     assert summarize([]) == {"trades": 0}
+
+
+# ── performance scorecard ─────────────────────────────────────────────────────
+def test_parse_band():
+    assert parse_band("target 8% gain, stop loss at 4%") == (8.0, 4.0)
+    assert parse_band("target 12% gain, stop loss at 4.5%") == (12.0, 4.5)
+    assert parse_band("merger close or 10% gain, stop loss at 4%") == (10.0, 4.0)
+    assert parse_band("no exit condition set") == (None, None)
+
+def test_classify_exit():
+    # reached ~target → let run
+    assert classify_exit({"pnl_pct": 7.3, "exit_condition": "target 8% gain, stop loss at 4%"}) == "target"
+    # hit the stop → taken as designed
+    assert classify_exit({"pnl_pct": -3.9, "exit_condition": "target 8% gain, stop loss at 4%"}) == "stop"
+    # closed near zero, well inside both bands → early scratch (the leak)
+    assert classify_exit({"pnl_pct": -1.1, "exit_condition": "target 8% gain, stop loss at 4%"}) == "early"
+    assert classify_exit({"pnl_pct": None, "exit_condition": "target 8% gain"}) is None
+
+def test_compute_scorecard_discipline_and_concentration():
+    closed = [
+        # two let-run winners
+        {"ticker": "MU",  "pnl_pct": 10.8, "pnl_dollars": 116.5, "exit_condition": "target 10% gain, stop loss at 5%"},
+        {"ticker": "AMD", "pnl_pct": 10.9, "pnl_dollars": 50.6,  "exit_condition": "target 10% gain, stop loss at 6%"},
+        # three early scratches inside the bands
+        {"ticker": "GLD", "pnl_pct": -1.6, "pnl_dollars": -6.3,  "exit_condition": "target 8% gain, stop loss at 2.5%"},
+        {"ticker": "AMZN","pnl_pct": -0.4, "pnl_dollars": -1.0,  "exit_condition": "target 6% gain, stop loss at 3%"},
+        {"ticker": "LEN", "pnl_pct": -0.3, "pnl_dollars": -0.3,  "exit_condition": "target 8% gain, stop loss at 4%"},
+        {"ticker": "X",   "pnl_pct": None},   # excluded (no P&L)
+    ]
+    sc = compute_scorecard(closed)
+    assert sc["trades"] == 5
+    assert sc["discipline"]["let_run_count"] == 2 and sc["discipline"]["early_count"] == 3
+    assert sc["discipline"]["let_run_avg"] > sc["discipline"]["early_avg"]
+    # payoff ratio > 1 (winners far bigger than the early scratches)
+    assert sc["payoff_ratio"] > 1
+    # MU is the dominant winner → high concentration share
+    assert sc["top_trade"]["ticker"] == "MU" and sc["top_trade_profit_share"] >= 60
+    assert compute_scorecard([])["trades"] == 0

@@ -2,6 +2,27 @@
 
 ## Done
 
+### 14. Performance scorecard — diagnose "breaking even" ✅
+User reported ~1 month of trading netting flat. Computed real closed-trade stats and found the
+truth: NOT a bad-picks problem — a **discipline leak**. 17 closed trades, 41% win rate, but
+payoff ratio 6.35 (avg win +6.98% vs avg loss −1.10%) and net **+$173.92**. Two trades (MU +$116,
+AMD +$50) = ~96% of profit. The smoking gun: the **4 trades let run to target/stop averaged +8.9%;
+the 13 manually closed *before* either band averaged +0.26%** (scratch). User is cutting winners
+*and* losers early at breakeven — that's what flattens P&L, not the signal.
+- `analysis/scorecard.py` (new, pure logic): `parse_band` (target/stop % out of exit_condition,
+  handles "target X%" and "X% gain" forms), `classify_exit` (target/stop/early vs the trade's own
+  band, 90% tolerance), `compute_scorecard` (win rate, payoff ratio, profit factor, expectancy,
+  net $, top-trade profit share = concentration, and the let-run-vs-closed-early discipline split),
+  `spy_benchmark` (yfinance, best-effort: same dollars in SPY over same dates → opportunity cost).
+- `dashboard/app.py` My Positions → Closed positions: replaced the 5 vanity metrics with the
+  scorecard — Net/Win rate/Profit factor/Payoff/Expectancy, a red **discipline-leak** callout when
+  let-run avg ≫ early avg, a concentration warning when one trade is ≥50% of gross profit, and a
+  SPY opportunity-cost line (Argus beat SPY by $179 over these dates).
+- `tests/test_deterministic.py`: +3 cases (parse_band, classify_exit, scorecard discipline +
+  concentration). 28 passing (was 25).
+- Did NOT tighten the buy funnel (offered earlier) — the data shows the buy list isn't the leak
+  (avg loss −1.1%, nowhere near stops); hand-closing is. Adding prompt tweaks would be cargo-cult.
+
 ### 13. CI pipeline + first committed test suite ✅
 First real automated tests (was zero). `tests/test_deterministic.py` — 19 pytest cases over the
 pure formula/data layer (technicals, RRG, key levels, fund/ETF/crypto extractors + unit normalization,

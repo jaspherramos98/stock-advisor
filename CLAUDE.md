@@ -48,6 +48,8 @@ part of "done," not an afterthought.
 ```
 dashboard/app.py              Main Streamlit app + Flask proxy + chatbot
 analysis/claude_analyst.py    Claude analysis prompt and JSON schema
+analysis/scorecard.py         Closed-trade performance scorecard — payoff/profit-factor/expectancy,
+                              concentration, let-run-vs-closed-early discipline leak, SPY benchmark
 calculator/portfolio.py       Budget allocation with HR 2x weighting
 ingestion/
   prices.py                   Live prices + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
@@ -291,7 +293,11 @@ Each recommendation must have:
 2. **Portfolio** — invested money, P&L trend graph (yfinance), position breakdown
 3. **My Positions** — open/closed positions, manual entry, price updates, snooze alerts. Open-positions
    table + each expander show a computed **Stop @** price (`_stop_loss_price` parses "stop loss at X%"
-   from exit_condition × reference price; long = ref×(1−X), short = ref×(1+X))
+   from exit_condition × reference price; long = ref×(1−X), short = ref×(1+X)). Closed-positions header
+   shows the **performance scorecard** (`analysis/scorecard.py`): Net $/win rate/profit factor/payoff/
+   expectancy, a red **discipline-leak** callout when trades let-run-to-band avg ≫ trades closed-early
+   (the core finding: hand-closing at breakeven flattens P&L, not the picks), a concentration warning
+   when one trade is ≥50% of gross profit, and a SPY opportunity-cost line
 4. **Watch List** — Finnhub ticker watchlist editor per asset type
 5. **History** — Google Sheets export history with charts
 
