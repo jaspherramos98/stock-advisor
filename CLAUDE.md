@@ -77,7 +77,9 @@ backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price 
                               exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
 pipeline_cache.json           Today's recommendations cache
-budget.json                   User's current budget setting
+budget.json                   DEPRECATED — no longer read/written. Budget is now live Robinhood
+                              buying power (dashboard `_effective_budget`); the manual budget
+                              number_input + save_budget/load_budget were removed (R9).
 ```
 
 ## Architecture
@@ -205,18 +207,35 @@ The analyst prompt is built to avoid buying already-priced-in moves: it treats
 target-vs-acquirer mechanics (announced cash-deal targets → `watch`, closed deals →
 skip), and prefers `watch`/empty over forced buys on weak days.
 
-### Budget Allocation
-- Weight = `(conviction/100) × risk_multiplier × HR_multiplier` — sized by CONVICTION (edge),
-  not credibility (R2). Back-compat: missing conviction falls back to `confidence_score × 100`.
-- `HIGHLY_RECOMMENDED_MULTIPLIER = 2.0` — HR buys get 2x capital weight
-- `MAX_SINGLE_ALLOCATION = 0.40` — no single stock gets more than 40%
-- `MAX_SHORT_EXPOSURE = 0.30` — total short exposure capped at 30% of budget
-- `MIN_ALLOCATION_BUDGET = 10.0` — budget can be set to any value ≥ 0 (the dashboard
-  `number_input` floor is `MIN_BUDGET = 0.0`), but dollar allocation only runs at ≥ $10;
-  below that `calculate_allocations` returns every rec at $0 (analysis still shown).
+### Budget Allocation — PYRAMID by risk tier (R8)
+The long book is allocated as a **risk pyramid**: the risk tier picks the budget POOL,
+conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core.
+- `PYRAMID_TIERS = {high: 0.20, medium: 0.55, low: 0.25}` — top/core/base fractions of
+  the long budget. `_tier_of(rec)` maps `risk_level` → tier (unknown → medium/core).
+  "Reward" is implicit: the analyst already scales exit targets with risk (HR 12-20%,
+  regular 6-10%), so medium risk ≈ medium-high reward.
+- Within a tier, `_pool_weight = (conviction/100) × HR_multiplier` (risk is NOT a factor
+  here — the tier already handled it). `_allocate_pool` splits the pool by pool weight and
+  applies the global single-name cap; excess from a capped name spills to uncapped names
+  **in the same tier** only.
+- **Empty tier → held as CASH, not redistributed** (design choice): on a day with no
+  high-risk ideas, that 20% simply isn't deployed. So total invested < budget is normal
+  and intentional (ballast). `print_allocation_table` shows a HELD AS CASH line.
+- `HIGHLY_RECOMMENDED_MULTIPLIER = 2.0` — HR sizes you 2x WITHIN its pool (doesn't jump tiers).
+- `MAX_SINGLE_ALLOCATION = 0.40` — global cap; no single name > 40% of budget (can bind
+  inside the 55% core pool → the remainder is held as cash if no other core name absorbs it).
+- `RISK_MULTIPLIERS` is now **shorts-only** (the shorts sleeve keeps the older
+  conviction × risk × HR weighting via `_compute_weight`; the long book ignores it).
+- `MAX_SHORT_EXPOSURE = 0.30` — total short exposure capped at 30% of budget.
+- **Budget = live Robinhood buying power (R9), single source of truth.** The dashboard
+  `_effective_budget()` returns live buying power (`_live_buying_power`, 60s TTL) or 0.0 when
+  it can't be read; there is NO manual budget input anymore (removed to stop it disagreeing
+  with real cash / confusing Argus chat). Chat context labels buying power as THE budget.
+- `MIN_ALLOCATION_BUDGET = 10.0` — dollar allocation only runs when the budget (buying power)
+  is ≥ $10; below that `calculate_allocations` returns every rec at $0 (analysis still shown).
 - Sort order: HR buys → regular buys → shorts → watches
-- Shorts (R1) are a **separate sleeve** (use margin, not the long cash budget) — buy
-  allocation logic is untouched. Shorts are stocks-only, never highly_recommended.
+- Shorts (R1) are a **separate sleeve** (use margin, not the long cash budget) — pyramid
+  applies to the long book only. Shorts are stocks-only, never highly_recommended.
 
 ### Shorts (R1)
 - Analyst emits `direction: "short"` for unambiguous, recent, fact-based BEARISH
@@ -240,11 +259,17 @@ skip), and prefers `watch`/empty over forced buys on weak days.
 - System prompt includes: current US MARKET STATUS (Eastern-time session from the shared
   `market_hours.market_session()`: open/pre-market/after-hours/weekend + NYSE holidays + half-day
   early closes; pandas holiday primitives, no extra dep, cached per year), live Robinhood BUYING POWER
-  (`fetch_buying_power()` read on every chat open — not the sidebar sync button), the budget
-  setting, open positions with P&L, closed position stats, today's recommendations, watchlist
+  labeled as THE budget (R9 — no separate manual budget; `_live_buying_power()` read on every chat
+  open), open positions with P&L, closed position stats, today's recommendations, watchlist
 - Times advice to the session (CLOSED → "at the open"/limit order; thin pre/after-hours) and sizes
   every suggestion to the live buying power; crypto noted as 24/7. Tuned for the user's recurring
   "what moves should I make with my current buying power" question.
+- Knows the **pyramid sizing** (R8): when advising buys it keeps the 20/55/25 shape — most fresh
+  capital into medium-risk core ideas, only a small slice into high-risk shots, ≤40% in one name.
+- Reinforces the **discipline leak** finding (scorecard): pushes the user to respect the exit plan
+  and not hand-close at breakeven (a −1% to −3% wobble is not a stop).
+- **Brevity/token budget:** system prompt is trimmed and enforces 2-3 sentences, lead with the call,
+  no preamble; `/chat` `max_tokens = 300`. Keep replies short — this was an explicit user ask.
 - Gives direct actionable advice; honest about weak signal days
 - Same anti-priced-in discipline as the analyst: catalyst-timing check ("buy the
   rumor, sell the news"), M&A target-vs-acquirer mechanics, `confidence_score` =
@@ -280,9 +305,9 @@ Each recommendation must have:
 
 ## Dashboard Header & Alerts
 - **Header badge** (under the title): live market-session badge (`market_hours.market_session()` →
-  🟢/🟡/🔴 + timestamp) and live Robinhood buying power. The sidebar warns when the allocation
-  budget exceeds real buying power. Buying power is read via `_live_buying_power()` with a 60s TTL
-  cache (the sidebar "Sync" button forces a refresh).
+  🟢/🟡/🔴 + timestamp) and live Robinhood buying power. Buying power IS the allocation budget (R9),
+  shown read-only in the sidebar (`_effective_budget`). Read via `_live_buying_power()` with a 60s TTL
+  cache (the sidebar "💵 Refresh buying power" button forces a refresh).
 - **Session-aware exit alerts** (`alerts/exit_checker.py`): each alert is tagged `actionable_now`
   and `market_status`; when the market is closed/extended-hours the alert message appends a caveat
   ("act at the next open" / "extended-hours only, use a limit order") so the user never acts on an
