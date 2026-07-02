@@ -1,11 +1,31 @@
-# Risk multipliers — how much of your budget goes to each risk tier.
+# Pyramid budget tiers (fraction of the long budget per RISK tier). This is the core
+# allocation shape: the risk tier picks the POOL, conviction sizes WITHIN it.
+#   top  (high risk / high reward)        → small satellite
+#   mid  (medium risk / medium-high reward) → the CORE, most of the budget
+#   base (low risk / low reward)          → ballast
+# Reward comes for free: the analyst already scales exit targets with risk (HR 12-20%,
+# regular 6-10%), so "medium risk = medium-high reward" falls out of the tier mapping.
+# Must sum to 1.0.
+PYRAMID_TIERS = {
+    "high":   0.20,   # top
+    "medium": 0.55,   # core
+    "low":    0.25,   # base
+}
+
+# Empty tier (no recs that day) is NOT redistributed — its share is held as CASH.
+# Don't force capital into a tier that has no real ideas today.
+
+# Risk multipliers — SHORTS-ONLY sizing now. The long book is sized by the pyramid
+# tiers above; shorts are a small separate margin sleeve and keep the older
+# conviction × risk × HR weighting via _compute_weight.
 RISK_MULTIPLIERS = {
     "low":    1.00,
     "medium": 0.65,
     "high":   0.35,
 }
 
-# Highly recommended signals get 2x the capital of regular buys.
+# Highly recommended signals get 2x the capital of regular buys (applied WITHIN a
+# pyramid pool — HR sizes you bigger inside the tier, it doesn't jump tiers).
 HIGHLY_RECOMMENDED_MULTIPLIER = 2.0
 
 # Safety cap — no single stock gets more than this
@@ -23,23 +43,82 @@ MAX_SHORT_EXPOSURE = 0.30
 MIN_ALLOCATION_BUDGET = 10.0
 
 
-def _compute_weight(rec: dict) -> float:
+def _conviction_base(rec: dict) -> float:
     """
-    Calculates a raw weight for one BUY/SHORT recommendation.
-    Weight = (conviction/100) x risk_multiplier x highly_recommended_boost
-
-    Position size is driven by CONVICTION (the analyst's edge score), not source
-    credibility — credibility is a trust gate, not a sizing input. Back-compat:
-    recs from before the conviction field fall back to confidence_score x 100.
+    Conviction (0-100) as a 0-1 fraction, driving position size. Back-compat: recs
+    from before the conviction field fall back to confidence_score × 100.
     """
     conviction = rec.get("conviction")
     if conviction is None:
         conviction = rec.get("confidence_score", 0.5) * 100  # back-compat for old cached recs
-    base       = max(0.0, min(float(conviction), 100.0)) / 100.0
-    risk       = rec.get("risk_level", "medium")
-    risk_mult  = RISK_MULTIPLIERS.get(risk, 0.5)
-    hr_mult    = HIGHLY_RECOMMENDED_MULTIPLIER if rec.get("highly_recommended") else 1.0
-    return base * risk_mult * hr_mult
+    return max(0.0, min(float(conviction), 100.0)) / 100.0
+
+
+def _compute_weight(rec: dict) -> float:
+    """
+    Raw weight for one SHORT recommendation (shorts sleeve only).
+    Weight = (conviction/100) × risk_multiplier × highly_recommended_boost.
+    (Long buys are sized by the pyramid tiers via _pool_weight, not this.)
+    """
+    risk      = rec.get("risk_level", "medium")
+    risk_mult = RISK_MULTIPLIERS.get(risk, 0.5)
+    hr_mult   = HIGHLY_RECOMMENDED_MULTIPLIER if rec.get("highly_recommended") else 1.0
+    return _conviction_base(rec) * risk_mult * hr_mult
+
+
+def _tier_of(rec: dict) -> str:
+    """Map a buy's risk_level to its pyramid tier. Unknown/missing → 'medium' (core)."""
+    r = (rec.get("risk_level") or "medium").lower()
+    return r if r in PYRAMID_TIERS else "medium"
+
+
+def _pool_weight(rec: dict) -> float:
+    """
+    Intra-pool weight for a buy: conviction (edge) × HR boost. Risk is NOT a factor
+    here — the risk tier already chose the pool; this only ranks names within it.
+    """
+    hr_mult = HIGHLY_RECOMMENDED_MULTIPLIER if rec.get("highly_recommended") else 1.0
+    return _conviction_base(rec) * hr_mult
+
+
+def _allocate_pool(recs: list[dict], pool_dollars: float, budget: float) -> list[tuple]:
+    """
+    Distribute one tier's dollar pool across its recs by pool weight, honoring the
+    global single-name cap (MAX_SINGLE_ALLOCATION of the TOTAL budget). Excess from a
+    capped name spills to uncapped names in the SAME tier; if every name hits the cap,
+    the remainder stays uninvested (held as cash — consistent with empty-tier handling).
+    Returns [(rec, dollars), ...]; never exceeds pool_dollars.
+    """
+    if not recs or pool_dollars <= 0:
+        return []
+
+    for r in recs:
+        r["_pw"] = _pool_weight(r)
+    total = sum(r["_pw"] for r in recs)
+    if total <= 0:
+        return []
+
+    # Cap expressed as a fraction of THIS pool (derived from the global budget cap).
+    cap_frac = min(1.0, (MAX_SINGLE_ALLOCATION * budget) / pool_dollars)
+    for r in recs:
+        r["_pf"] = r["_pw"] / total
+
+    for _ in range(10):
+        capped   = [r for r in recs if r["_pf"] >= cap_frac]
+        uncapped = [r for r in recs if r["_pf"] <  cap_frac]
+        if not capped or not uncapped:
+            break
+        excess = 0.0
+        for r in capped:
+            excess += r["_pf"] - cap_frac
+            r["_pf"] = cap_frac
+        unc_total = sum(r["_pf"] for r in uncapped)
+        if unc_total <= 0:
+            break
+        for r in uncapped:
+            r["_pf"] += excess * (r["_pf"] / unc_total)
+
+    return [(r, round(min(r["_pf"], cap_frac) * pool_dollars, 2)) for r in recs]
 
 
 def calculate_allocations(recommendations: list[dict], budget: float) -> list[dict]:
@@ -77,39 +156,19 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
 
     results = []
 
-    # ── BUY allocations ──────────────────────────────────────────
+    # ── BUY allocations — PYRAMID by risk tier ───────────────────
+    # Risk tier picks the budget POOL (top 20% / core 55% / base 25%); conviction
+    # sizes within it. An empty tier is held as CASH, not redistributed — so total
+    # invested < budget on days a tier has no ideas (that's intentional ballast).
     if buys:
-        for rec in buys:
-            rec["_raw_weight"] = _compute_weight(rec)
-
-        total_weight = sum(r["_raw_weight"] for r in buys)
-
-        if total_weight > 0:
-            for rec in buys:
-                rec["_fraction"] = rec["_raw_weight"] / total_weight
-
-            # Apply concentration cap and renormalize
-            for _ in range(10):
-                capped   = [r for r in buys if r["_fraction"] >= MAX_SINGLE_ALLOCATION]
-                uncapped = [r for r in buys if r["_fraction"] <  MAX_SINGLE_ALLOCATION]
-
-                if not capped:
-                    break
-
-                excess = 0.0
-                for r in capped:
-                    excess += r["_fraction"] - MAX_SINGLE_ALLOCATION
-                    r["_fraction"] = MAX_SINGLE_ALLOCATION
-
-                if uncapped:
-                    uncapped_total = sum(r["_fraction"] for r in uncapped)
-                    for r in uncapped:
-                        r["_fraction"] += excess * (r["_fraction"] / uncapped_total)
-
-            for rec in buys:
-                dollar_amount = round(rec["_fraction"] * budget, 2)
-                pct           = round(rec["_fraction"] * 100, 1)
-                results.append(_build_result(rec, dollar_amount, pct))
+        for tier, tier_pct in PYRAMID_TIERS.items():
+            tier_recs = [r for r in buys if _tier_of(r) == tier]
+            if not tier_recs:
+                continue  # empty tier → held as cash
+            pool = tier_pct * budget
+            for rec, dollars in _allocate_pool(tier_recs, pool, budget):
+                pct = round(dollars / budget * 100, 1) if budget else 0.0
+                results.append(_build_result(rec, dollars, pct))
 
     # ── SHORT allocations — separate sleeve, capped at MAX_SHORT_EXPOSURE ──
     # Uses margin, not the long cash budget, so it does NOT reduce buy allocations.
@@ -181,9 +240,11 @@ def print_allocation_table(allocations: list[dict], budget: float):
         print(f"  {ticker:<10} {a['direction']:<8} {amount} {pct} {a['risk_level']:<8} {hr}")
 
     print(f"  {'-'*64}")
-    total_allocated = sum(a["dollar_amount"] for a in allocations)
-    hr_count        = sum(1 for a in allocations if a.get("highly_recommended"))
-    print(f"  {'TOTAL BUY':<18} ${total_allocated:>9,.2f}   ⭐ {hr_count} highly recommended")
+    total_buy = sum(a["dollar_amount"] for a in allocations if a["direction"] == "buy")
+    hr_count  = sum(1 for a in allocations if a.get("highly_recommended"))
+    cash_held = max(0.0, budget - total_buy)
+    print(f"  {'TOTAL BUY':<18} ${total_buy:>9,.2f}   ⭐ {hr_count} highly recommended")
+    print(f"  {'HELD AS CASH':<18} ${cash_held:>9,.2f}   (empty pyramid tiers + capped names)")
     print(f"{'='*68}\n")
 
 

@@ -38,30 +38,14 @@ load_dotenv()
 # --- File paths ---
 CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache.json")
 CACHE_BACKUP_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache_backup.json")
-BUDGET_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "budget.json")
-# Budget can be set to any value >= 0 (manual entry). Dollar allocation only kicks in
-# at MIN_ALLOCATION_BUDGET (enforced in calculator/portfolio.py); below that the budget
-# is still saved and recommendations show with $0.
-MIN_BUDGET  = 0.0  # number_input floor
+# Budget is driven ENTIRELY by live Robinhood buying power (see _effective_budget below).
+# There is no manual budget setting — the old number_input + budget.json were removed
+# because a hand-typed budget could disagree with the real cash the user has, which
+# confused Argus chat. Buying power is now the single source of truth for sizing.
 from calculator.portfolio import MIN_ALLOCATION_BUDGET
 
 
 # --- Helper functions (must be defined before any UI code) ---
-def save_budget(amount: float):
-    with open(BUDGET_FILE, "w") as f:
-        json.dump({"budget": amount}, f)
-
-def load_budget() -> float:
-    if not os.path.exists(BUDGET_FILE):
-        return 1000.0
-    try:
-        with open(BUDGET_FILE, "r") as f:
-            value = float(json.load(f).get("budget", 1000.0))
-        # Never hand the widget a value below its minimum (0) — negatives would
-        # crash st.number_input.
-        return max(value, MIN_BUDGET)
-    except Exception:
-        return 1000.0
 
 
 # =========================================================
@@ -99,6 +83,17 @@ def _live_buying_power(force: bool = False):
     return bp
 
 
+def _effective_budget() -> float:
+    """
+    The allocation budget = live Robinhood buying power, always. Single source of
+    truth so the dollar allocations can never disagree with the real cash available.
+    Returns 0.0 when buying power can't be read (not connected / read failed) — recs
+    then show at $0 (analysis still visible) rather than sizing against a fake number.
+    """
+    bp = _live_buying_power()
+    return float(bp) if bp is not None else 0.0
+
+
 def _stop_loss_price(exit_condition: str, ref_price: float, direction: str = "buy"):
     """
     Parse "stop loss at X%" from an exit_condition and return the trigger PRICE, or
@@ -126,26 +121,22 @@ def _build_argus_context() -> str:
     # --- Market session (so advice can be timed to the session) ---
     lines.append(market_status_line())
 
-    # --- Budget ---
-    try:
-        budget = load_budget()
-        lines.append(f"CURRENT BUDGET (allocation setting): ${budget:,.2f}")
-    except Exception:
-        pass
-
-    # --- Live Robinhood buying power (real cash available now — not the sync button) ---
+    # --- Live Robinhood buying power = THE budget (single source of truth) ---
+    # There is no separate manual budget anymore; buying power IS the money to size to.
     try:
         from ingestion.robinhood import is_available
         if is_available():
             bp = _live_buying_power()
             if bp is not None:
-                lines.append(f"ROBINHOOD BUYING POWER (live, real cash available now): ${bp:,.2f}")
+                lines.append(
+                    f"BUYING POWER = YOUR BUDGET (live real cash, size everything to this): ${bp:,.2f}"
+                )
             else:
-                lines.append("ROBINHOOD BUYING POWER: unavailable (could not read account)")
+                lines.append("BUYING POWER: unavailable (could not read account — can't size dollar amounts)")
         else:
-            lines.append("ROBINHOOD BUYING POWER: not connected (no Robinhood credentials)")
+            lines.append("BUYING POWER: not connected (no Robinhood credentials — can't size dollar amounts)")
     except Exception as e:
-        lines.append(f"ROBINHOOD BUYING POWER: could not load ({e})")
+        lines.append(f"BUYING POWER: could not load ({e})")
 
     # --- Open positions ---
     try:
@@ -276,7 +267,7 @@ def _start_proxy_server():
                 },
                 json={
                     "model":      CLAUDE_MODEL,
-                    "max_tokens": 512,
+                    "max_tokens": 300,   # keep replies short (system prompt enforces brevity too)
                     "system":     system,
                     "messages":   messages,
                 },
@@ -393,17 +384,16 @@ if os.getenv("MOCK_MODE", "false").lower() == "true":
 with st.sidebar:
     st.header("Settings")
 
-    budget = st.number_input(
-        "Investment budget ($)",
-        min_value=MIN_BUDGET,
-        max_value=1_000_000.0,
-        value=load_budget(),
-        step=50.0,
-        help="Only buy signals receive allocations. Watch signals show $0. This tool is experimental — only invest what you're comfortable with.",
-    )
-    st.caption(f"⚠️ Experimental. Start small. Dollar allocation runs at \\${MIN_ALLOCATION_BUDGET:,.0f}+; "
-               f"below that, ideas still show with \\$0.")
-    save_budget(budget)
+    # Budget = live Robinhood buying power (single source of truth — no manual entry).
+    budget = _effective_budget()
+    if budget > 0:
+        st.metric("Budget = live buying power", f"\\${budget:,.2f}")
+        st.caption(f"Allocations size to your real Robinhood cash. Dollar allocation runs at "
+                   f"\\${MIN_ALLOCATION_BUDGET:,.0f}+; below that, ideas still show with \\$0.")
+    else:
+        st.metric("Budget = live buying power", "—")
+        st.caption("Connect Robinhood (credentials in .env) to size positions. "
+                   "Ideas still show with \\$0 until buying power is available.")
 
     st.divider()
 
@@ -426,14 +416,13 @@ with st.sidebar:
         st.divider()
         st.subheader("Robinhood")
 
-        if st.button("💰 Sync budget to buying power", use_container_width=True):
+        if st.button("💵 Refresh buying power", use_container_width=True):
             with st.spinner("Reading Robinhood buying power..."):
                 bp = _live_buying_power(force=True)
             if bp is None:
                 st.error("Could not read buying power. Check credentials in .env.")
             else:
-                save_budget(bp)
-                st.success(f"Budget set to your Robinhood buying power: ${bp:,.2f}")
+                st.success(f"Live buying power: ${bp:,.2f} — this is your budget.")
                 st.rerun()
         if st.button("🔄 Sync positions", use_container_width=True):
             with st.spinner("Connecting to Robinhood..."):
@@ -537,8 +526,8 @@ if True:
         bcol1, bcol2 = st.columns([0.93, 0.07])
         with bcol1:
             st.info(
-                "👋 **No recommendations yet.** Set your budget and click "
-                "**🔄 Run pipeline** in the sidebar to fetch today's signals. "
+                "👋 **No recommendations yet.** Click **🔄 Run pipeline** in the sidebar "
+                "to fetch today's signals. Allocations size to your live Robinhood buying power. "
                 "You can still use My Positions, Watch List, and History below."
             )
         with bcol2:
@@ -1750,7 +1739,7 @@ st_html("""
   parentDoc.body.appendChild(container);
   }
 
-  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, disciplined investment banker running the user's personal trading desk. Your mandate is to GROW the user's capital — but you keep this job by NOT losing them money, and the fastest way to lose money is buying a move that already happened. So you are equally ruthless in two directions: put capital to work when there is a real, still-open edge, and refuse to chase catalysts the market has already priced in. A trade skipped costs nothing; a top bought costs real money — when in doubt, prefer watching over buying. You have full access to the user's real portfolio data, open positions, P&L, and today's recommendations. STRICT RULES: 1. You ONLY discuss investing, trading, markets, and how the Argus app works. 2. If asked about anything unrelated say: "I'm here to help with your portfolio and the markets — let's stick to that." 3. Keep responses concise — 3-5 sentences max unless detail is needed. 4. Give direct, actionable calls — you can say "this position is worth holding for more upside" or "that catalyst already ran, I wouldn't chase it." Always explain the money logic. 5. Always end with: "Not financial advice — always do your own research." CATALYST TIMING (most important): Before endorsing any buy, ask whether the market has already reacted. If a stock already gapped or ran on the exact news in question, the easy money is gone — call it a watch (a missed entry), not a buy. Old news that already moved the price has no edge ("buy the rumor, sell the news"). M&A / BUYOUTS: distinguish the target from the acquirer; an announced all-cash deal pins the target near the offer price (only a small arbitrage spread left) so it's a watch, not a buy, and if the deal already closed the target is being delisted — don't recommend it; flag unresolved regulatory/financing risk. TWO NUMBERS — CONVICTION vs CONFIDENCE: each recommendation has a conviction score (0-100 = the analyst's EDGE: how strong/timely/un-priced-in the trade is, and it drives position size) and a confidence score (source credibility only). Lead with conviction when judging a trade; a high-confidence source reporting a priced-in event still has LOW conviction and is a bad buy. Crypto/ETF ideas can be high-conviction even though their sources never reach SEC-level confidence. TODAY'S LIST ALWAYS HAS A FULL READ: the recommendations always include WATCHES by design, not only buys. A watch means "notable, here is the trigger I would wait for," and it commits no capital. So never just tell the user "nothing today, sit out" and stop there. On a weak day, walk them through the watches: which stories are worth tracking and the specific price level or condition that would turn each into a buy. SHORTS: the list may also include 'short' ideas (bearish, stocks only) which profit when the price FALLS. Reason about them with the same fact-based discipline, keep stops tight because short losses are theoretically unbounded, and never endorse shorting a heavily-shorted or squeeze-prone name. MARKET HOURS & BUYING POWER: The LIVE PORTFOLIO DATA gives you the current MARKET STATUS and the user's live Robinhood BUYING POWER — use both, especially when they ask "what moves should I make with my current buying power." (a) Size every suggestion to the actual buying power available — never propose deploying more cash than they have, and when you name positions give rough dollar amounts that fit within it. (b) Time advice to the session: if the market is OPEN you can say "now"; if it's CLOSED/weekend, frame stock/ETF buys as "at the next open" or a limit order rather than "now"; if it's PRE-MARKET or AFTER-HOURS, warn that liquidity is thin and gaps are common so a limit order is safer. (c) Crypto trades 24/7, so those moves can be made anytime regardless of market status. SIGNAL QUALITY HONESTY: Real bankers don't chase garbage trades. If no buy has a strong, un-priced-in catalyst (confidence 0.68+, recent, edge still open), say so plainly ("no new buy worth fresh capital today") but then DO the useful work instead of dismissing the day: walk through today's watches and their triggers, and review the existing book (each position's P&L and exit, flag any near a stop or target, give a clear hold-or-close call). Only lead with new buys when a signal is genuinely strong AND the edge is still open.`;
+  const ARGUS_SYSTEM_BASE = `You are Argus, a sharp, disciplined banker running the user's trading desk. Mandate: grow capital without chasing moves already priced in — a skipped trade costs nothing, a top bought costs real money; when unsure, prefer watch over buy. You have the user's live portfolio, positions, P&L, buying power, market status, and today's recommendations. STYLE (important): be brief — 2-3 sentences, lead with the call, no preamble or restating the question, no bullet dumps unless asked. RULES: only discuss investing/markets/how Argus works; if asked anything else say "I'm here for your portfolio and the markets — let's stick to that."; give direct actionable calls plus the one-line money logic; end with a short "Not advice — DYOR." PRIORITY CHECKS: (1) Catalyst timing — if the stock already ran on the exact news, the edge is gone → watch, not buy. (2) Conviction (0-100 = edge, drives size) beats confidence (source credibility only); a credible source on a priced-in event is still a bad buy; crypto/ETF can be high-conviction despite low-credibility sources. (3) M&A: an announced all-cash deal pins the target near offer (watch, not buy); a closed deal = delisting, skip. POSITION SIZING — PYRAMID (of the long budget, by risk tier): high-risk/high-reward = TOP ~20% (small satellite); medium-risk/medium-high-reward = CORE ~55% (most of the money); low-risk/low-reward = BASE ~25% (ballast). Risk tier picks the pool, conviction sizes within it, empty tier is held as CASH (not redistributed). When advising buys keep this shape: most fresh capital into solid medium-risk core ideas, only a small slice into high-risk shots, never over 40% in one name. DISCIPLINE (the user's real leak): they tend to hand-close trades early at breakeven, cutting winners AND losers before target/stop — the picks work when let run. Push them to respect the exit plan; a -1% to -3% wobble is not a stop. SESSION & BUYING POWER: size every idea to live buying power (never more cash than they have); market OPEN → "now"; CLOSED/weekend → "at the next open"/limit order; PRE/AFTER-HOURS → warn liquidity is thin; crypto trades 24/7. WATCHES & HONESTY: today's list always includes watches by design — on a weak day don't say "sit out"; walk the top watches and the exact trigger that flips each to a buy, and review the open book (P&L, anything near a stop/target, hold-or-close). Shorts (bearish, stocks only) profit when price falls — tight stops, never short a squeeze-prone name.`;
   async function loadContext() {
     try {
       const res = await fetch('http://localhost:8502/context');

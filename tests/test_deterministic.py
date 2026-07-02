@@ -144,6 +144,44 @@ def test_compute_weight_conviction_drives_size():
     assert _compute_weight({"confidence_score": 0.5, "risk_level": "low"}) == 0.5
 
 
+# ── pyramid tier allocation (20/55/25, empty tier = cash) ─────────────────────
+_PYR = [
+    {"ticker": "H1", "direction": "buy", "risk_level": "high",   "conviction": 80,
+     "exit_condition": "target 15% gain, stop loss at 6%"},
+    {"ticker": "M1", "direction": "buy", "risk_level": "medium", "conviction": 70,
+     "exit_condition": "target 8% gain, stop loss at 4%"},
+    {"ticker": "M2", "direction": "buy", "risk_level": "medium", "conviction": 30,
+     "exit_condition": "target 8% gain, stop loss at 4%"},
+    {"ticker": "L1", "direction": "buy", "risk_level": "low",    "conviction": 60,
+     "exit_condition": "target 5% gain, stop loss at 2%"},
+]
+
+def test_pyramid_pools_split_20_55_25():
+    by = {r["ticker"]: r["dollar_amount"] for r in calculate_allocations(_PYR, 1000)}
+    assert by["H1"] == 200.0                       # high pool 20%, sole name
+    assert by["M1"] == 385.0 and by["M2"] == 165.0  # core 55% split 70/30 by conviction
+    assert by["L1"] == 250.0                       # base pool 25%, sole name
+    assert round(sum(by.values()), 2) == 1000.0    # all tiers populated → fully invested
+
+def test_pyramid_empty_tier_held_as_cash():
+    # only core (medium) ideas → only the 55% pool is invested, tails held as cash
+    core_only = [r for r in _PYR if r["risk_level"] == "medium"]
+    out = calculate_allocations(core_only, 1000)
+    assert round(sum(r["dollar_amount"] for r in out), 2) == 550.0
+
+def test_pyramid_single_name_cap_within_core():
+    # one dominant core name → capped at MAX_SINGLE_ALLOCATION (40% of budget = $400),
+    # the excess spills to the other core name (not across tiers).
+    recs = [
+        {"ticker": "BIG",   "direction": "buy", "risk_level": "medium", "conviction": 90,
+         "exit_condition": "target 8% gain, stop loss at 4%"},
+        {"ticker": "SMALL", "direction": "buy", "risk_level": "medium", "conviction": 10,
+         "exit_condition": "target 8% gain, stop loss at 4%"},
+    ]
+    by = {r["ticker"]: r["dollar_amount"] for r in calculate_allocations(recs, 1000)}
+    assert by["BIG"] == 400.0 and by["SMALL"] == 150.0   # 40% cap; rest of core pool to SMALL
+
+
 # ── analyst deterministic guards ──────────────────────────────────────────────
 def test_summarize_track_record():
     closed = [{"direction": "buy", "pnl_pct": 12.0}, {"direction": "buy", "pnl_pct": -4.0},

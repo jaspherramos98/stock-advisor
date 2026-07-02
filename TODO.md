@@ -2,6 +2,40 @@
 
 ## Done
 
+### 16. Budget = live buying power, manual budget removed (R9) ✅
+The manual "Investment budget ($)" number_input could disagree with the user's real Robinhood
+cash and confused Argus chat (two competing "budget" numbers). Removed it entirely; live buying
+power is now the single source of truth for sizing.
+- `dashboard/app.py`: deleted `BUDGET_FILE`/`MIN_BUDGET`/`save_budget`/`load_budget` and the
+  number_input + experimental caption. Added `_effective_budget()` → live buying power (60s TTL)
+  or 0.0 when unreadable. Sidebar now shows the budget read-only ("Budget = live buying power").
+  Replaced "Sync budget to buying power" with "💵 Refresh buying power" (forces the cache refresh).
+  Chat context dropped the `CURRENT BUDGET` line and labels buying power as THE budget.
+- Fallback: buying power unreadable (not connected / read fail) → budget 0.0, recs show at $0
+  (analysis still visible), sidebar hints to connect Robinhood. No phantom number ever sizes trades.
+- `budget.json` is now orphaned/deprecated (left on disk, harmless; no longer read or written).
+- Docs: CLAUDE.md (key files, Budget Allocation, Header, Chatbot) + this entry. Tests unaffected
+  (31 passing — allocation math is budget-agnostic; only the budget SOURCE changed).
+- Tradeoff noted to user: lose the ability to deploy only PART of buying power. Offered an optional
+  "deploy X%" cap as a later add if wanted — not built.
+
+### 15. Pyramid risk-tier allocation + chat tune (R8) ✅
+Replaced the monotonic risk-multiplier sizing (more risk = less money) with a **risk pyramid**:
+the risk tier picks the budget POOL, conviction sizes within it. `PYRAMID_TIERS = {high:0.20,
+medium:0.55, low:0.25}` — top satellite / core / base, most of the money in the medium core.
+Empty tier is **held as cash** (user's choice), not redistributed, so invested < budget is normal.
+- `calculator/portfolio.py`: `PYRAMID_TIERS`, `_tier_of`, `_pool_weight` (conviction × HR, risk
+  handled by the tier), `_allocate_pool` (splits a pool, in-tier single-name-cap spill), rewrote the
+  buys block to iterate tiers. `_compute_weight`/`RISK_MULTIPLIERS` now shorts-only. Shorts sleeve
+  and the $10 floor unchanged. `print_allocation_table` shows a HELD AS CASH line.
+- `dashboard/app.py` chatbot: system prompt trimmed + given the pyramid sizing rule and the
+  discipline-leak nudge; brevity enforced (2-3 sentences, lead with the call); `/chat` max_tokens
+  512 → 300. Both an explicit ask (integrate pyramid into chat + shorter/cheaper replies).
+- `tests/test_deterministic.py`: +3 pyramid cases (20/55/25 split, empty-tier cash, in-core cap).
+  31 passing (was 28).
+- Split (20/55/25) and empty-tier=cash chosen by the user. NOTE: allocation shape ≠ the P&L fix —
+  the real leak is behavioral (early closing, see #14); pyramid is risk management, not a profit lever.
+
 ### 14. Performance scorecard — diagnose "breaking even" ✅
 User reported ~1 month of trading netting flat. Computed real closed-trade stats and found the
 truth: NOT a bad-picks problem — a **discipline leak**. 17 closed trades, 41% win rate, but
