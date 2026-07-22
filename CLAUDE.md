@@ -268,8 +268,14 @@ conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core
   capital into medium-risk core ideas, only a small slice into high-risk shots, ≤40% in one name.
 - Reinforces the **discipline leak** finding (scorecard): pushes the user to respect the exit plan
   and not hand-close at breakeven (a −1% to −3% wobble is not a stop).
-- **Brevity/token budget:** system prompt is trimmed and enforces 2-3 sentences, lead with the call,
-  no preamble; `/chat` `max_tokens = 300`. Keep replies short — this was an explicit user ask.
+- **Action-summary-first (R10):** for "what moves should I make / what should I do / review my
+  portfolio" asks, Argus MUST open with a compact one-line-per-ticker action list
+  (`Buy/Sell/Hold/Watch — TICKER, exit rule or reason`) covering every open position + any new buy,
+  then an `Explanation:` block. Other questions stay 2-3 sentences, no list. `/chat` `max_tokens = 450`
+  (room for the list). Goal: user can act without asking follow-ups.
+- **Order-type awareness (R10):** the chat context tags each open position with its share count;
+  a FRACTIONAL (<1 share) holding can only be exited by a MARKET order — Argus never advises a
+  limit/stop-limit on it (Robinhood only allows limit/stop on whole-share positions).
 - Gives direct actionable advice; honest about weak signal days
 - Same anti-priced-in discipline as the analyst: catalyst-timing check ("buy the
   rumor, sell the news"), M&A target-vs-acquirer mechanics, `confidence_score` =

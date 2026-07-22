@@ -2,6 +2,22 @@
 
 ## Done
 
+### 17. Scorecard reset + chat action-list & order-type awareness (R10) ✅
+Earlier non-final Argus runs polluted `positions.json` — a $150 deposit was recorded as trade P&L,
+so the scorecard read as +$174 when the account was actually ~$7 down. Reset to a clean baseline and
+sharpened chat's output.
+- **Data reset:** backed up `positions.json` → `positions_backup_<ts>.json`, then dropped all 29
+  closed positions, keeping only the 5 real open ones (GOOG, PAYO, ACA, IWM, AVGO) as the fresh
+  scorecard baseline. Scorecard now shows nothing until these close (dashboard already guards
+  `if closed_positions`). No code change to `analysis/scorecard.py` — it just has clean input now.
+- **Chat action-list-first:** `dashboard/app.py` `ARGUS_SYSTEM_BASE` — "what moves / what should I
+  do / review my portfolio" asks now open with a one-line-per-ticker `Buy/Sell/Hold/Watch — TICKER,
+  rule` list (every open position + any new buy), then `Explanation:`. `/chat` `max_tokens` 300 → 450.
+- **Fractional order rule:** `_build_argus_context` tags each position with share count
+  (`amount_invested / ref_price`); `ARGUS_SYSTEM_BASE` tells Argus a FRACTIONAL (<1 share) holding
+  is market-order-only (Robinhood blocks limit/stop on fractional) — never advise a limit/stop on it.
+- Docs: CLAUDE.md chatbot section + this entry.
+
 ### 16. Budget = live buying power, manual budget removed (R9) ✅
 The manual "Investment budget ($)" number_input could disagree with the user's real Robinhood
 cash and confused Argus chat (two competing "budget" numbers). Removed it entirely; live buying

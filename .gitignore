@@ -6,6 +6,7 @@ google_credentials.json
 pipeline_cache.json
 pipeline_cache_backup.json
 positions.json
+positions_backup_*.json
 snoozed_alerts.json
 budget.json
 watchlist.json
