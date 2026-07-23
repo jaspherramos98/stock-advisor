@@ -2,6 +2,22 @@
 
 ## Done
 
+### 20. Alerts actually scheduled (R13) ✅
+The last gap: everything was wired but nothing ran it, so no alert could ever fire on its own.
+- Registered Windows scheduled task **"Argus Alert Checks"** → `wscript.exe run_checks_silent.vbs`,
+  **every 15 min, 24/7, hidden**. Safe around the clock because `run_checks.py` self-gates on US
+  market hours (ET, DST-aware), which also makes it correct regardless of the PC's local timezone.
+- `run_checks.bat` (UTF-8 env + venv python) + `run_checks_silent.vbs` (hidden wrapper) added.
+- `run_checks.py`: closed-market skips no longer written to the log (would be ~96 junk lines/day at
+  a 15-min cadence — added a `to_file` flag to `log()`); log writes pinned to `encoding="utf-8"`
+  (em-dashes were producing mojibake under the cp1252 locale default).
+- **Bug found + fixed:** the new `.bat` files were written with LF endings, so cmd.exe split `REM`
+  lines (`'M' is not recognized as an internal or external command`). Converted argus.bat /
+  argus_stop.bat / run_checks.bat to CRLF; noted the constraint in CLAUDE.md.
+- Verified end-to-end: manual run exit 0; task triggered via `schtasks /Run` → **Last Result 0**,
+  log updated, no window shown. A **real alert fired and emailed** during testing (AVGO hit its
+  gain target, +5.5%), and the same-day dedup correctly suppressed the repeat on the next run.
+
 ### 19. Pinned watch button + silent (no-terminal) launcher (R12) ✅
 Two gaps from R11: recommendation triggers were ephemeral (a watch you were waiting on vanished
 when the pipeline reran), and running Argus meant leaving a terminal window open.

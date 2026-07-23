@@ -22,16 +22,24 @@ LOG_FILE = os.path.join(
 )
 
 
-def log(message: str):
+def log(message: str, to_file: bool = True):
     """
-    Writes a timestamped message to both the terminal and the log file.
-    The log file accumulates over time so you can review history.
+    Writes a timestamped message to the terminal and (by default) the log file.
+
+    `to_file=False` is for high-frequency noise: the scheduled task fires every 15
+    minutes around the clock and self-skips outside market hours, so writing those
+    skips would add ~96 useless lines a day to the log.
     """
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line      = f"[{timestamp}] {message}"
     print(line)
+    if not to_file:
+        return
     try:
-        with open(LOG_FILE, "a") as f:
+        # Explicit UTF-8 — alert text contains em-dashes and symbols, and without this
+        # the encoding follows the Windows locale (cp1252), producing mojibake in the
+        # log or an outright UnicodeEncodeError.
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception as e:
         print(f"Log write error: {e}")
@@ -45,18 +53,16 @@ def is_market_hours() -> bool:
 
 
 def main():
+    # Closed-market skips stay out of the log file — the scheduled task runs every 15
+    # minutes all day, so only real check runs should leave a trace.
+    if not is_market_hours():
+        now_et = datetime.now(MARKET_TZ)
+        log(f"Market closed ({now_et.strftime('%A %I:%M %p')} ET). Skipping.", to_file=False)
+        return
+
     log(f"{'='*50}")
     log(f"ALERT CHECK STARTED (exit + entry)")
     log(f"{'='*50}")
-
-    if not is_market_hours():
-        now_et = datetime.now(MARKET_TZ)
-        log(
-            f"Market closed "
-            f"({now_et.strftime('%A %I:%M %p')} ET). "
-            f"Skipping."
-        )
-        return
 
     try:
         log("Market is open — running exit checks...")
