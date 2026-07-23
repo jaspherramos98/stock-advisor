@@ -7,6 +7,7 @@ pipeline_cache.json
 pipeline_cache_backup.json
 positions.json
 positions_backup_*.json
+entry_watch.json
 snoozed_alerts.json
 budget.json
 watchlist.json

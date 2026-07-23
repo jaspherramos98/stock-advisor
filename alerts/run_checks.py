@@ -3,6 +3,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from alerts.exit_checker import run_exit_checks
+from alerts.entry_checker import run_entry_checks
 from alerts.notifier import send_alerts
 from datetime import datetime
 import pytz
@@ -45,7 +46,7 @@ def is_market_hours() -> bool:
 
 def main():
     log(f"{'='*50}")
-    log(f"EXIT CHECK STARTED")
+    log(f"ALERT CHECK STARTED (exit + entry)")
     log(f"{'='*50}")
 
     if not is_market_hours():
@@ -61,6 +62,15 @@ def main():
         log("Market is open — running exit checks...")
         alerts = run_exit_checks()
 
+        # Entry ("buy when") checks — watch triggers from today's recommendations plus
+        # the last buy/watch ideas Argus chat gave. Failing here must not lose the exit
+        # alerts we already have, so it's guarded separately.
+        try:
+            log("Running entry (buy-trigger) checks...")
+            alerts += run_entry_checks()
+        except Exception as entry_err:
+            log(f"Entry checker failed (exit alerts unaffected): {entry_err}")
+
         if alerts:
             log(f"{len(alerts)} alert(s) triggered — sending notifications...")
             send_alerts(alerts)
@@ -68,7 +78,7 @@ def main():
                 log(f"  ALERT [{a['alert_type']}] {a['ticker']} — {a['message'][:80]}")
             log("Notifications sent.")
         else:
-            log("No exit conditions triggered.")
+            log("No exit or entry conditions triggered.")
 
     except Exception as e:
         error_msg = traceback.format_exc()
@@ -90,7 +100,7 @@ def main():
         except Exception as email_err:
             log(f"Could not send error email: {email_err}")
 
-    log("EXIT CHECK COMPLETE\n")
+    log("ALERT CHECK COMPLETE\n")
 
 
 if __name__ == "__main__":

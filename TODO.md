@@ -2,6 +2,30 @@
 
 ## Done
 
+### 18. Entry ("buy when") alerts + email verification (R11) ✅
+Email notification **verified working** (Gmail SMTP, test alert delivered). Added the missing
+bullish half of alerting: until now Argus only told you when to get OUT.
+- `alerts/entry_checker.py` (new): `_parse_triggers` pulls every (direction, price) out of a trigger
+  string — a two-sided R7 trigger ("pulls back to support near $314.91 ... or breaks above $328.04")
+  yields both a `below` and an `above` condition; direction is decided by whichever keyword sits
+  closest before each `$`. `_is_hit` fires breakouts on `>=` and pullbacks on `<=`. `run_entry_checks`
+  pulls candidates from **today's recommendations** (`pipeline_cache.json` watch `entry_trigger`) and
+  **Argus chat's last suggestion**, skips owned tickers, one alert per ticker/source per day,
+  session-aware. No LLM tokens.
+- `storage/entry_watch.py` (new): persists chat's last buy/watch set (each capture REPLACES the
+  previous — alerts track the *last* suggestion) + the per-day notify record.
+- `dashboard/app.py`: `_capture_chat_suggestions` parses `Buy —`/`Watch — TICKER` lines out of the
+  chat reply (uppercase-ticker only, so prose like "Buy the dip" never registers) and stores them;
+  hooked into the `/chat` proxy on a 200, fully guarded so capture can never break a reply.
+- `alerts/notifier.py`: `entry_trigger` styled as teal "🎯 Buy Trigger"; subject + header now adapt
+  (exit-only / buy-trigger-only / mixed) instead of hardcoded "Exit Alert".
+- `alerts/run_checks.py`: runs exit + entry, one combined email; entry block separately guarded so
+  its failure can't drop exit alerts. Log header renamed to ALERT CHECK.
+- Tests: +3 (two-sided parse, direction/edge cases, hit logic). 34 passing (was 31).
+- Verified live: 11 recommendation triggers parsed + priced via Robinhood, 0 fired (all prices sat
+  inside their bands — correct). Mixed exit+entry test email delivered.
+- `.gitignore`: `entry_watch.json` (local data).
+
 ### 17. Scorecard reset + chat action-list & order-type awareness (R10) ✅
 Earlier non-final Argus runs polluted `positions.json` — a $150 deposit was recorded as trade P&L,
 so the scorecard read as +$174 when the account was actually ~$7 down. Reset to a clean baseline and

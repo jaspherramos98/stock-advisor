@@ -22,6 +22,15 @@ def _build_email_html(alerts: list[dict]) -> str:
     """
     now        = datetime.now().strftime("%B %d, %Y at %I:%M %p")
     alert_rows = ""
+    # Header adapts to what actually fired — exits, buy triggers, or a mix.
+    n_entry    = sum(1 for a in alerts if a.get("alert_type") == "entry_trigger")
+    n_exit     = len(alerts) - n_entry
+    if n_entry and n_exit:
+        heading, summary = "📈 Argus — Alerts", f"{n_exit} exit + {n_entry} buy trigger(s)"
+    elif n_entry:
+        heading, summary = "🎯 Argus — Buy Trigger", f"{n_entry} entry trigger(s) hit"
+    else:
+        heading, summary = "📈 Argus — Exit Alert", f"{n_exit} exit condition(s) triggered"
 
     for a in alerts:
         alert_type = a["alert_type"].replace("_", " ").title()
@@ -38,6 +47,9 @@ def _build_email_html(alerts: list[dict]) -> str:
         elif a["alert_type"] == "event_based":
             color      = "#3498db"
             type_label = f"📰 {alert_type}"
+        elif a["alert_type"] == "entry_trigger":
+            color      = "#1abc9c"
+            type_label = "🎯 Buy Trigger"
         else:
             color      = "#aaaaaa"
             type_label = alert_type
@@ -62,11 +74,11 @@ def _build_email_html(alerts: list[dict]) -> str:
         <div style="max-width: 700px; margin: 0 auto;">
 
             <h1 style="color: #ffffff; border-bottom: 2px solid #2ecc71; padding-bottom: 10px;">
-                📈 Argus — Exit Alert
+                {heading}
             </h1>
 
             <p style="color: #aaaaaa;">
-                {len(alerts)} exit condition(s) triggered on {now}
+                {summary} on {now}
             </p>
 
             <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
@@ -109,8 +121,17 @@ def _send_email(alerts: list[dict]):
         return
 
     try:
+        n_entry = sum(1 for a in alerts if a.get("alert_type") == "entry_trigger")
+        n_exit  = len(alerts) - n_entry
+        if n_entry and n_exit:
+            subject = f"📈 Argus — {n_exit} Exit + {n_entry} Buy Trigger(s)"
+        elif n_entry:
+            subject = f"🎯 Argus — {n_entry} Buy Trigger(s) Hit"
+        else:
+            subject = f"📈 Argus — {n_exit} Exit Alert(s) Triggered"
+
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"📈 Argus — {len(alerts)} Exit Alert(s) Triggered"
+        msg["Subject"] = subject
         msg["From"]    = sender_email
         msg["To"]      = receiver_email
 

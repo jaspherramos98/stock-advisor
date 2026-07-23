@@ -70,6 +70,11 @@ storage/
   sheets.py                   Google Sheets export/read
 alerts/snooze.py              Alert snooze/dismiss logic
 alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-aware (tags actionable_now)
+alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a watch trigger price is hit;
+                              sources = today's recommendations + Argus chat's last suggestion
+alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject/header adapt)
+alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
+storage/entry_watch.py        Persists Argus chat's last buy/watch suggestions + per-day notify record
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
@@ -318,6 +323,21 @@ Each recommendation must have:
   and `market_status`; when the market is closed/extended-hours the alert message appends a caveat
   ("act at the next open" / "extended-hours only, use a limit order") so the user never acts on an
   unexecutable signal.
+- **Entry ("buy when") alerts (R11)** (`alerts/entry_checker.py`): the bullish counterpart, so a
+  watch idea can't pass its trigger unnoticed. Candidates come from **two sources** — watch recs in
+  `pipeline_cache.json` (their R7 `entry_trigger`, anchored to real support/resistance) and **Argus
+  chat's last suggestion** (the `/chat` proxy parses `Buy —`/`Watch — TICKER` action lines via
+  `_capture_chat_suggestions` into `storage/entry_watch.py`; each capture replaces the prior set).
+  `_parse_triggers` extracts EVERY price + direction from a trigger string — a two-sided trigger
+  ("pulls back to $314.91 ... or breaks above $328.04") yields both a `below` and an `above`
+  condition, either of which fires. Owned tickers are skipped; one alert per ticker/source per day;
+  session-aware like exits. Pure price math, no LLM tokens.
+- **Email** (`alerts/notifier.py`): Gmail SMTP (`ALERT_EMAIL_*` in `.env`), HTML table. Subject and
+  header adapt to what fired (exit-only / buy-trigger-only / mixed); `entry_trigger` renders as a
+  teal "🎯 Buy Trigger" row. Verified working.
+- **Runner** (`alerts/run_checks.py`): market-hours gated; runs exit checks then entry checks and
+  sends ONE combined email. The entry block is separately guarded so an entry failure can't lose
+  exit alerts. Crashes email themselves.
 
 ## Dashboard Tabs
 1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders, add to positions

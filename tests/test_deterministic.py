@@ -19,6 +19,7 @@ from calculator.portfolio import calculate_allocations, _compute_weight, MIN_ALL
 from analysis.claude_analyst import _summarize_track_record, _filter_recommendations
 from backtest.exit_backtest import simulate_trade, summarize
 from analysis.scorecard import parse_band, classify_exit, compute_scorecard
+from alerts.entry_checker import _parse_triggers, _is_hit
 
 
 # ── technicals ──────────────────────────────────────────────────────────────
@@ -255,6 +256,26 @@ def test_classify_exit():
     # closed near zero, well inside both bands → early scratch (the leak)
     assert classify_exit({"pnl_pct": -1.1, "exit_condition": "target 8% gain, stop loss at 4%"}) == "early"
     assert classify_exit({"pnl_pct": None, "exit_condition": "target 8% gain"}) is None
+
+def test_parse_triggers_two_sided():
+    # Real R7-style trigger: carries BOTH a pullback and a breakout price.
+    t = _parse_triggers(
+        "Pulls back to support near $314.91 and stabilizes with a reversal candle, "
+        "or breaks above $328.04 on volume if AI concerns resolve"
+    )
+    assert ("below", 314.91) in t and ("above", 328.04) in t and len(t) == 2
+
+def test_parse_triggers_directions_and_edges():
+    assert _parse_triggers("Breaks above $29.25 on volume") == [("above", 29.25)]
+    assert _parse_triggers("pulls back to ~$190") == [("below", 190.0)]
+    assert _parse_triggers("buy above $1,250.50") == [("above", 1250.50)]
+    assert _parse_triggers("") == [] and _parse_triggers("no price here") == []
+
+def test_is_hit():
+    assert _is_hit("above", 100, 101) and not _is_hit("above", 100, 99)
+    assert _is_hit("below", 100, 99) and not _is_hit("below", 100, 101)
+    assert _is_hit("above", 100, 100) and _is_hit("below", 100, 100)  # touching counts
+
 
 def test_compute_scorecard_discipline_and_concentration():
     closed = [
