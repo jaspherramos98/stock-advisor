@@ -364,7 +364,15 @@ Each recommendation must have:
   run_checks.bat CRLF.
 
 ## Dashboard Tabs
-1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders, add to positions
+1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders,
+   add to positions. **Table layout (R14):** 12 columns sized in explicit pixels so the whole table
+   fits a normal desktop window with NO horizontal scroll; `row_height=70` (double) lets Buy/Sell
+   wrap to 2 lines; `height` is set from the row count so every row shows without an inner scrollbar.
+   Company was dropped (it's in the expander title) and ⭐/⚠ merged into one narrow **Flags** column
+   to buy that width. Buy/Sell text is truncated to 72 chars in the table (`_short`) — the FULL
+   wording lives in the Stock details expander. Watch recs get the 👁 **Watch this trigger** button.
+   ⚠ Any `$` in `st.caption`/`st.markdown` must be escaped `\$` — paired `$...$` renders as LaTeX
+   and silently eats the dollar signs (this bit the allocation caption).
 2. **Portfolio** — invested money, P&L trend graph (yfinance), position breakdown
 3. **My Positions** — open/closed positions, manual entry, price updates, snooze alerts. Open-positions
    table + each expander show a computed **Stop @** price (`_stop_loss_price` parses "stop loss at X%"

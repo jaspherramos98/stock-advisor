@@ -2,6 +2,21 @@
 
 ## Done
 
+### 21. Recommendations table fits without horizontal scroll (R14) ✅
+Table needed scrolling right to read Buy/Sell when, and the text was clipped to one line.
+- `dashboard/app.py`: explicit pixel widths on all 12 columns so the total lands inside a normal
+  desktop content area (no horizontal scroll); `row_height=70` (double) so Buy/Sell wrap to 2 lines;
+  `height` derived from row count (capped 800) so all rows show without an inner vertical scrollbar.
+- Bought the needed width by dropping **Company** (already the expander title) and merging ⭐ + ⚠
+  into a single narrow **Flags** column. Buy/Sell text truncated to 72 chars via `_short()` — full
+  wording still in the Stock details expander (noted in the caption).
+- **Bug fixed:** the allocation caption rendered as `**Amount ( )** — 0.00 means...` — paired `$...$`
+  was being parsed as LaTeX and eating the dollar signs. Escaped as `\$`; documented in CLAUDE.md.
+- Verified visually with Playwright at 1600px across four iterations: first pass still overflowed
+  (`width="large"` ≈300px each pushed Sell when + Flags off-screen), second fit but sat exactly at
+  the limit so a page scrollbar re-clipped Flags — final widths leave margin. Screenshot artifacts
+  deleted.
+
 ### 20. Alerts actually scheduled (R13) ✅
 The last gap: everything was wired but nothing ran it, so no alert could ever fire on its own.
 - Registered Windows scheduled task **"Argus Alert Checks"** → `wscript.exe run_checks_silent.vbs`,
