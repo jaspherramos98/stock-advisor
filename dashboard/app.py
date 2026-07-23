@@ -111,6 +111,35 @@ def _stop_loss_price(exit_condition: str, ref_price: float, direction: str = "bu
     return round(ref_price * (1 + pct), 2) if direction == "short" else round(ref_price * (1 - pct), 2)
 
 
+def _capture_chat_suggestions(reply_text: str):
+    """
+    Pulls Buy/Watch lines out of Argus's action-list reply and stores them as entry-watch
+    candidates, so alerts/entry_checker.py can email when one of those "buy when" levels
+    is actually hit. Chat replies are otherwise ephemeral — this is what makes alerting on
+    "Argus chat's last suggestion" possible. Each capture REPLACES the previous set.
+
+    Matches the enforced action-list format, e.g. "Watch — AAPL, buy above $338.48".
+    Ticker must be uppercase so prose like "Buy the dip" never registers. Best-effort:
+    a parse failure must never break the chat reply.
+    """
+    import re
+    try:
+        pattern = re.compile(r"^\s*([Bb]uy|[Ww]atch)\s*[—–\-:]+\s*\$?([A-Z]{1,6})\b[,\s]*(.*)$",
+                             re.MULTILINE)
+        found = [
+            {"ticker": m.group(2).upper(),
+             "action": m.group(1).lower(),
+             "trigger_text": (m.group(3) or "").strip()}
+            for m in pattern.finditer(reply_text or "")
+        ]
+        if found:
+            from storage.entry_watch import set_chat_suggestions
+            n = set_chat_suggestions(found)
+            print(f"Chat suggestions captured for entry alerts: {n}")
+    except Exception as e:
+        print(f"Chat suggestion capture failed: {e}")
+
+
 def _build_argus_context() -> str:
     """
     Builds a real-time snapshot of the user's portfolio and today's
@@ -283,7 +312,21 @@ def _start_proxy_server():
                 },
                 timeout=30,
             )
-            return jsonify(resp.json()), resp.status_code
+            payload = resp.json()
+
+            # Record any Buy/Watch ideas in this reply so the entry checker can alert
+            # when their "buy when" level is hit. Never let this break the reply.
+            if resp.status_code == 200:
+                try:
+                    reply_text = "".join(
+                        b.get("text", "") for b in payload.get("content", [])
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                    _capture_chat_suggestions(reply_text)
+                except Exception as cap_err:
+                    print(f"Chat capture skipped: {cap_err}")
+
+            return jsonify(payload), resp.status_code
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
