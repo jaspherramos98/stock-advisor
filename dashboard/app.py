@@ -1480,6 +1480,132 @@ if True:
     # TAB 4 — Watch List Editor
     # =========================================================
     with tab4:
+        # --- Pinned buy triggers (entry alerts) -------------------------------
+        # Central place to review/remove what the entry checker is monitoring. Without
+        # this, a pin whose ticker dropped out of the recommendations was orphaned:
+        # still alerting every 15 min with no UI to remove it.
+        from storage.entry_watch import (
+            get_pinned as _get_pinned, remove_pinned as _remove_pinned,
+            get_chat_suggestions as _get_chat_sugg, set_chat_suggestions as _set_chat_sugg,
+        )
+        from alerts.entry_checker import _parse_triggers as _parse_trig
+
+        # Streamlit renders paired '$...$' as LaTeX, which mangles trigger text full of
+        # prices. Escape every '$' before displaying any analyst-written string.
+        def _esc(s: str) -> str:
+            return str(s or "").replace("$", "\\$")
+
+        st.subheader("🔎 What Argus is monitoring")
+        st.caption(
+            "Everything checked every 15 minutes during market hours. **Open positions** are "
+            "watched for EXIT (stop / target / time / news). **Pinned triggers** are watched for "
+            "ENTRY. Owned tickers are deliberately excluded from entry alerts — you're already in."
+        )
+
+        # --- Open positions → exit alerts (auto-included, nothing to pin) ------
+        st.markdown("##### 📍 Open positions — exit alerts")
+        _open_pos = get_open_positions()
+        if not _open_pos:
+            st.caption("No open positions.")
+        else:
+            _pos_px = {}
+            try:
+                from ingestion.prices import fetch_prices as _fp3
+                _pos_px = _fp3([p["ticker"] for p in _open_pos]) or {}
+            except Exception:
+                pass
+            for p in _open_pos:
+                t = p["ticker"]
+                ref = p.get("manual_price") or p.get("reference_price", 0)
+                q = _pos_px.get(t)
+                live = q["price"] if q else ref
+                pnl = ((live - ref) / ref * 100) if ref else 0
+                if p.get("direction") == "short":
+                    pnl = -pnl
+                stop_px = _stop_loss_price(p.get("exit_condition", ""), ref, p.get("direction", "buy"))
+                stop_str = f" · stop @ \\${stop_px:,.2f}" if stop_px else ""
+                st.markdown(
+                    f"**{t}** — entry \\${ref:,.2f} · live \\${live:,.2f} · "
+                    f"P&L {pnl:+.1f}%{stop_str}"
+                )
+                st.caption(f"Exit when: {_esc(p.get('exit_condition', 'not set'))}")
+            st.caption("Manage these under **My Positions**.")
+
+        st.divider()
+        st.markdown("##### 📌 Pinned buy triggers — entry alerts")
+        _pinned = _get_pinned()
+        if not _pinned:
+            st.caption(
+                "Nothing pinned. On a watch recommendation (Today's Recommendations → "
+                "Stock details), click **👁 Watch this trigger** to get an email when its "
+                "\"buy when\" level is hit — it keeps working after the pipeline reruns."
+            )
+        else:
+            st.caption(
+                f"{len(_pinned)} trigger(s) checked every 15 minutes during market hours. "
+                "These survive pipeline reruns — remove any you no longer want."
+            )
+            _live = {}
+            try:
+                from ingestion.prices import fetch_prices as _fp2
+                _live = _fp2([p["ticker"] for p in _pinned]) or {}
+            except Exception:
+                pass
+
+            for p in _pinned:
+                t = p["ticker"]
+                c_info, c_btn = st.columns([9, 1])
+                with c_info:
+                    levels = _parse_trig(p.get("trigger_text", ""))
+                    q = _live.get(t)
+                    live_str = f" · live \\${q['price']:,.2f}" if q else ""
+                    if levels:
+                        lvl_str = ", ".join(
+                            f"{'breakout' if d == 'above' else 'pullback'} \\${v:,.2f}"
+                            for d, v in levels
+                        )
+                        st.markdown(f"**{t}** — {lvl_str}{live_str}")
+                    else:
+                        # No price in the trigger means the checker can never fire on it —
+                        # say so instead of leaving a pin that silently does nothing.
+                        st.markdown(f"**{t}** — ⚠️ no price level{live_str}")
+                        st.warning(
+                            "This trigger is event-based (no \\$ price), so it will NEVER "
+                            "fire an alert. Remove it and watch the news instead, or re-pin "
+                            "once a recommendation gives a concrete price.",
+                            icon="⚠️",
+                        )
+                    st.caption(
+                        f"Pinned {p.get('pinned_at', '?')} · "
+                        f"{_esc(p.get('trigger_text', ''))[:180]}"
+                    )
+                with c_btn:
+                    if st.button("✕", key=f"rm_pin_{t}", help=f"Stop watching {t}"):
+                        _remove_pinned(t)
+                        st.success(f"Removed {t} from pinned triggers.")
+                        st.rerun()
+
+        # Chat-sourced suggestions also drive entry alerts — surface them so they can
+        # be cleared too (they're replaced automatically on the next chat suggestion).
+        _chat_sugg = _get_chat_sugg()
+        if _chat_sugg:
+            with st.expander(f"💬 From Argus chat's last suggestion ({len(_chat_sugg)})"):
+                st.caption(
+                    "Captured from the last action list Argus chat gave. Replaced automatically "
+                    "the next time it suggests moves."
+                )
+                for s in _chat_sugg:
+                    st.markdown(
+                        f"**{s['ticker']}** ({s.get('action', 'watch')}) — "
+                        f"{_esc(s.get('trigger_text', ''))[:180]}"
+                    )
+                if st.button("Clear chat suggestions"):
+                    _set_chat_sugg([])
+                    st.success("Cleared.")
+                    st.rerun()
+
+        st.divider()
+
         st.subheader("Watch list")
         st.caption(
             "These are the tickers Finnhub monitors for company-specific news. "
