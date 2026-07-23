@@ -754,6 +754,24 @@ if True:
                     trigger = a.get("entry_trigger")
                     if trigger and trigger.lower() not in ("now", "n/a", ""):
                         st.markdown(f"**Buy when:** {trigger}")
+                        # Pin this watch so the entry checker keeps monitoring it even
+                        # after a pipeline rerun overwrites pipeline_cache.json.
+                        from storage.entry_watch import add_pinned, remove_pinned, is_pinned
+                        pin_key = f"pin_{idx}_{a['ticker']}"
+                        if is_pinned(a["ticker"]):
+                            st.caption("👁 Watching — you'll get an email when this trigger is hit.")
+                            if st.button("✕ Stop watching", key=f"unpin_{pin_key}"):
+                                remove_pinned(a["ticker"])
+                                st.success(f"Stopped watching {a['ticker']}.")
+                                st.rerun()
+                        else:
+                            if st.button("👁 Watch this trigger", key=pin_key,
+                                         help="Keep monitoring this 'buy when' level even after "
+                                              "the pipeline reruns. Emails you when it's hit."):
+                                add_pinned(a["ticker"], a["company_name"], trigger,
+                                           a.get("exit_condition", ""))
+                                st.success(f"Watching {a['ticker']} — alert when the trigger hits.")
+                                st.rerun()
                     st.markdown(f"**Sell when:** {a['exit_condition']}")
                     st.markdown(f"**Based on:** _{a['source_title']}_")
 

@@ -21,7 +21,7 @@ ENTRY_WATCH_FILE = os.path.join(
     "entry_watch.json"
 )
 
-_EMPTY = {"chat_suggestions": [], "notified": {}}
+_EMPTY = {"chat_suggestions": [], "pinned": [], "notified": {}}
 
 
 def load_entry_watch() -> dict:
@@ -34,6 +34,7 @@ def load_entry_watch() -> dict:
         if not isinstance(data, dict):
             return dict(_EMPTY)
         data.setdefault("chat_suggestions", [])
+        data.setdefault("pinned", [])
         data.setdefault("notified", {})
         return data
     except Exception as e:
@@ -77,6 +78,53 @@ def set_chat_suggestions(suggestions: list[dict]) -> int:
 
 def get_chat_suggestions() -> list[dict]:
     return load_entry_watch().get("chat_suggestions", [])
+
+
+# ── Pinned watches ────────────────────────────────────────────────────────────
+# A recommendation's entry_trigger normally lives only in pipeline_cache.json, which
+# is overwritten on every pipeline run — so a watch you're waiting on silently
+# disappears. Pinning copies that trigger here, where it survives reruns until the
+# user removes it. The pinned level is kept EXACTLY as pinned (it's the level the
+# user chose); it is not refreshed when the ticker reappears in a later run.
+
+def get_pinned() -> list[dict]:
+    return load_entry_watch().get("pinned", [])
+
+
+def is_pinned(ticker: str) -> bool:
+    t = (ticker or "").strip().upper()
+    return any(p.get("ticker") == t for p in get_pinned())
+
+
+def add_pinned(ticker: str, company_name: str, trigger_text: str,
+               exit_condition: str = "") -> bool:
+    """Pins a watch so the entry checker keeps monitoring it across pipeline reruns.
+    No-op (returns False) if the ticker is already pinned or has no trigger."""
+    t = (ticker or "").strip().upper()
+    if not t or not (trigger_text or "").strip() or is_pinned(t):
+        return False
+    data = load_entry_watch()
+    data.setdefault("pinned", []).append({
+        "ticker":         t,
+        "company_name":   company_name or t,
+        "trigger_text":   trigger_text.strip(),
+        "exit_condition": exit_condition or "",
+        "pinned_at":      datetime.now().strftime("%Y-%m-%d"),
+    })
+    save_entry_watch(data)
+    return True
+
+
+def remove_pinned(ticker: str) -> bool:
+    """Unpins a watch and clears its notify record so re-pinning can alert again."""
+    t = (ticker or "").strip().upper()
+    data = load_entry_watch()
+    before = len(data.get("pinned", []))
+    data["pinned"] = [p for p in data.get("pinned", []) if p.get("ticker") != t]
+    data["notified"] = {k: v for k, v in data.get("notified", {}).items()
+                        if k != f"{t}|pinned"}
+    save_entry_watch(data)
+    return len(data["pinned"]) < before
 
 
 def was_notified_today(ticker: str, source: str) -> bool:
