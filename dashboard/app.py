@@ -625,27 +625,42 @@ if True:
                 a.setdefault("entry_trigger", "")
 
             df = pd.DataFrame(allocations)
+            # Merge the two flag columns into one narrow badge column, and drop Company
+            # (it's in the expander title right below) — both changes buy horizontal room
+            # so the table fits without scrolling right.
+            df["flags"] = [
+                ("⭐" if a.get("highly_recommended") else "") + ("⚠" if a.get("flagged") else "")
+                for a in allocations
+            ]
+
+            # The analyst writes long prose triggers (100-180 chars). Truncate for the
+            # table so each cell fits the 2-line row height without forcing a horizontal
+            # scroll; the FULL text is shown in the "Stock details" expander below.
+            def _short(text, limit=72):
+                t = " ".join(str(text or "").split())
+                return t if len(t) <= limit else t[:limit - 1].rstrip(" ,.;") + "…"
+
+            df["entry_trigger"] = df["entry_trigger"].map(_short)
+            df["exit_condition"] = df["exit_condition"].map(_short)
             df = df[[
-                "ticker", "company_name", "direction",
+                "ticker", "direction",
                 "current_price", "change_pct",
                 "dollar_amount", "percentage",
                 "risk_level", "conviction", "confidence_score",
-                "entry_trigger", "exit_condition", "flagged", "highly_recommended"
+                "entry_trigger", "exit_condition", "flags"
             ]].rename(columns={
                 "ticker":             "Ticker",
-                "company_name":       "Company",
                 "direction":          "Direction",
                 "current_price":      "Price",
                 "change_pct":         "Today",
                 "dollar_amount":      "Amount ($)",
-                "percentage":         "Allocation (%)",
+                "percentage":         "Alloc %",
                 "risk_level":         "Risk",
                 "conviction":         "Conviction",
                 "confidence_score":   "Confidence",
                 "entry_trigger":      "Buy when",
                 "exit_condition":     "Sell when",
-                "flagged":            "⚠ Flagged",
-                "highly_recommended": "⭐",
+                "flags":              "Flags",
             })
 
             def color_direction(val):
@@ -666,7 +681,7 @@ if True:
                 return ""
 
             def highlight_hr(row):
-                if row.get("⭐") == "⭐":
+                if "⭐" in str(row.get("Flags", "")):
                     return ["background-color: rgba(255, 215, 0, 0.08); border-left: 3px solid #FFD700"] * len(row)
                 return [""] * len(row)
 
@@ -677,19 +692,46 @@ if True:
                 .map(color_risk,      subset=["Risk"])
                 .map(color_change,    subset=["Today"])
                 .format({
-                    "Amount ($)":     "${:.2f}",
-                    "Allocation (%)": "{:.1f}%",
-                    "Confidence":     "{:.2f}",
-                    "Conviction":     lambda v: f"{int(v)}" if pd.notna(v) else "—",
+                    "Amount ($)": "${:.2f}",
+                    "Alloc %":    "{:.1f}%",
+                    "Confidence": "{:.2f}",
+                    "Conviction": lambda v: f"{int(v)}" if pd.notna(v) else "—",
                 })
             )
 
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+            # Fixed narrow widths on the numeric columns leave the rest of the width for
+            # the two long text columns, so nothing needs horizontal scrolling. Double
+            # row height lets "Buy when"/"Sell when" wrap onto a second line.
+            # Widths are tuned so all 12 columns sum to roughly the content area of a
+            # normal desktop window — no horizontal scrolling — leaving the remainder to
+            # the two text columns, which wrap onto the 2-line row height.
+            _narrow = {"Direction": 74, "Price": 74, "Today": 72, "Amount ($)": 84,
+                       "Alloc %": 72, "Risk": 74, "Conviction": 84, "Confidence": 84}
+            # Size the table to show every row at once (no inner vertical scrollbar),
+            # capped so a long list still can't push the rest of the page off-screen.
+            _table_height = min(len(df) * 70 + 45, 800)
+            st.dataframe(
+                styled_df,
+                use_container_width=True,
+                hide_index=True,
+                row_height=70,
+                height=_table_height,
+                column_config={
+                    "Ticker":    st.column_config.TextColumn("Ticker", width=64, pinned=True),
+                    "Flags":     st.column_config.TextColumn("Flags", width=48),
+                    "Buy when":  st.column_config.TextColumn("Buy when",  width=215),
+                    "Sell when": st.column_config.TextColumn("Sell when", width=215),
+                    **{c: st.column_config.Column(c, width=w) for c, w in _narrow.items()},
+                },
+            )
+            # NOTE: escape every '$' as '\$' — Streamlit renders paired '$...$' as LaTeX,
+            # which silently ate the dollar signs and mangled this caption.
             st.caption(
                 "ℹ️ **Conviction** (0-100) — the analyst's EDGE score; drives position size.  "
                 "**Confidence** — source credibility only (1.0 = SEC filing, 0.15 = Reddit), NOT trade edge.  "
-                "**Amount ($)** — $0.00 means watch only, no capital allocated.  "
-                "**⚠ Flagged** — unverified source, treat with extra caution."
+                "**Amount (\\$)** — \\$0.00 means watch only, no capital allocated.  "
+                "**Flags** — ⭐ highly recommended, ⚠ unverified source (treat with extra caution).  "
+                "Buy/Sell text is shortened here — full wording is in **Stock details** below."
             )
 
             col_export, col_spacer = st.columns([1, 4])
