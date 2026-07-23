@@ -164,23 +164,40 @@ def run_entry_checks() -> list[dict]:
             continue
         current = price_data["price"]
 
-        for direction, trigger_price in _parse_triggers(c["trigger_text"]):
+        all_levels = _parse_triggers(c["trigger_text"])
+        for direction, trigger_price in all_levels:
             if not _is_hit(direction, trigger_price, current):
                 continue
-            label = "broke above" if direction == "above" else "pulled back to"
-            src = "Argus chat" if c["source"] == "chat" else "today's recommendations"
+
+            leg  = "BREAKOUT" if direction == "above" else "PULLBACK"
+            verb = "broke above" if direction == "above" else "pulled back to"
+            src  = "Argus chat" if c["source"] == "chat" else "today's recommendations"
+
+            # A trigger often has TWO valid entries (a pullback level AND a breakout
+            # level). Name which leg fired and list the others, so the alert can never
+            # look like it invented a price the user doesn't recognise.
+            others = [
+                f"{'breakout' if d == 'above' else 'pullback'} ${p:.2f}"
+                for d, p in all_levels
+                if not (d == direction and p == trigger_price)
+            ]
+            other_str = (f" This trigger's other level: {', '.join(others)} (not hit)."
+                         if others else "")
+
             alerts.append({
                 "ticker":        ticker,
                 "alert_type":    "entry_trigger",
                 "message":       (
-                    f"🎯 BUY TRIGGER for {ticker}. Price {label} your entry level: "
-                    f"${current:.2f} vs trigger ${trigger_price:.2f}. "
-                    f"From {src} — \"{c['trigger_text']}\". "
+                    f"🎯 BUY TRIGGER for {ticker} — {leg} leg hit. "
+                    f"Price {verb} ${trigger_price:.2f} (now ${current:.2f}).{other_str} "
+                    f"From {src} — full trigger: \"{c['trigger_text']}\". "
                     f"Check the setup still holds before entering."
                 ),
                 "current_price": current,
                 "trigger_price": trigger_price,
                 "direction":     direction,
+                "leg":           leg.lower(),
+                "all_levels":    [{"direction": d, "price": p} for d, p in all_levels],
                 "source":        c["source"],
                 "entry_trigger": c["trigger_text"],
             })

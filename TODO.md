@@ -25,6 +25,11 @@ bullish half of alerting: until now Argus only told you when to get OUT.
 - Verified live: 11 recommendation triggers parsed + priced via Robinhood, 0 fired (all prices sat
   inside their bands — correct). Mixed exit+entry test email delivered.
 - `.gitignore`: `entry_watch.json` (local data).
+- **Follow-up — alert clarity:** a two-sided trigger has two valid entries, and an alert quoting
+  only one looked like an invented price (user saw $328.04 in a test email but remembered $314.91
+  from the recommendation — both are real, the pullback and breakout legs of the same GOOGL trigger).
+  The alert message now names which leg fired (`BREAKOUT`/`PULLBACK`), lists the other level and
+  that it wasn't hit, and labels the full trigger text; `leg` + `all_levels` added to the alert dict.
 
 ### 17. Scorecard reset + chat action-list & order-type awareness (R10) ✅
 Earlier non-final Argus runs polluted `positions.json` — a $150 deposit was recorded as trade P&L,
