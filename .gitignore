@@ -33,6 +33,8 @@ argus-header-verify.png
 # Windows
 Thumbs.db
 desktop.ini
+# Startup shortcuts created locally (e.g. argus_silent.vbs - Shortcut.lnk)
+*.lnk
 
 .streamlit/
 
