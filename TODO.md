@@ -2,6 +2,25 @@
 
 ## Done
 
+### 19. Pinned watch button + silent (no-terminal) launcher (R12) ✅
+Two gaps from R11: recommendation triggers were ephemeral (a watch you were waiting on vanished
+when the pipeline reran), and running Argus meant leaving a terminal window open.
+- **Watch button:** each watch rec's expander now has 👁 **Watch this trigger** / ✕ Stop watching.
+  Pinning copies the `entry_trigger` into `storage/entry_watch.py` (`add_pinned`/`remove_pinned`/
+  `is_pinned`/`get_pinned`), where it survives pipeline reruns. The level is stored exactly as
+  pinned — deliberately NOT refreshed if the ticker reappears in a later run (it's the level the
+  user chose). Unpinning also clears its notify record so re-pinning can alert again.
+- `alerts/entry_checker.py`: `_candidates_from_pinned()` + `_dedupe_by_ticker()` (priority
+  **pinned > chat > recommendation**) so a pinned ticker that's also in today's fresh recs fires
+  once, not twice. Alert message names the source ("your pinned watch list").
+- **Silent launcher:** `argus_silent.vbs` runs `argus.bat` with the window hidden (background /
+  always-on; shortcut it into `shell:startup` to auto-start at login). `argus_stop.bat` kills
+  whatever holds 8501/8502 since there's no window to close. `argus.bat` unchanged — its
+  reuse-if-running guard means launching twice is still safe.
+- Verified: pin → dedupe (pinned wins, candidate count stays 11, no double alert) → unpin.
+  34 tests passing. Docs: CLAUDE.md key files + alerts section.
+- **Still open:** nothing schedules `alerts/run_checks.py` yet, so alerts only fire if run manually.
+
 ### 18. Entry ("buy when") alerts + email verification (R11) ✅
 Email notification **verified working** (Gmail SMTP, test alert delivered). Added the missing
 bullish half of alerting: until now Argus only told you when to get OUT.

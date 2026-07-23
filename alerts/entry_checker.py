@@ -27,7 +27,9 @@ import re
 
 from ingestion.prices import fetch_prices
 from market_hours import market_session
-from storage.entry_watch import get_chat_suggestions, was_notified_today, mark_notified
+from storage.entry_watch import (
+    get_chat_suggestions, get_pinned, was_notified_today, mark_notified,
+)
 
 CACHE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -126,13 +128,47 @@ def _candidates_from_chat() -> list[dict]:
     return out
 
 
+def _candidates_from_pinned() -> list[dict]:
+    """User-pinned watches — these survive pipeline reruns (that's the whole point)."""
+    out = []
+    for p in get_pinned():
+        trigger = (p.get("trigger_text") or "").strip()
+        if not p.get("ticker") or not trigger:
+            continue
+        out.append({
+            "ticker":       p["ticker"],
+            "company_name": p.get("company_name", p["ticker"]),
+            "trigger_text": trigger,
+            "source":       "pinned",
+        })
+    return out
+
+
+def _dedupe_by_ticker(candidates: list[dict]) -> list[dict]:
+    """
+    One candidate per ticker so a pinned watch that also appears in today's fresh
+    recommendations doesn't fire twice. Priority: pinned (explicit user intent) >
+    chat (most recent advice) > recommendation.
+    """
+    rank = {"pinned": 0, "chat": 1, "recommendation": 2}
+    best: dict[str, dict] = {}
+    for c in sorted(candidates, key=lambda x: rank.get(x["source"], 9)):
+        best.setdefault(c["ticker"], c)
+    return list(best.values())
+
+
 def run_entry_checks() -> list[dict]:
     """
-    Main entry point. Checks every pending entry trigger (recommendations + last chat
-    suggestion) against live prices and returns alert dicts for the ones that fired.
-    Alert shape matches exit_checker so notifier/run_checks can handle both.
+    Main entry point. Checks every pending entry trigger (pinned watches + last chat
+    suggestion + today's recommendations) against live prices and returns alert dicts
+    for the ones that fired. Alert shape matches exit_checker so notifier/run_checks
+    can handle both.
     """
-    candidates = _candidates_from_recommendations() + _candidates_from_chat()
+    candidates = _dedupe_by_ticker(
+        _candidates_from_pinned()
+        + _candidates_from_chat()
+        + _candidates_from_recommendations()
+    )
     if not candidates:
         print("Entry checker: no pending entry triggers.")
         return []
@@ -171,7 +207,10 @@ def run_entry_checks() -> list[dict]:
 
             leg  = "BREAKOUT" if direction == "above" else "PULLBACK"
             verb = "broke above" if direction == "above" else "pulled back to"
-            src  = "Argus chat" if c["source"] == "chat" else "today's recommendations"
+            src  = {
+                "chat":   "Argus chat",
+                "pinned": "your pinned watch list",
+            }.get(c["source"], "today's recommendations")
 
             # A trigger often has TWO valid entries (a pullback level AND a breakout
             # level). Name which leg fired and list the others, so the alert can never

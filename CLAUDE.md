@@ -74,7 +74,12 @@ alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a wat
                               sources = today's recommendations + Argus chat's last suggestion
 alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject/header adapt)
 alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
-storage/entry_watch.py        Persists Argus chat's last buy/watch suggestions + per-day notify record
+storage/entry_watch.py        Persists PINNED watches + Argus chat's last buy/watch suggestions
+                              + per-day notify record (entry_watch.json, gitignored)
+argus.bat                     Launch Argus (reuses a running instance; opens one browser tab)
+argus_silent.vbs              Launch Argus with NO terminal window (background/always-on).
+                              Shortcut it into shell:startup to auto-run at login.
+argus_stop.bat                Stop the background instance (kills whatever holds 8501/8502)
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
@@ -324,10 +329,17 @@ Each recommendation must have:
   ("act at the next open" / "extended-hours only, use a limit order") so the user never acts on an
   unexecutable signal.
 - **Entry ("buy when") alerts (R11)** (`alerts/entry_checker.py`): the bullish counterpart, so a
-  watch idea can't pass its trigger unnoticed. Candidates come from **two sources** — watch recs in
-  `pipeline_cache.json` (their R7 `entry_trigger`, anchored to real support/resistance) and **Argus
-  chat's last suggestion** (the `/chat` proxy parses `Buy —`/`Watch — TICKER` action lines via
-  `_capture_chat_suggestions` into `storage/entry_watch.py`; each capture replaces the prior set).
+  watch idea can't pass its trigger unnoticed. Candidates come from **three sources**, deduped by
+  ticker with priority **pinned > chat > recommendation** (`_dedupe_by_ticker`) so one ticker never
+  double-alerts:
+  1. **Pinned watches** — the 👁 **Watch this trigger** button on a watch rec's expander copies its
+     `entry_trigger` into `storage/entry_watch.py`. This is the ONLY source that survives a pipeline
+     rerun; the level is stored exactly as pinned and is NOT refreshed if the ticker reappears later.
+  2. **Argus chat's last suggestion** — the `/chat` proxy parses `Buy —`/`Watch — TICKER` action
+     lines via `_capture_chat_suggestions`; each capture replaces the prior set.
+  3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`).
+     **Ephemeral:** `save_cache()` overwrites the cache each run, so an unpinned watch silently
+     disappears on the next pipeline run — that's exactly what pinning solves.
   `_parse_triggers` extracts EVERY price + direction from a trigger string — a two-sided trigger
   ("pulls back to $314.91 ... or breaks above $328.04") yields both a `below` and an `above`
   condition, either of which fires. Owned tickers are skipped; one alert per ticker/source per day;
