@@ -2,6 +2,22 @@
 
 ## Done
 
+### 22. "What Argus is monitoring" panel — manage pinned watches (R15) ✅
+Gap from R12: pins could only be removed from the recommendation expander, which disappears once the
+pipeline reruns and drops that ticker — leaving an **orphaned pin** still alerting every 15 minutes
+with no UI to delete it. The Watch List tab now opens with a single monitoring panel.
+- **📍 Open positions — exit alerts** (auto-included per user request; nothing to pin): entry/live/
+  P&L, computed stop price, exit condition. Read-only, managed under My Positions. Note: owned
+  tickers stay excluded from ENTRY alerts by design — you're already in, so a "buy when" is moot.
+- **📌 Pinned buy triggers — entry alerts**: each pin with parsed breakout/pullback levels, live
+  price, pin date and a ✕ remove button. Chat suggestions listed in an expander with a clear button.
+- **Two bugs the UI exposed:**
+  - A pinned trigger with no `$` price (e.g. BTC's "CLARITY Act passes committee vote…") can NEVER
+    fire — it was silent dead weight. Now flagged with an explicit warning to remove or re-pin.
+  - The `$...$`-as-LaTeX bug again, this time mangling raw trigger text into monospace. Added an
+    `_esc()` helper applied to every analyst-written string rendered in this tab.
+- Verified with Playwright against real pins; removed the two test pins seeded during verification.
+
 ### 21. Recommendations table fits without horizontal scroll (R14) ✅
 Table needed scrolling right to read Buy/Sell when, and the text was clipped to one line.
 - `dashboard/app.py`: explicit pixel widths on all 12 columns so the total lands inside a normal

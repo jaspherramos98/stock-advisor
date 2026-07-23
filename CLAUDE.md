@@ -381,7 +381,17 @@ Each recommendation must have:
    expectancy, a red **discipline-leak** callout when trades let-run-to-band avg ≫ trades closed-early
    (the core finding: hand-closing at breakeven flattens P&L, not the picks), a concentration warning
    when one trade is ≥50% of gross profit, and a SPY opportunity-cost line
-4. **Watch List** — Finnhub ticker watchlist editor per asset type
+4. **Watch List** — opens with **🔎 What Argus is monitoring** (R15), the single place to review
+   everything the 15-min checker touches:
+   - **📍 Open positions — exit alerts**: auto-included (no pinning needed), showing entry/live/P&L,
+     computed stop price and exit condition. Read-only; managed under My Positions.
+   - **📌 Pinned buy triggers — entry alerts**: each pinned watch with its parsed breakout/pullback
+     levels, live price, pin date and a ✕ remove button — the fix for orphaned pins (a pin whose
+     ticker left the recommendations previously had no removal UI). A pin whose trigger has NO `$`
+     price shows a warning that it can never fire. Chat-sourced suggestions are listed in an
+     expander with a clear button.
+   - Then the original Finnhub ticker watchlist editor per asset type.
+   Owned tickers are excluded from ENTRY alerts by design (you're already in).
 5. **History** — Google Sheets export history with charts
 
 ## Known Issues / Constraints
