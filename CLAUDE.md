@@ -10,6 +10,23 @@
 3. **Update `CLAUDE.md` + `TODO.md` every session/change** — see Documentation
    Maintenance below. Not done until docs reflect the change.
 
+## Git Workflow (ALWAYS FOLLOW)
+Ship every change as a **pull request with CI green before merge**. Do NOT merge feature
+branches straight into `main` and push — `main` has branch protection expecting the `test`
+check, but `enforce_admins` is false, so a direct push silently bypasses CI.
+
+```bash
+git checkout -b <type>/<short-name>      # feat/ fix/ chore/ docs/
+# ... change + test locally ...
+git push -u origin <branch>
+gh pr create --title "..." --body "..."
+gh pr checks <n>                          # wait for `test` to pass — never merge red
+gh pr merge <n> --squash --delete-branch
+git checkout main && git pull --ff-only origin main
+```
+Applies to small changes too (a one-line gitignore edit went through PR #1). Run
+`pytest` locally before opening the PR — CI runs the same suite plus `compileall`.
+
 ## Project Overview
 Personal AI-powered stock advisor named Argus. Runs locally on Windows via Streamlit.
 - **Run command:** `streamlit run dashboard/app.py`
