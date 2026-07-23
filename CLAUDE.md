@@ -80,6 +80,8 @@ argus.bat                     Launch Argus (reuses a running instance; opens one
 argus_silent.vbs              Launch Argus with NO terminal window (background/always-on).
                               Shortcut it into shell:startup to auto-run at login.
 argus_stop.bat                Stop the background instance (kills whatever holds 8501/8502)
+run_checks.bat                Run exit+entry alert checks once (UTF-8 env + venv python)
+run_checks_silent.vbs         Same, hidden — what the "Argus Alert Checks" scheduled task calls
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
@@ -349,7 +351,17 @@ Each recommendation must have:
   teal "🎯 Buy Trigger" row. Verified working.
 - **Runner** (`alerts/run_checks.py`): market-hours gated; runs exit checks then entry checks and
   sends ONE combined email. The entry block is separately guarded so an entry failure can't lose
-  exit alerts. Crashes email themselves.
+  exit alerts. Crashes email themselves. Log writes are explicitly UTF-8 (alert text has em-dashes);
+  closed-market skips are printed but NOT logged (the task fires every 15 min around the clock).
+- **Scheduling (R13):** Windows scheduled task **"Argus Alert Checks"** runs
+  `wscript.exe run_checks_silent.vbs` **every 15 minutes, 24/7**, hidden. It's safe to run around
+  the clock because `run_checks.py` gates itself on US market hours (Eastern, DST-aware via pytz)
+  and exits immediately outside them — that also keeps it correct regardless of the PC's timezone.
+  Manage it with `schtasks /Query|/Run|/Change|/Delete /TN "Argus Alert Checks"`.
+  Runs as the logged-on user, so the PC must be awake.
+- **`.bat` files must be CRLF.** Batch files saved with Unix LF endings make cmd.exe mis-tokenize
+  lines (symptom: `'M' is not recognized...` from a split `REM`). Keep argus.bat / argus_stop.bat /
+  run_checks.bat CRLF.
 
 ## Dashboard Tabs
 1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders, add to positions
