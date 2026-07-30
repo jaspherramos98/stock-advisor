@@ -262,6 +262,10 @@ conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core
   with real cash / confusing Argus chat). Chat context labels buying power as THE budget.
 - `MIN_ALLOCATION_BUDGET = 10.0` — dollar allocation only runs when the budget (buying power)
   is ≥ $10; below that `calculate_allocations` returns every rec at $0 (analysis still shown).
+  **Budget 0 (buying power unreadable / Robinhood session expired) also shows recs at $0** — it
+  does NOT return an empty list. Only an empty `recommendations` list yields `[]`. The dashboard
+  warns "buying power unavailable — showing analysis only" so an all-$0 table isn't mistaken for a
+  dead market.
 - Sort order: HR buys → regular buys → shorts → watches
 - Shorts (R1) are a **separate sleeve** (use margin, not the long cash budget) — pyramid
   applies to the long book only. Shorts are stocks-only, never highly_recommended.

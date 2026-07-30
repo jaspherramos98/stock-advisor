@@ -600,6 +600,17 @@ if True:
             else:
                 st.warning("No actionable recommendations after filtering. Try running the pipeline again.")
         else:
+            # If sizing is $0 because buying power couldn't be read (Robinhood session
+            # expired / not connected), say so — otherwise an all-$0 table looks like a
+            # dead market when it's really just a login refresh needed.
+            if budget <= 0:
+                st.warning(
+                    "💤 **Buying power unavailable — showing analysis only, \\$0 sizing.** "
+                    "This usually means the Robinhood session expired. Re-authenticate "
+                    "(run `python ingestion\\robinhood.py` once and approve the app prompt), "
+                    "then **💵 Refresh buying power** in the sidebar. The recommendations below "
+                    "are still today's real read."
+                )
             col1, col2, col3, col4, col5 = st.columns(5)
             buy_count     = sum(1 for a in allocations if a["direction"] == "buy")
             short_count   = sum(1 for a in allocations if a["direction"] == "short")

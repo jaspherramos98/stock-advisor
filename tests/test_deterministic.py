@@ -134,8 +134,14 @@ def test_allocation_runs_at_floor():
     out = calculate_allocations(_RECS, 1000)
     assert sum(r["dollar_amount"] for r in out) > 0
 
-def test_allocation_zero_budget_empty():
-    assert calculate_allocations(_RECS, 0) == []
+def test_allocation_zero_budget_shows_recs_at_zero():
+    # Budget 0 = buying power unreadable (Robinhood down). The day's analysis must still
+    # show at $0, not vanish — same as any sub-floor budget.
+    out = calculate_allocations(_RECS, 0)
+    assert len(out) == 3 and sum(r["dollar_amount"] for r in out) == 0
+
+def test_allocation_no_recs_empty():
+    assert calculate_allocations([], 1000) == []
 
 def test_compute_weight_conviction_drives_size():
     hi = _compute_weight({"conviction": 90, "risk_level": "low"})

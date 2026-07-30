@@ -2,6 +2,23 @@
 
 ## Done
 
+### 23. "No actionable recommendations" when Robinhood is down (R16) ✅
+User saw "No actionable recommendations after filtering" twice. Root cause: it's a symptom of the
+expired Robinhood session. `_effective_budget()` returns 0.0 when buying power can't be read, and
+`calculate_allocations` treated budget ≤ 0 as "bail entirely" (`return []`) — so the day's analysis
+vanished. Inconsistent too: budget 1-9 already showed recs at $0.
+- `calculator/portfolio.py`: split the guard — only an empty `recommendations` list returns `[]`;
+  budget is floored at 0 and falls through to the $0-display branch, so budget 0 now shows every rec
+  at $0 (same as any sub-floor budget). Verified: 11 cached watches now render at budget 0.
+- `dashboard/app.py`: when `budget <= 0` the Recommendations tab shows a warning that buying power is
+  unavailable (likely an expired Robinhood session) and the table is analysis-only — so an all-$0
+  table isn't misread as a dead market.
+- Tests: `test_allocation_zero_budget_empty` (encoded the old wrong behavior) replaced with
+  `test_allocation_zero_budget_shows_recs_at_zero` + `test_allocation_no_recs_empty`. 35 passing.
+- Separately diagnosed the underlying RH failure: session pickle expired (~1-day `expiresIn`),
+  re-login needs phone device-approval (can't be automated), and repeated attempts hit a 429. Fix is
+  a one-time interactive `python ingestion/robinhood.py` + approve on the app. Not code — user action.
+
 ### 22. "What Argus is monitoring" panel — manage pinned watches (R15) ✅
 Gap from R12: pins could only be removed from the recommendation expander, which disappears once the
 pipeline reruns and drops that ticker — leaving an **orphaned pin** still alerting every 15 minutes
