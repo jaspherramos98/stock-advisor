@@ -36,7 +36,11 @@ def _login() -> bool:
         print("Robinhood sync: credentials not set in .env")
         return False
 
-    login_kwargs = {"store_session": True, "expiresIn": 86400}
+    # 7-day session (was 1 day). Robinhood forces device-approval MFA on this account
+    # (no TOTP/SMS option), so every re-login needs a phone tap and can 429 if retried.
+    # A longer session means re-approving ~weekly instead of daily. Robinhood may cap the
+    # actual token life below this; it's a best-effort upper bound, not a guarantee.
+    login_kwargs = {"store_session": True, "expiresIn": 604800}
 
     # If an authenticator-app 2FA secret is set, log in with a generated TOTP code
     # instead of Robinhood's device-approval push. The push flow polls get_prompts_status,
