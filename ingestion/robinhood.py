@@ -17,16 +17,35 @@ except ImportError:
     RH_AVAILABLE = False
 
 
+import time as _time
+
 # Track login state within this process session
 _LOGGED_IN = False
 
+# Circuit breaker. Robinhood's device-approval login polls get_prompts_status, which
+# rate-limits (429), and EVERY attempt spawns a fresh challenge that resets the throttle.
+# The dashboard calls _login from several places (header, sidebar, prices, chat) on every
+# Streamlit rerun, so without this one page load fires 3+ challenges and re-trips the 429
+# instantly — making recovery impossible. After a failed login we refuse to attempt again
+# (no new challenge) until the cooldown passes. Per-process: a fresh run starts clean.
+_LOGIN_COOLDOWN_UNTIL = 0.0
+_LOGIN_FAIL_COOLDOWN_SECONDS = 900  # 15 min of no attempts after a failure
+
+
 def _login() -> bool:
-    global _LOGGED_IN
+    global _LOGGED_IN, _LOGIN_COOLDOWN_UNTIL
     if _LOGGED_IN:
         return True
 
     if not RH_AVAILABLE:
         print("Robinhood sync: robin_stocks not installed.")
+        return False
+
+    now = _time.monotonic()
+    if now < _LOGIN_COOLDOWN_UNTIL:
+        remaining = int(_LOGIN_COOLDOWN_UNTIL - now)
+        print(f"Robinhood sync: login on cooldown after a recent failure — "
+              f"not retrying for {remaining}s (avoids re-tripping the 429 throttle).")
         return False
 
     username = os.getenv("ROBINHOOD_USERNAME")
@@ -60,13 +79,18 @@ def _login() -> bool:
         login = rh.login(username, password, **login_kwargs)
         if login:
             _LOGGED_IN = True
+            _LOGIN_COOLDOWN_UNTIL = 0.0
             print("Robinhood sync: logged in successfully.")
             return True
         else:
-            print("Robinhood sync: login returned None — check credentials or MFA.")
+            _LOGIN_COOLDOWN_UNTIL = _time.monotonic() + _LOGIN_FAIL_COOLDOWN_SECONDS
+            print(f"Robinhood sync: login returned None — check credentials or MFA. "
+                  f"Backing off for {_LOGIN_FAIL_COOLDOWN_SECONDS // 60} min before any retry.")
             return False
     except Exception as e:
-        print(f"Robinhood sync: login failed — {e}")
+        _LOGIN_COOLDOWN_UNTIL = _time.monotonic() + _LOGIN_FAIL_COOLDOWN_SECONDS
+        print(f"Robinhood sync: login failed — {e}. "
+              f"Backing off for {_LOGIN_FAIL_COOLDOWN_SECONDS // 60} min before any retry.")
         return False
 
 
