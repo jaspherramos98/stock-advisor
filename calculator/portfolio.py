@@ -130,9 +130,16 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
     - WATCH signals                    → appear with $0 / 0%
     - AVOID signals                    → filtered out entirely
     """
-    if not recommendations or budget <= 0:
-        print("No recommendations or zero budget — nothing to allocate.")
+    if not recommendations:
+        print("No recommendations — nothing to allocate.")
         return []
+
+    # A budget of 0 is a REAL state — it's what _effective_budget() returns when live
+    # buying power can't be read (Robinhood session expired / not connected). Do NOT drop
+    # the recommendations in that case; fall through to the $0-display branch so the
+    # user still sees the day's analysis (with a hint to reconnect), same as any budget
+    # below the allocation floor. Guard negatives just in case.
+    budget = max(0.0, budget)
 
     buys    = [r for r in recommendations if r.get("direction") == "buy"]
     shorts  = [r for r in recommendations if r.get("direction") == "short"]
@@ -142,8 +149,8 @@ def calculate_allocations(recommendations: list[dict], budget: float) -> list[di
         print("All recommendations were 'avoid' — nothing to allocate.")
         return []
 
-    # Below the allocation floor: keep the budget but allocate no dollars. Surface every
-    # rec at $0 (still sorted) so the user sees the analysis without sub-dollar buys.
+    # Below the allocation floor (this includes budget 0): keep the recs but allocate no
+    # dollars. Surface every rec at $0 (still sorted) so the user sees the analysis.
     if budget < MIN_ALLOCATION_BUDGET:
         print(f"Budget ${budget:,.2f} is below the ${MIN_ALLOCATION_BUDGET:,.0f} allocation floor — "
               f"showing recommendations with $0 allocation.")
