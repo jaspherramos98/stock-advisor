@@ -418,7 +418,8 @@ Each recommendation must have:
 ## Known Issues / Constraints
 - `robin_stocks` is unofficial — if Robinhood changes their app it may break; only edit `ingestion/robinhood.py`
 - **Robinhood auth / 429 loop:** the stored session (`~/.tokens/robinhood.pickle`) expires after
-  `expiresIn` (~1 day). Re-login on a **device-approval** account polls `get_prompts_status`, which
+  `expiresIn` (set to 7 days in `_login`; Robinhood may cap it lower). Re-login on a
+  **device-approval** account polls `get_prompts_status`, which
   rate-limits hard — and **every login attempt starts a NEW challenge, resetting the 429**, so
   retrying makes it worse (must stop completely and wait). The fix is authenticator-app (TOTP) 2FA:
   set `ROBINHOOD_MFA_SECRET` (base32 from Robinhood → Settings → Security → Authenticator app) and

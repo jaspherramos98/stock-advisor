@@ -2,6 +2,14 @@
 
 ## Done
 
+### 25. 7-day Robinhood session (R18) ✅
+Confirmed the account offers NO authenticator/SMS 2FA — only device approval + passkey — so the
+R17 TOTP path can't be activated (kept anyway, harmless no-op). Only remaining lever to reduce the
+daily re-approval pain: bump `_login` `expiresIn` 86400 → 604800 (1 day → 7 days) so the phone-tap
+approval is ~weekly instead of daily. Robinhood may cap actual token life below this — best-effort.
+Account itself is healthy (app works fine); the 429s were self-inflicted by retrying (each attempt
+starts a fresh challenge). Docs updated.
+
 ### 24. Optional TOTP 2FA login — escape the device-approval 429 loop (R17) ✅
 The Robinhood session expired and re-login was stuck in a 429 loop: it uses **device-approval** MFA,
 which polls `get_prompts_status` (rate-limits hard), and **each attempt starts a fresh challenge that
