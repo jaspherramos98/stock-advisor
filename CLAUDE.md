@@ -417,6 +417,13 @@ Each recommendation must have:
 
 ## Known Issues / Constraints
 - `robin_stocks` is unofficial — if Robinhood changes their app it may break; only edit `ingestion/robinhood.py`
+- **Robinhood auth / 429 loop:** the stored session (`~/.tokens/robinhood.pickle`) expires after
+  `expiresIn` (~1 day). Re-login on a **device-approval** account polls `get_prompts_status`, which
+  rate-limits hard — and **every login attempt starts a NEW challenge, resetting the 429**, so
+  retrying makes it worse (must stop completely and wait). The fix is authenticator-app (TOTP) 2FA:
+  set `ROBINHOOD_MFA_SECRET` (base32 from Robinhood → Settings → Security → Authenticator app) and
+  `_login` passes a `pyotp`-generated `mfa_code`, which is silent (no push) and skips the 429-prone
+  endpoint. This also enables silent re-auth so the 15-min alert scheduler doesn't die daily.
 - Flask proxy must be on port 8502; guard against multiple threads with `st.session_state.proxy_started`
 - Streamlit rerenders entire script on every interaction — all expensive operations should be cached
 - Chatbot DOM injection uses `(function() { if already injected, return; })()` guard to prevent duplicates
@@ -440,6 +447,9 @@ ALERT_EMAIL_RECEIVER=
 REDDIT_USER_AGENT=stock-advisor-bot/1.0
 ROBINHOOD_USERNAME=
 ROBINHOOD_PASSWORD=
+ROBINHOOD_MFA_SECRET=   # OPTIONAL — authenticator-app 2FA secret (base32). If set, _login
+                       # uses a generated TOTP code (silent, no device-approval push, no
+                       # get_prompts_status 429). If unset, falls back to device approval.
 MOCK_MODE=false
 MOCK_INGESTION=false
 ```

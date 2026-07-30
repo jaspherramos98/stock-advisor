@@ -36,13 +36,24 @@ def _login() -> bool:
         print("Robinhood sync: credentials not set in .env")
         return False
 
+    login_kwargs = {"store_session": True, "expiresIn": 86400}
+
+    # If an authenticator-app 2FA secret is set, log in with a generated TOTP code
+    # instead of Robinhood's device-approval push. The push flow polls get_prompts_status,
+    # which rate-limits hard (429s) and can't be automated (needs a phone tap); the TOTP
+    # path is silent and avoids that endpoint entirely. Guarded: no secret → unchanged
+    # behavior (device approval). The secret is a credential — never printed/logged.
+    mfa_secret = (os.getenv("ROBINHOOD_MFA_SECRET") or "").replace(" ", "")
+    if mfa_secret:
+        try:
+            import pyotp
+            login_kwargs["mfa_code"] = pyotp.TOTP(mfa_secret).now()
+            print("Robinhood sync: using authenticator (TOTP) 2FA.")
+        except Exception as e:
+            print(f"Robinhood sync: could not generate TOTP code ({e}) — check ROBINHOOD_MFA_SECRET.")
+
     try:
-        login = rh.login(
-            username,
-            password,
-            store_session=True,
-            expiresIn=86400,
-        )
+        login = rh.login(username, password, **login_kwargs)
         if login:
             _LOGGED_IN = True
             print("Robinhood sync: logged in successfully.")

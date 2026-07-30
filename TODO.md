@@ -2,6 +2,23 @@
 
 ## Done
 
+### 24. Optional TOTP 2FA login — escape the device-approval 429 loop (R17) ✅
+The Robinhood session expired and re-login was stuck in a 429 loop: it uses **device-approval** MFA,
+which polls `get_prompts_status` (rate-limits hard), and **each attempt starts a fresh challenge that
+resets the 429** — so retrying kept it hot (user waited 15 min, still 429, because the retries were
+the problem). Also brittle: robin_stocks crashes on the 429 (`'NoneType' object is not subscriptable`).
+- `ingestion/robinhood.py` `_login`: if `ROBINHOOD_MFA_SECRET` is set, generate a `pyotp` TOTP
+  `mfa_code` and pass it to `rh.login` — the authenticator-app path, which is silent (no push) and
+  never touches the 429-prone `get_prompts_status` endpoint. Guarded: no secret → unchanged
+  device-approval behavior. Secret is a credential — never printed/logged. `pyotp==2.9.0` already
+  pinned; `login()` already accepts `mfa_code` (robin_stocks 3.4.0).
+- Bonus: TOTP re-auth is silent (no phone tap), so the daily session expiry stops killing the 15-min
+  alert scheduler.
+- Docs: `.env` keys (`ROBINHOOD_MFA_SECRET` optional) + a Known Issues entry on the auth/429 loop.
+- User action to activate: enable Authenticator-app 2FA in Robinhood, put the base32 secret in `.env`.
+  Immediate unblock is behavioral: STOP retrying, delete the stale pickle, wait an hour with zero
+  attempts.
+
 ### 23. "No actionable recommendations" when Robinhood is down (R16) ✅
 User saw "No actionable recommendations after filtering" twice. Root cause: it's a symptom of the
 expired Robinhood session. `_effective_budget()` returns 0.0 when buying power can't be read, and
