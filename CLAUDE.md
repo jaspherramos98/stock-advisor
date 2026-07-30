@@ -425,6 +425,18 @@ Each recommendation must have:
   set `ROBINHOOD_MFA_SECRET` (base32 from Robinhood → Settings → Security → Authenticator app) and
   `_login` passes a `pyotp`-generated `mfa_code`, which is silent (no push) and skips the 429-prone
   endpoint. This also enables silent re-auth so the 15-min alert scheduler doesn't die daily.
+  **NOTE (2026): this account has NO authenticator/SMS 2FA option — only device approval — so TOTP
+  can't be activated; the code path is a dormant no-op.**
+- **Login circuit breaker + the scheduler trap (critical for recovery):** `_login` calls come from
+  many places (dashboard header/sidebar/prices/chat on every Streamlit rerun) AND the "Argus Alert
+  Checks" task every 15 min — each a fresh device-approval challenge. Two guards: (1) `_login` has a
+  per-process cooldown (`_LOGIN_COOLDOWN_UNTIL`, `_LOGIN_FAIL_COOLDOWN_SECONDS = 900`) — after a
+  failed login it refuses to attempt (no new challenge) for 15 min, so one dashboard load can't fire
+  3+ challenges. (2) The **scheduled task fires a login every 15 min in the background**, which keeps
+  the 429 permanently hot and silently sabotages any "wait for cooldown" — so **during an auth outage
+  you MUST disable it**: `schtasks /Change /TN "Argus Alert Checks" /DISABLE`, recover, then
+  `/ENABLE`. Recovery = disable task + stop Argus + delete pickle + real quiet (hours) + ONE manual
+  `python ingestion/robinhood.py` + approve push.
 - Flask proxy must be on port 8502; guard against multiple threads with `st.session_state.proxy_started`
 - Streamlit rerenders entire script on every interaction — all expensive operations should be cached
 - Chatbot DOM injection uses `(function() { if already injected, return; })()` guard to prevent duplicates

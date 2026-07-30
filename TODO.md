@@ -2,6 +2,21 @@
 
 ## Done
 
+### 26. Login circuit breaker — stop the 429 self-DoS (R19) ✅
+User's 429 loop wouldn't clear even after "an hour." Root cause found in their log: a SINGLE
+argus.bat launch fired THREE device-approval challenges in seconds (three UUIDs) — the dashboard
+calls `_login` from header + sidebar + prices + chat on every Streamlit rerun, and each attempt
+starts a fresh challenge that resets Robinhood's throttle. Worse: the **"Argus Alert Checks"
+scheduled task fires a login every 15 min in the background**, so the throttle never decays — the
+"wait an hour" was never quiet.
+- `ingestion/robinhood.py`: added a per-process circuit breaker — `_LOGIN_COOLDOWN_UNTIL` /
+  `_LOGIN_FAIL_COOLDOWN_SECONDS = 900`. After a failed login, `_login` returns False immediately for
+  15 min without calling `rh.login` (no new challenge), so many call sites + reruns can't spam.
+  Cleared on success. Verified: with cooldown set, `_login` short-circuits with no network call.
+- Ops (done live, reversible): **disabled the scheduled task** (`schtasks /Change ... /DISABLE`) and
+  stopped the running Argus so nothing keeps hammering during recovery. Re-enable after re-auth.
+- Docs: Known Issues now covers the breaker + the scheduler-trap recovery procedure.
+
 ### 25. 7-day Robinhood session (R18) ✅
 Confirmed the account offers NO authenticator/SMS 2FA — only device approval + passkey — so the
 R17 TOTP path can't be activated (kept anyway, harmless no-op). Only remaining lever to reduce the
