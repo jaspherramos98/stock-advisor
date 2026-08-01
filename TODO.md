@@ -2,6 +2,15 @@
 
 ## Done
 
+### 27. Chat affordability / order-executability rule (R20) ✅
+Argus chat recommended shorting Apple when buying power was below one AAPL share — unexecutable
+(shorts/limit/stop/options all need ≥1 whole share, and shorts need margin). Added an
+AFFORDABILITY/EXECUTABILITY block to `ARGUS_SYSTEM_BASE`: if live buying power < one share's price,
+never recommend shorting or a limit/stop on that name — say it's "not actionable at your current
+buying power" and offer a fractional market buy as the only executable long on an expensive stock.
+Chat already has buying power + recommendation prices in context, so it can sanity-check per name.
+Fixed a `\$` → `$` slip (this is the prompt sent to Claude, not Streamlit markdown — no LaTeX escaping).
+
 ### 26. Login circuit breaker — stop the 429 self-DoS (R19) ✅
 User's 429 loop wouldn't clear even after "an hour." Root cause found in their log: a SINGLE
 argus.bat launch fired THREE device-approval challenges in seconds (three UUIDs) — the dashboard
