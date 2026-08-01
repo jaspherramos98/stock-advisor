@@ -13,11 +13,11 @@ from storage.positions import (
     get_effective_price,
     close_position,
 )
-from ingestion.prices import fetch_prices
-from ingestion.finnhub_news import fetch_finnhub_news
-from ingestion.rss import fetch_rss_news
+# NOTE: ingestion.* (finnhub/yfinance/rss) are imported LAZILY inside the functions that
+# use them — those pull heavy optional deps not installed in CI, and keeping them out of
+# module scope lets the pure helpers here be imported/unit-tested without them.
 from market_hours import market_session
-from config import CLAUDE_MODEL
+from config import CLAUDE_MODEL, CLAUDE_CHEAP_MODEL
 
 load_dotenv()
 
@@ -25,6 +25,71 @@ load_dotenv()
 # a percentage-based exit. Set to 0 for exact, or 0.5 for within
 # half a percent of the target.
 PCT_TOLERANCE = 0.5
+
+# Persist which news headlines the event checker has already seen, so a Claude call only
+# happens when NEW, position-relevant news appears. The scheduled task runs every 15 min;
+# without this it spent a Claude call every run (~26/day) re-reading the same headlines and
+# almost always finding nothing. Reset daily so intraday repeats don't re-alert.
+_EVENT_SEEN_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "event_seen.json"
+)
+
+
+def _load_seen() -> set:
+    import json as _json
+    from datetime import datetime as _dt
+    try:
+        with open(_EVENT_SEEN_FILE) as f:
+            data = _json.load(f)
+        if data.get("date") == _dt.now().strftime("%Y-%m-%d"):
+            return set(data.get("hashes", []))
+    except Exception:
+        pass
+    return set()  # missing/old/corrupt → treat as a fresh day
+
+
+def _save_seen(hashes: set):
+    import json as _json
+    from datetime import datetime as _dt
+    try:
+        with open(_EVENT_SEEN_FILE, "w") as f:
+            _json.dump({"date": _dt.now().strftime("%Y-%m-%d"), "hashes": sorted(hashes)}, f)
+    except Exception as e:
+        print(f"Event checker: could not save seen headlines: {e}")
+
+
+def _relevant_new_headlines(news_items: list[dict], positions: list[dict], seen: set):
+    """
+    Keep only headlines that (a) mention a ticker the user actually holds and (b) haven't
+    been seen today. Returns (new_relevant_items, their_hashes). Cuts the Claude call down
+    to real, position-specific news instead of 30 generic headlines every 15 minutes.
+    """
+    import hashlib
+    owned = {(p.get("ticker") or "").upper() for p in positions}
+    owned_first = {(p.get("company_name") or "").split()[0].lower()
+                   for p in positions if p.get("company_name")}
+
+    new_items, hashes = [], set()
+    for it in news_items:
+        title = (it.get("title") or "").strip()
+        if not title:
+            continue
+        tl = title.lower()
+        tkr = (it.get("ticker") or "").upper()
+        words = set(tl.replace(",", " ").replace(".", " ").split())
+        relevant = (
+            (tkr and tkr in owned)
+            or any(sym and sym.lower() in words for sym in owned)
+            or any(nm and nm in tl for nm in owned_first)
+        )
+        if not relevant:
+            continue
+        h = hashlib.sha1(title.encode("utf-8", "replace")).hexdigest()[:16]
+        if h in seen:
+            continue
+        new_items.append(it)
+        hashes.add(h)
+    return new_items, hashes
 
 
 def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
@@ -198,16 +263,25 @@ def _check_event_exits(positions: list[dict]) -> list[dict]:
     # Fetch fresh news
     print("Event checker: fetching fresh news...")
     try:
+        from ingestion.finnhub_news import fetch_finnhub_news
+        from ingestion.rss import fetch_rss_news
         news_items = fetch_finnhub_news() + fetch_rss_news()
     except Exception as e:
         print(f"Event checker: news fetch error: {e}")
         return []
 
-    # Build a summary of recent headlines
-    headlines = []
-    for item in news_items[:30]:
-        headlines.append(f"- {item['title']} ({item['source']})")
-    news_block = "\n".join(headlines)
+    # GATE: only spend a Claude call if there's NEW news about a ticker the user holds.
+    # Most 15-minute windows have none → skip → $0. This is the single biggest token save.
+    seen = _load_seen()
+    new_items, new_hashes = _relevant_new_headlines(news_items, positions, seen)
+    if not new_items:
+        print("Event checker: no new position-relevant news — skipping Claude call.")
+        return []
+
+    _save_seen(seen | new_hashes)
+    print(f"Event checker: {len(new_items)} new position-relevant headline(s) — evaluating.")
+
+    news_block = "\n".join(f"- {it['title']} ({it.get('source', '?')})" for it in new_items)
 
     # Build a summary of open positions and their event-based exits
     position_lines = []
@@ -254,9 +328,9 @@ Recent news headlines:
 Check if any headlines signal that an exit condition has been met."""
 
     try:
-        print("Event checker: asking Claude to evaluate exit conditions...")
+        print("Event checker: asking Claude (Haiku) to evaluate exit conditions...")
         message = client.messages.create(
-            model=CLAUDE_MODEL,
+            model=CLAUDE_CHEAP_MODEL,   # mechanical classification — Haiku, ~1/3 the cost
             max_tokens=1000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
@@ -307,6 +381,7 @@ def run_exit_checks() -> list[dict]:
     print(f"Exit checker: checking {len(positions)} open positions...")
 
     # Fetch current prices for all open tickers
+    from ingestion.prices import fetch_prices
     tickers = [p["ticker"] for p in positions]
     prices  = fetch_prices(tickers)
 

@@ -20,6 +20,7 @@ from analysis.claude_analyst import _summarize_track_record, _filter_recommendat
 from backtest.exit_backtest import simulate_trade, summarize
 from analysis.scorecard import parse_band, classify_exit, compute_scorecard
 from alerts.entry_checker import _parse_triggers, _is_hit
+from alerts.exit_checker import _relevant_new_headlines
 
 
 # ── technicals ──────────────────────────────────────────────────────────────
@@ -281,6 +282,23 @@ def test_is_hit():
     assert _is_hit("above", 100, 101) and not _is_hit("above", 100, 99)
     assert _is_hit("below", 100, 99) and not _is_hit("below", 100, 101)
     assert _is_hit("above", 100, 100) and _is_hit("below", 100, 100)  # touching counts
+
+
+# ── event-checker token gate ──────────────────────────────────────────────────
+def test_relevant_new_headlines_gate():
+    positions = [{"ticker": "AAPL", "company_name": "Apple Inc."}]
+    news = [
+        {"title": "Apple beats earnings, guidance raised", "ticker": "AAPL"},
+        {"title": "Fed holds rates steady", "ticker": ""},          # irrelevant → dropped
+        {"title": "Random biotech soars on trial data", "ticker": "XYZ"},  # not owned → dropped
+    ]
+    new, hashes = _relevant_new_headlines(news, positions, seen=set())
+    assert len(new) == 1 and new[0]["ticker"] == "AAPL" and len(hashes) == 1
+    # already-seen headline is skipped (no Claude call would fire)
+    new2, _ = _relevant_new_headlines(news, positions, seen=hashes)
+    assert new2 == []
+    # no positions → nothing relevant
+    assert _relevant_new_headlines(news, [], set())[0] == []
 
 
 def test_compute_scorecard_discipline_and_concentration():
