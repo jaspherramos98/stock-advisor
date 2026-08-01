@@ -2,6 +2,18 @@
 
 ## Done
 
+### 28. Token cut A — gate + Haiku the event checker (R21) ✅
+Biggest recurring token drain: the news-driven exit check called Claude every 15-min scheduled run
+(~26/day, mostly finding nothing). Two cuts:
+- **Gate on new position-relevant news** (`_relevant_new_headlines` + `event_seen.json`, reset daily):
+  only call Claude when a NEW headline mentions a ticker the user actually holds. Most windows have
+  none → skip → $0. Replaces the rigid "2×/day" idea — strictly better (fires exactly when real news
+  breaks, free otherwise).
+- **Model → Haiku** (`config.CLAUDE_CHEAP_MODEL = claude-haiku-4-5`) for this mechanical "did news
+  trigger the exit?" classification — ~1/3 the Sonnet cost. Also now sends only the new relevant
+  headlines, not 30 generic ones.
+- Est. this line ~$6/mo → well under $1. `event_seen.json` gitignored. +1 test (37... 36 total).
+
 ### 27. Chat affordability / order-executability rule (R20) ✅
 Argus chat recommended shorting Apple when buying power was below one AAPL share — unexecutable
 (shorts/limit/stop/options all need ≥1 whole share, and shorts need margin). Added an
