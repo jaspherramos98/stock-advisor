@@ -297,6 +297,16 @@ def _start_proxy_server():
             if not messages:
                 return jsonify({"error": "No messages provided"}), 400
 
+            # Prompt caching: the system prompt (large static rules + the portfolio snapshot
+            # loaded once per chat open) is identical across every message in a session, so
+            # send it as a cache_control block. The first message writes the cache (~1.25x),
+            # every follow-up reads it at ~0.1x — the biggest per-message token saving for
+            # chat. Sent as a one-element content list so cache_control can be attached.
+            system_field = (
+                [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+                if system else system
+            )
+
             resp = _requests.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
@@ -307,7 +317,7 @@ def _start_proxy_server():
                 json={
                     "model":      CLAUDE_MODEL,
                     "max_tokens": 450,   # room for the action list + short explanation without truncation
-                    "system":     system,
+                    "system":     system_field,
                     "messages":   messages,
                 },
                 timeout=30,
@@ -461,7 +471,9 @@ with st.sidebar:
     st.divider()
 
     run_button = st.button("🔄 Run pipeline", use_container_width=True, type="primary")
-    st.caption("Fetches fresh news, scores it, and runs Claude analysis. Takes ~30 seconds.")
+    st.caption("Fetches fresh news, scores it, and runs Claude analysis. Takes ~30 seconds. "
+               "💸 Each run costs Claude tokens — news rarely shifts intraday, so **once a day is "
+               "usually enough**; re-running the same day mostly re-spends for the same read.")
 
     # Robinhood sync
     from ingestion.robinhood import is_available as rh_available, fetch_positions as rh_fetch, fetch_buying_power as rh_buying_power
