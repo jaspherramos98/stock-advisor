@@ -13,9 +13,9 @@ from storage.positions import (
     get_effective_price,
     close_position,
 )
-from ingestion.prices import fetch_prices
-from ingestion.finnhub_news import fetch_finnhub_news
-from ingestion.rss import fetch_rss_news
+# NOTE: ingestion.* (finnhub/yfinance/rss) are imported LAZILY inside the functions that
+# use them — those pull heavy optional deps not installed in CI, and keeping them out of
+# module scope lets the pure helpers here be imported/unit-tested without them.
 from market_hours import market_session
 from config import CLAUDE_MODEL, CLAUDE_CHEAP_MODEL
 
@@ -263,6 +263,8 @@ def _check_event_exits(positions: list[dict]) -> list[dict]:
     # Fetch fresh news
     print("Event checker: fetching fresh news...")
     try:
+        from ingestion.finnhub_news import fetch_finnhub_news
+        from ingestion.rss import fetch_rss_news
         news_items = fetch_finnhub_news() + fetch_rss_news()
     except Exception as e:
         print(f"Event checker: news fetch error: {e}")
@@ -379,6 +381,7 @@ def run_exit_checks() -> list[dict]:
     print(f"Exit checker: checking {len(positions)} open positions...")
 
     # Fetch current prices for all open tickers
+    from ingestion.prices import fetch_prices
     tickers = [p["ticker"] for p in positions]
     prices  = fetch_prices(tickers)
 
