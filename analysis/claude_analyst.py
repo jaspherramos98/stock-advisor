@@ -9,7 +9,11 @@ from config import CLAUDE_MODEL
 
 load_dotenv()
 
-MAX_STORIES = 25
+# Stories sent to Claude per run. Lowered 25 → 15 to cut tokens: fewer stories means a
+# shorter prompt AND fewer tickers needing technicals/fundamentals/levels context (the
+# fattest part of the input). 15 is still a full read for a personal tool. The per-
+# asset-type slot split in _deduplicate_by_asset_type scales off this.
+MAX_STORIES = 15
 
 
 def _deduplicate(items: list[dict], max_stories: int = MAX_STORIES) -> list[dict]:

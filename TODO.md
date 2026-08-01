@@ -2,6 +2,19 @@
 
 ## Done
 
+### 29. Token cuts B/C/D — chat caching, trim pipeline, cost nudge (R22) ✅
+- **B — chat prompt caching:** the `/chat` proxy now sends `system` as a `cache_control: ephemeral`
+  block. The system prompt (big static rules + the portfolio snapshot loaded once per chat open) is
+  identical across every message in a session, so the first message writes the cache and every
+  follow-up reads it at ~0.1×. Biggest per-message chat saving. (Pipeline caching deliberately
+  skipped — runs are hours apart, so nothing repeats within the cache TTL; it'd be wasted effort.)
+- **C — trim pipeline input:** `MAX_STORIES` 25 → 15. Fewer stories = shorter prompt AND fewer
+  tickers needing the fat technicals/fundamentals/levels context. Still a full read for a personal tool.
+- **D — cost nudge:** the Run-pipeline caption now says once/day is usually enough (news rarely shifts
+  intraday; re-running mostly re-spends for the same read). Behavioral, free.
+- Note: A2 ("run event check 2×/day") was intentionally NOT done — the R21 new-news gate is strictly
+  better (fires when real news breaks, $0 otherwise) and a fixed schedule would miss between-window news.
+
 ### 28. Token cut A — gate + Haiku the event checker (R21) ✅
 Biggest recurring token drain: the news-driven exit check called Claude every 15-min scheduled run
 (~26/day, mostly finding nothing). Two cuts:
