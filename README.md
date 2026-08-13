@@ -12,7 +12,7 @@ Argus runs a daily pipeline that:
 
 1. Fetches financial news in parallel from RSS feeds, Reddit, Finnhub, SEC filings, CoinGecko, and Robinhood
 2. Scores each story by source credibility (SEC filings = 1.0, Reddit = 0.15)
-3. Deduplicates and sends the top 25 stories to Claude Sonnet for analysis
+3. Deduplicates and sends the top 15 stories to Claude Sonnet for analysis
 4. Returns buy / watch / avoid signals with exit conditions and stop losses calibrated to 14-day price trends
 5. Allocates your budget across buy signals only — watch signals show $0
 
