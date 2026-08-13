@@ -422,7 +422,12 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
 2. **Portfolio** — invested money, P&L trend graph (yfinance), position breakdown
 3. **My Positions** — open/closed positions, manual entry, price updates, snooze alerts. Open-positions
    table + each expander show a computed **Stop @** price (`_stop_loss_price` parses "stop loss at X%"
-   from exit_condition × reference price; long = ref×(1−X), short = ref×(1+X)). Closed-positions header
+   from exit_condition × reference price; long = ref×(1−X), short = ref×(1+X)). Each open expander also
+   shows a **📐 Suggested exit (structure)** (R24 applied to holdings via `_suggested_exit`, cached 15m):
+   the R24 target%-to-resistance / ATR-stop% / R:R for that ticker's live chart, with an **Apply** button
+   that writes it into the exit_condition — so the structure-anchored exit works on positions you already
+   hold, not just new recommendations. Longs only (target-to-resistance is long-oriented); R:R<2 flagged
+   weak; blue-sky (no resistance) shows the ATR stop + a measured-move target hint. Closed-positions header
    shows the **performance scorecard** (`analysis/scorecard.py`): Net $/win rate/profit factor/payoff/
    expectancy, a red **discipline-leak** callout when trades let-run-to-band avg ≫ trades closed-early
    (the core finding: hand-closing at breakeven flattens P&L, not the picks), a concentration warning

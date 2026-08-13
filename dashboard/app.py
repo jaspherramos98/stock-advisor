@@ -137,6 +137,26 @@ def _stop_loss_price(exit_condition: str, ref_price: float, direction: str = "bu
     return round(ref_price * (1 + pct), 2) if direction == "short" else round(ref_price * (1 - pct), 2)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _suggested_exit(ticker: str, asset_type: str = "stock"):
+    """
+    Structure-anchored exit for an EXISTING position — the same R24 math the analyst uses
+    for new ideas (target = % to nearest resistance, stop = ATR-sized), applied to a ticker
+    you already hold. Returns the key_levels dict or None. Cached 15 min so opening My
+    Positions doesn't re-pull ~1y of history every Streamlit rerun.
+    """
+    try:
+        from ingestion.prices import fetch_price_history
+        data = fetch_price_history([ticker], asset_type=asset_type) or {}
+        kl = ((data.get(ticker) or {}).get("key_levels")) or {}
+        if kl.get("stop_pct_atr") is None and kl.get("target_pct_resist") is None:
+            return None
+        return kl
+    except Exception as e:
+        print(f"Suggested exit failed for {ticker}: {e}")
+        return None
+
+
 def _capture_chat_suggestions(reply_text: str):
     """
     Pulls Buy/Watch lines out of Argus's action-list reply and stores them as entry-watch
@@ -1336,6 +1356,33 @@ if True:
                     stop_px = _stop_loss_price(p["exit_condition"], ref_price, p.get("direction", "buy"))
                     if stop_px is not None:
                         st.markdown(f"**Stop-loss price:** \\${stop_px:.2f}  _(from {ref_price:.2f} reference)_")
+
+                    # Structure-anchored exit suggestion (R24) applied to this holding. Longs
+                    # only — the math (target = up to resistance) is long-oriented; a short's
+                    # target is down to support, so don't hand a wrong number for shorts.
+                    if p.get("direction") != "short":
+                        _crypto = bool(TICKER_TO_COINGECKO_ID.get(ticker, ""))
+                        kl = _suggested_exit(ticker, "crypto" if _crypto else "stock")
+                        if kl:
+                            tgt, stp, rr = kl.get("target_pct_resist"), kl.get("stop_pct_atr"), kl.get("reward_risk")
+                            res = kl.get("nearest_resistance")
+                            if tgt is not None and stp is not None:
+                                weak = " · ⚠️ weak (R:R < 2 — consider trimming/watching)" if (rr and rr < 2) else ""
+                                st.markdown(
+                                    f"**📐 Suggested exit (structure):** target **{tgt}%** "
+                                    f"(to resistance \\${res}), stop **{stp}%** (ATR) · R:R {rr}{weak}"
+                                )
+                                _sugg = f"target {tgt}% gain, stop loss at {stp}%"
+                                if st.button(f"Apply → {_sugg}", key=f"apply_exit_{ticker}"):
+                                    update_exit_condition(ticker, _sugg)
+                                    st.success(f"Exit updated: {_sugg}")
+                                    st.rerun()
+                            elif stp is not None:
+                                st.markdown(
+                                    f"**📐 Suggested exit (structure):** no overhead resistance "
+                                    f"(room to run) — stop **{stp}%** (ATR); size the target to a "
+                                    f"measured move ≥ **{round(2 * stp, 1)}%** to keep reward ≥ 2× the stop."
+                                )
                     st.markdown(f"**Based on:** _{p['source_title']}_")
 
                     # White paper link for crypto positions

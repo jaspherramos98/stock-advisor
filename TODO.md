@@ -2,6 +2,17 @@
 
 ## Done
 
+### 32. Apply structure exits to EXISTING positions (R24b) ✅
+R24 only fed the analyst for new ideas; owned tickers are excluded from recommendations, so there was
+no way to use the new exit math on positions you already hold. Now each open-position expander in My
+Positions shows a **📐 Suggested exit (structure)** — `_suggested_exit(ticker)` (st.cache_data, 15m TTL)
+runs the same R24 `key_levels` math on the holding's live chart: target% to nearest resistance, ATR
+stop%, R:R — with an **Apply** button that writes `target X% gain, stop loss at Y%` into the position's
+exit_condition. Longs only (the target-to-resistance math is long-oriented; shorts skipped). R:R<2 is
+flagged weak; blue-sky (no overhead resistance) shows the ATR stop + a measured-move target hint.
+Verified live: AVGO → target 2.8% (to resistance $432.73), stop 6.1%, R:R 0.46 (weak) — exposing that
+its old ~10% target had only 2.8% of real room. 43 tests still pass (UI/dashboard, no unit change).
+
 ### 31. Structure-anchored exits — kill the flat ~10% (R24) ✅
 User: exits were always ~10%, unrealistic per position. They actually ranged 6-12% but clustered
 8-10% and weren't tied to each stock's chart. Root cause: we computed ATR + support/resistance (R7)
