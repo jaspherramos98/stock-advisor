@@ -27,7 +27,7 @@ jobs:
       # Byte-compile everything — catches syntax errors in modules pytest can't import
       # (e.g. dashboard/app.py runs Streamlit code at import time).
       - name: Byte-compile all modules
-        run: python -m compileall -q analysis ingestion calculator storage alerts validation dashboard market_hours.py config.py main.py
+        run: python -m compileall -q analysis ingestion calculator storage alerts validation dashboard market_hours.py chat_budget.py config.py main.py
 
       - name: Run deterministic tests
         run: pytest -q

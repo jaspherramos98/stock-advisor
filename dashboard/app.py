@@ -64,6 +64,32 @@ from market_hours import market_session, market_status_line
 _BP_CACHE = {"value": None, "ts": 0.0}
 _BP_TTL_SECONDS = 60
 
+# Chat token controls live in chat_budget so they can be unit-tested without
+# importing this module (which boots Streamlit and the proxy thread).
+from chat_budget import CHAT_MAX_TOKENS, trim_history as _trim_history
+
+
+def _log_chat_usage(usage, sent_messages):
+    """
+    Prints one token line per chat call so the cost of a session is observable.
+
+    `cache_read` is the number to watch: it should be 0 on the first message of a
+    session and non-zero on every message after. Zero throughout means the cached
+    prefix is being invalidated and the system prompt is being billed in full every
+    time. Diagnostic only — never let it break a reply.
+    """
+    try:
+        cache_read  = usage.get("cache_read_input_tokens", 0)
+        cache_write = usage.get("cache_creation_input_tokens", 0)
+        print(
+            f"Chat tokens: in={usage.get('input_tokens', 0)} "
+            f"out={usage.get('output_tokens', 0)} "
+            f"cache_read={cache_read} cache_write={cache_write} "
+            f"msgs_sent={sent_messages}"
+        )
+    except Exception:
+        pass
+
 
 def _live_buying_power(force: bool = False):
     """
@@ -293,19 +319,48 @@ def _start_proxy_server():
                 return jsonify({"error": "API key not configured"}), 500
 
             messages = data.get("messages", [])
-            system   = data.get("system", "")
             if not messages:
                 return jsonify({"error": "No messages provided"}), 400
 
-            # Prompt caching: the system prompt (large static rules + the portfolio snapshot
-            # loaded once per chat open) is identical across every message in a session, so
-            # send it as a cache_control block. The first message writes the cache (~1.25x),
-            # every follow-up reads it at ~0.1x — the biggest per-message token saving for
-            # chat. Sent as a one-element content list so cache_control can be attached.
-            system_field = (
-                [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-                if system else system
-            )
+            # Only the tail of the conversation is billed; the browser still shows all of it.
+            messages = _trim_history(messages)
+            if not messages:
+                return jsonify({"error": "No usable messages after trimming"}), 400
+
+            # Prompt caching is an exact-prefix byte match, so the two halves of the system
+            # prompt have to be split at their stability boundary:
+            #   - system_base:    the static Argus rules, identical on every request
+            #   - system_context: the live portfolio snapshot (prices, P&L, buying power),
+            #                     rebuilt on every chat open and different almost every time
+            # The cache breakpoint goes on the base ONLY. Content after a breakpoint isn't
+            # part of the cached prefix, so the volatile half can change freely. Sending both
+            # under one breakpoint (as this did previously) meant a single changed price digit
+            # invalidated the whole thing — paying the ~1.25x write premium on every message
+            # and never getting a read.
+            system_base    = data.get("system_base", "")
+            system_context = data.get("system_context", "")
+            if not system_base:
+                # Older client (stale browser tab) sends one pre-joined "system" string.
+                # Cache it whole rather than 500 — it still beats no caching at all.
+                system_base = data.get("system", "")
+
+            system_field = []
+            if system_base:
+                system_field.append({
+                    "type": "text",
+                    "text": system_base,
+                    "cache_control": {"type": "ephemeral"},
+                })
+            if system_context:
+                system_field.append({"type": "text", "text": system_context})
+
+            body = {
+                "model":      CLAUDE_MODEL,
+                "max_tokens": CHAT_MAX_TOKENS,
+                "messages":   messages,
+            }
+            if system_field:
+                body["system"] = system_field
 
             resp = _requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -314,12 +369,7 @@ def _start_proxy_server():
                     "x-api-key":         api_key,
                     "anthropic-version": "2023-06-01",
                 },
-                json={
-                    "model":      CLAUDE_MODEL,
-                    "max_tokens": 450,   # room for the action list + short explanation without truncation
-                    "system":     system_field,
-                    "messages":   messages,
-                },
+                json=body,
                 timeout=30,
             )
             payload = resp.json()
@@ -327,6 +377,7 @@ def _start_proxy_server():
             # Record any Buy/Watch ideas in this reply so the entry checker can alert
             # when their "buy when" level is hit. Never let this break the reply.
             if resp.status_code == 200:
+                _log_chat_usage(payload.get("usage") or {}, len(messages))
                 try:
                     reply_text = "".join(
                         b.get("text", "") for b in payload.get("content", [])
@@ -1955,6 +2006,8 @@ st_html("""
       .argus-title { color: #2ecc71; font-size: 13px; font-weight: 700; text-transform: uppercase; }
       .argus-subtitle { color: rgba(255,255,255,0.4); font-size: 11px; margin-left: auto; }
       #argus-close-btn { background: none; border: none; color: rgba(255,255,255,0.4); font-size: 16px; cursor: pointer; }
+      #argus-clear-btn { background: none; border: none; color: rgba(255,255,255,0.4); font-size: 15px; cursor: pointer; }
+      #argus-clear-btn:hover { color: rgba(255,255,255,0.8); }
       #argus-messages {
         flex: 1; overflow-y: auto; padding: 14px;
         display: flex; flex-direction: column; gap: 12px;
@@ -1984,6 +2037,7 @@ st_html("""
         <div class="argus-dot"></div>
         <div class="argus-title">Argus Assistant</div>
         <div class="argus-subtitle">investing only</div>
+        <button id="argus-clear-btn" title="Clear chat (resets token cost)">⟲</button>
         <button id="argus-close-btn">✕</button>
       </div>
       <div id="argus-messages">
@@ -2016,9 +2070,12 @@ Verb is Buy / Sell / Hold / Watch. For Buy or Hold give the exit rule (target% g
     } catch(e) { state.context = ""; }
   }
 
-  function buildSystem() {
-    if (!state.context) return ARGUS_SYSTEM_BASE;
-    return ARGUS_SYSTEM_BASE + "\\n\\n=== LIVE PORTFOLIO DATA ===\\n" + state.context;
+  // Sent as two separate fields, NOT joined. The proxy puts the prompt cache
+  // breakpoint on the base only; joining them here would make the live portfolio
+  // numbers part of the cached prefix and invalidate it on every price change.
+  function buildSystemContext() {
+    if (!state.context) return "";
+    return "=== LIVE PORTFOLIO DATA ===\\n" + state.context;
   }
 
   function toggle() {
@@ -2029,7 +2086,17 @@ Verb is Buy / Sell / Hold / Watch. For Buy or Hold give the exit rule (target% g
       setTimeout(() => parentDoc.getElementById('argus-input').focus(), 150);
     }
   }
-  
+
+  // The widget DOM outlives Streamlit reruns, so state.history would otherwise grow
+  // for as long as the tab stays open. This is the manual reset: every message sent
+  // is billed against the current history, so starting fresh is the cheapest turn.
+  function clearChat() {
+    state.history = [];
+    parentDoc.getElementById('argus-messages').innerHTML =
+      '<div class="argus-msg argus-assistant">Chat cleared — starting fresh.' +
+      '<div class="argus-disclaimer">Not financial advice. For informational purposes only.</div></div>';
+  }
+
   function appendMsg(role, text) {
     const c = parentDoc.getElementById('argus-messages');
     const d = parentDoc.createElement('div');
@@ -2071,7 +2138,11 @@ Verb is Buy / Sell / Hold / Watch. For Buy or Hold give the exit rule (target% g
       const response = await fetch('http://localhost:8502/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system: buildSystem(), messages: state.history })
+        body: JSON.stringify({
+          system_base:    ARGUS_SYSTEM_BASE,
+          system_context: buildSystemContext(),
+          messages:       state.history
+        })
       });
       const data = await response.json();
       thinking.remove();
@@ -2105,6 +2176,7 @@ Verb is Buy / Sell / Hold / Watch. For Buy or Hold give the exit rule (target% g
   }
   rebind('argus-chat-btn', 'click', toggle);
   rebind('argus-close-btn', 'click', toggle);
+  rebind('argus-clear-btn', 'click', clearChat);
   rebind('argus-send', 'click', send);
   rebind('argus-input', 'keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
