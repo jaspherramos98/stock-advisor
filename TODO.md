@@ -2,7 +2,57 @@
 
 ## Done
 
+### 31. Structure-anchored exits — kill the flat ~10% (R24) ✅
+User: exits were always ~10%, unrealistic per position. They actually ranged 6-12% but clustered
+8-10% and weren't tied to each stock's chart. Root cause: we computed ATR + support/resistance (R7)
+but only used them for ENTRY triggers, never for exits — exits were free-floating %.
+- `ingestion/prices.py` `_compute_key_levels`: added `stop_pct_atr` (~1.75× avg daily range, floored
+  2% — scales with volatility), `target_pct_resist` (% to nearest resistance = real upside; None in
+  blue sky), and `reward_risk` (target÷stop; <2 = weak).
+- `analysis/claude_analyst.py`: KEY PRICE LEVELS block now prints a `SUGGESTED EXIT` per ticker;
+  EXIT CONDITIONS prompt rewritten to anchor exits to those numbers, never default to a single band,
+  mark R:R<2 as watch, size blue-sky breakouts to a measured move (reward ≥ 2× ATR stop). Exits should
+  visibly vary across the list.
+- Verified: three chart shapes → 2%/2% (weak, R:R 1.0 → watch), 12%/4.4% (R:R 2.73), 18%/8.8%
+  (R:R 2.05). +3 tests (43 passing). Also answered the lookback question: news = ~1-3 days (fresh
+  catalysts, not 1-2 months), price = ~1yr technicals (confirmation/timing context, not prediction).
+
+### 30. Chat token budget — fix the broken cache, bound the history (R23) ✅
+Measured the whole chat path instead of estimating it. The chat, not the pipeline, is the dominant
+Claude cost: one analyst run is ~$0.05–0.09 (~$2/mo at one run/day), while a long chat session runs
+$0.50–0.70 on its own. Two distinct defects, both in `dashboard/app.py`:
+- **R22's chat caching never actually worked.** The `cache_control` block was right, but the cached
+  prefix was `ARGUS_SYSTEM_BASE + live portfolio snapshot`, and the snapshot carries fresh prices,
+  live buying power and P&L, rebuilt by `loadContext()` on every panel open. Prompt caching is an
+  exact-prefix byte match — one changed price digit invalidates it, so every message paid the ~1.25×
+  write premium and never got a read. Now split at the stability boundary: the client sends
+  `system_base` and `system_context` as two fields, and the proxy puts the single cache breakpoint on
+  the static base only. Content after a breakpoint isn't part of the cached prefix, so live numbers
+  can churn freely. Measured `ARGUS_SYSTEM_BASE` at **1,222 tokens / 4,626 chars** — over Sonnet 4.6's
+  1024-token minimum cacheable prefix, but only by ~16%, so a test now guards the char floor
+  (`SYSTEM_BASE_MIN_CHARS`); trimming the prompt past it would turn caching off with no visible symptom.
+- **Chat history was never trimmed.** `state.history` was pushed to on every turn, sent whole on every
+  request, and never evicted — and the widget DOM survives Streamlit reruns, so a tab left open grew
+  forever. Input cost grew quadratically across a session. Now trimmed server-side in the proxy
+  (`chat_budget.trim_history`, `CHAT_HISTORY_LIMIT = 12`), snapped forward to start on a `user` turn
+  since the API 400s if `messages[0]` is an assistant reply. Server-side so a stale browser tab can't
+  bypass it; the browser still shows the full transcript, only the tail is billed. Safe to keep small
+  here because the facts Argus reasons over live in the *system* prompt and refresh on every chat open —
+  history only carries conversational thread.
+- **Instrumentation first:** there was zero token visibility anywhere in the codebase (no `usage` reads,
+  no counting, no cost log) — the `usage` object was already in the response and thrown away. The proxy
+  now prints `in / out / cache_read / cache_write / msgs_sent` per call. `cache_read` is the number to
+  watch: 0 on message 1, non-zero after. Zero throughout means the prefix is being invalidated again.
+- **Clear-chat button** (⟲ in the chat header) — resets `state.history`, the only reset short of a hard
+  page reload. Cheapest saving available and fully under the user's control.
+- New root module `chat_budget.py` (extracted so it's unit-testable without booting Streamlit, same
+  reason `market_hours.py` is its own module). +5 tests (41 total), added to CI's `compileall` list.
+- Expect ~35% off a mid-length session and more as sessions run long. Confirm against the new log line
+  before believing it.
+
 ### 29. Token cuts B/C/D — chat caching, trim pipeline, cost nudge (R22) ✅
+> ⚠️ Superseded by R23: item B below (chat prompt caching) was correct in intent but never took effect —
+> the volatile portfolio snapshot sat inside the cached prefix and invalidated it on every message.
 - **B — chat prompt caching:** the `/chat` proxy now sends `system` as a `cache_control: ephemeral`
   block. The system prompt (big static rules + the portfolio snapshot loaded once per chat open) is
   identical across every message in a session, so the first message writes the cache and every
