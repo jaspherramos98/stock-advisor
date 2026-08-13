@@ -250,13 +250,25 @@ def _build_prompt(
                 kl = data.get("key_levels") or {}
                 if kl.get("nearest_resistance") is None and kl.get("nearest_support") is None:
                     continue
+                # Per-ticker suggested exit numbers, so exits vary with the chart instead of
+                # defaulting to a round 8-10%: target = distance to the next resistance,
+                # stop = ATR-sized.
+                tgt = kl.get("target_pct_resist")
+                stp = kl.get("stop_pct_atr")
+                rr  = kl.get("reward_risk")
+                exit_hint = ""
+                if stp is not None:
+                    tgt_str = f"{tgt}% (to resistance)" if tgt is not None else "open (no overhead resistance)"
+                    rr_str  = f" | R:R {rr}" if rr is not None else ""
+                    exit_hint = f" | SUGGESTED EXIT: target {tgt_str}, stop {stp}% (ATR){rr_str}"
                 level_lines.append(
                     f"${ticker}: price ${data.get('current_price')} | ATR ${kl.get('atr_abs')} | "
                     f"resistance ${kl.get('nearest_resistance')} (breakout buy ${kl.get('breakout_buy')}) | "
                     f"support ${kl.get('nearest_support')} (pullback buy ${kl.get('pullback_buy')})"
+                    f"{exit_hint}"
                 )
             if level_lines:
-                lines.append("=== KEY PRICE LEVELS (anchor entry triggers here — don't invent numbers) ===")
+                lines.append("=== KEY PRICE LEVELS (anchor entry triggers AND exits here — don't invent numbers) ===")
                 lines.append(
                     "Deterministic support/resistance from real prices (recent + 52w highs/lows, SMAs) "
                     "with ATR = avg daily range in dollars. For a WATCH 'buy when' (entry_trigger), anchor "
@@ -264,7 +276,15 @@ def _build_prompt(
                     "confirmed break above nearest resistance (use the breakout buy = resistance + 0.5×ATR, "
                     "confirm on volume); a PULLBACK thesis → buy on a dip to nearest support (pullback buy). "
                     "Pick whichever fits the catalyst, and phrase the trigger around that computed level "
-                    "(± ATR is fine). These are reference levels, not predictions."
+                    "(± ATR is fine). These are reference levels, not predictions.\n"
+                    "EXITS ARE PER-POSITION, NOT A ROUND NUMBER: anchor exit_condition to the SUGGESTED EXIT "
+                    "on each line — target ≈ the % up to the nearest resistance (real upside; small if the "
+                    "price sits just under a ceiling, larger if there's room), stop ≈ the ATR-sized % (so "
+                    "volatility, not a guess, sets it). Do NOT default every position to ~10%. If R:R is "
+                    "below 2 (upside to the ceiling doesn't pay for the stop), that's a WEAK setup → prefer "
+                    "'watch' or a nearer target, don't force a bigger number. For a genuine breakout with no "
+                    "overhead resistance (blue sky), size the target to a measured move that keeps reward ≥ "
+                    "2× the ATR stop. HR names can target a FURTHER resistance for a bigger move; keep it real."
                 )
                 lines.extend(level_lines)
                 lines.append("=== END KEY PRICE LEVELS ===\n")
@@ -844,17 +864,26 @@ HIGHLY RECOMMENDED — SET TO TRUE ONLY WHEN ALL 4 CONDITIONS ARE MET:
 Set highly_recommended to false for everything else, including all watch signals, all M&A targets,
 and all shorts (shorts are higher-risk — never give them the 2x highly-recommended capital weight).
 
-EXIT CONDITIONS — REWARD MUST JUSTIFY RISK:
-- highly_recommended buys: gain targets 12-20%, stops 4-6% (let winners run, stops wide enough to breathe)
-- Regular buys: gain targets 6-10%, stops 2-4%
-- Upside must be at least 2x the stop loss distance. If it isn't, widen the target not the stop —
-  and if a realistic target can't clear that 2x bar, it's a 'watch', not a 'buy'.
-- SIZE STOPS TO VOLATILITY (ATR-based), not a round number. Use the asset's avg daily range
-  (in the 14-DAY PRICE TREND DATA) as an ATR proxy and set the stop ~1.5-2x that range, so normal
-  daily noise doesn't shake you out: e.g. a stock with a 1% avg daily range can use a ~2-3% stop,
-  but one with a 4% avg daily range needs a ~6-8% stop. A stop tighter than ~1.5x daily range is
-  just noise and will get hit at random. (High volatility, avg daily range >3% → stop of at least 5%.)
-  Keep the reward ≥2x the stop AFTER widening it for volatility; if that no longer clears 2x, it's a 'watch'.
+EXIT CONDITIONS — ANCHOR TO EACH STOCK'S OWN CHART, NOT A ROUND NUMBER:
+- Every position's exit MUST be sized to ITS OWN price structure and volatility. Do NOT default to
+  ~10% (or any single band) across positions — that is the #1 thing to fix here. Use the SUGGESTED
+  EXIT on each ticker's line in the KEY PRICE LEVELS block:
+    • TARGET ≈ the % up to the nearest resistance (the real, reachable upside). If price sits just
+      under a ceiling, the honest target is SMALL — take it or mark the idea 'watch'; do not inflate
+      it to hit a quota. If there's headroom, the target is naturally bigger.
+    • STOP ≈ the ATR-sized % on that line (~1.5-2× the avg daily range, floored ~2%). This makes a
+      calm stock get a ~2-3% stop and a volatile one ~6-8% — volatility sets it, not a guess. A stop
+      tighter than ~1.5× daily range is noise and gets hit at random.
+- Upside must still be at least 2× the stop distance (the R:R on the line). If R:R < 2 — the upside to
+  the ceiling doesn't pay for the volatility stop — it's a 'watch', not a 'buy'. Don't widen the target
+  past a real resistance to force 2×; either the setup clears it honestly or it doesn't.
+- Blue sky (no overhead resistance, fresh breakout): size the target to a measured move that keeps
+  reward ≥ 2× the ATR stop. highly_recommended names may target a FURTHER resistance for a bigger
+  move (roughly the 12-20% range) when the catalyst justifies it — but it must be a real level, not a
+  round 15%.
+- Result: exits should VARY across the list (e.g. 4%/2%, 7%/4%, 13%/6%) reflecting each chart — if
+  every position comes out the same %, you are guessing, not anchoring.
+- For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
 - For downtrending assets be more conservative with targets unless the catalyst is a clear reversal.
 - For 'short': use the same "target X% gain, stop loss at Y%" phrasing — "gain" = the stock dropping
   in your favor, "stop loss" = it rising against you. Keep stops tight; reward must still be ≥2x stop.

@@ -102,6 +102,9 @@ run_checks_silent.vbs         Same, hidden — what the "Argus Alert Checks" sch
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
+chat_budget.py                Chat token budget: history window + max_tokens + the system-prompt
+                              char floor that keeps prompt caching alive (R23). Separate module so
+                              it's testable without importing app.py (which boots Streamlit)
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
@@ -116,7 +119,7 @@ budget.json                   DEPRECATED — no longer read/written. Budget is n
 ### Pipeline Flow
 1. `main.py` runs parallel ingestion via `ThreadPoolExecutor` (max_workers=5)
 2. `validation/scorer.py` scores each item by source weight
-3. Top 25 deduplicated stories sent to Claude, plus per-ticker TECHNICAL INDICATORS
+3. Top 15 deduplicated stories (`MAX_STORIES`, analysis/claude_analyst.py) sent to Claude, plus per-ticker TECHNICAL INDICATORS
    (RSI/MACD/SMA50-200/52w/volume from ~1y of prices) and FUNDAMENTALS (valuation,
    growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
@@ -289,6 +292,18 @@ conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core
 - Flask proxy on port 8502 keeps API key server-side; bound to 127.0.0.1, debug=False,
   CORS locked to localhost:8501
 - `/context` endpoint builds live portfolio snapshot on every chat open
+- **Token budget (R23)** — the chat is the app's biggest Claude cost, so two rules are load-bearing:
+  1. The system prompt is sent as **two blocks**, and the `cache_control` breakpoint goes on the
+     STATIC one only (`system_base` = `ARGUS_SYSTEM_BASE`; `system_context` = the live snapshot).
+     Never re-join them client-side. Caching is an exact-prefix byte match, so putting live prices
+     inside the cached prefix invalidates it on every message — that's the bug R22 shipped and R23
+     fixed. `ARGUS_SYSTEM_BASE` must stay above ~4,200 chars or it drops under Sonnet 4.6's
+     1024-token minimum cacheable prefix and caching silently stops (guarded by a test).
+  2. History is trimmed **server-side** in the proxy (`chat_budget.trim_history`), not in the JS —
+     a stale browser tab can't bypass it. The window snaps forward to a `user` turn because the API
+     400s if `messages[0]` is an assistant reply.
+  Per-call token line is printed by `_log_chat_usage`; `cache_read` should be 0 on the first message
+  of a session and non-zero after. Zero throughout means the prefix is being invalidated again.
 - System prompt includes: current US MARKET STATUS (Eastern-time session from the shared
   `market_hours.market_session()`: open/pre-market/after-hours/weekend + NYSE holidays + half-day
   early closes; pandas holiday primitives, no extra dep, cached per year), live Robinhood BUYING POWER
@@ -337,10 +352,20 @@ Each recommendation must have:
 }
 ```
 
-## Exit Targets by Signal Type
-- Highly recommended: gain targets 12-20%, stops 4-6%
-- Regular buy: gain targets 6-10%, stops 2-4%
-- Upside must be at least 2x the stop distance
+## Exit Targets — structure-anchored, per position (R24)
+Exits are anchored to each stock's OWN chart, not a round band — the old flat "always ~10%"
+was the problem. `_compute_key_levels` (ingestion/prices.py) now also returns:
+- `stop_pct_atr` — ATR-sized stop (~1.75× avg daily range, floored 2%); a calm name → ~2-3%,
+  a volatile one → 6-8%. Volatility sets it, not a guess.
+- `target_pct_resist` — % up to the nearest resistance = the real reachable upside (small if
+  pinned under a ceiling, larger with room; `None` in blue sky).
+- `reward_risk` — target ÷ stop; **< 2 = weak setup → prefer 'watch'**.
+These surface as a `SUGGESTED EXIT` on each ticker's KEY PRICE LEVELS line, and the EXIT
+CONDITIONS prompt rule tells the analyst to anchor `exit_condition` to them and NOT default
+every position to the same %. Blue-sky breakouts size to a measured move keeping reward ≥ 2×
+the ATR stop; HR names may target a further resistance. Exits should visibly VARY across the list.
+- Rough bands still apply as sanity: HR 12-20% / stops 4-6%, regular 6-10% / stops 2-4% — but the
+  computed per-ticker numbers drive the actual values. Upside must be ≥ 2× the stop distance.
 
 ## Dashboard Header & Alerts
 - **Header badge** (under the title): live market-session badge (`market_hours.market_session()` →

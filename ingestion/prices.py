@@ -301,14 +301,35 @@ def _compute_key_levels(last, high_14d, low_14d, high_52w, low_52w, sma50, sma20
       nearest_support    — closest level BELOW current price (pullback reference)
       breakout_buy       — resistance + 0.5×ATR (enter on a confirmed break above)
       pullback_buy       — support (enter on a dip back to it)
+      stop_pct_atr       — SUGGESTED stop %, sized to volatility (~1.75× avg daily range,
+                           floored at 2%) so normal noise doesn't trip it. Per-position,
+                           NOT a round number.
+      target_pct_resist  — SUGGESTED target %, the realistic upside = distance to the
+                           nearest resistance ceiling. Small when price sits just under a
+                           ceiling, larger when there's room. None in blue sky (no overhead
+                           resistance) — caller/analyst then sizes off reward≥2×stop.
+      reward_risk        — target_pct_resist ÷ stop_pct_atr. < 2 = weak setup (the upside to
+                           the next ceiling doesn't pay for the volatility stop → prefer watch).
     """
     last = float(last)
-    atr = round(last * (float(adr_pct or 0) / 100), 2)
+    adr = float(adr_pct or 0)
+    atr = round(last * (adr / 100), 2)
 
     res_cands = [x for x in (high_14d, high_52w, sma50, sma200) if x and x > last]
     sup_cands = [x for x in (low_14d, low_52w, sma50, sma200) if x and x < last]
     resistance = round(min(res_cands), 2) if res_cands else None
     support    = round(max(sup_cands), 2) if sup_cands else None
+
+    # ATR-anchored stop: ~1.75× the average daily range, floored at 2% (a tighter stop is
+    # just noise on any liquid name). This is what makes the stop vary per position — a
+    # calm stock gets ~2-3%, a volatile one 6-8% — instead of a generic round number.
+    stop_pct = round(max(2.0, 1.75 * adr), 1) if adr else None
+
+    # Resistance-anchored target: how far to the next ceiling, in %. Honest upside — if the
+    # stock is pinned just under resistance this comes out small (a signal to watch, not to
+    # invent a 10% target); if there's headroom it's larger.
+    target_pct = round((resistance - last) / last * 100, 1) if (resistance and last) else None
+    reward_risk = round(target_pct / stop_pct, 2) if (target_pct and stop_pct) else None
 
     return {
         "atr_abs":            atr,
@@ -316,6 +337,9 @@ def _compute_key_levels(last, high_14d, low_14d, high_52w, low_52w, sma50, sma20
         "nearest_support":    support,
         "breakout_buy":       round(resistance + 0.5 * atr, 2) if resistance is not None else None,
         "pullback_buy":       support,
+        "stop_pct_atr":       stop_pct,
+        "target_pct_resist":  target_pct,
+        "reward_risk":        reward_risk,
     }
 
 

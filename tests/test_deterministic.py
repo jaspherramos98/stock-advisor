@@ -21,6 +21,7 @@ from backtest.exit_backtest import simulate_trade, summarize
 from analysis.scorecard import parse_band, classify_exit, compute_scorecard
 from alerts.entry_checker import _parse_triggers, _is_hit
 from alerts.exit_checker import _relevant_new_headlines
+from chat_budget import trim_history, SYSTEM_BASE_MIN_CHARS
 
 
 # ── technicals ──────────────────────────────────────────────────────────────
@@ -66,6 +67,24 @@ def test_key_levels():
 def test_key_levels_no_resistance_above():
     k = _compute_key_levels(200, 105, 95, 120, 80, 98, 90, 1.0)
     assert k["nearest_resistance"] is None and k["breakout_buy"] is None
+    # No overhead resistance → no resistance-anchored target (blue sky); stop still sized.
+    assert k["target_pct_resist"] is None and k["reward_risk"] is None
+    assert k["stop_pct_atr"] == 2.0  # max(2.0, 1.75*1.0)
+
+def test_key_levels_exit_anchoring():
+    # last=100, nearest resistance 105 (+5%), avg daily range 2% → ATR stop 1.75*2=3.5%
+    k = _compute_key_levels(100, 105, 95, 120, 80, 98, 90, 2.0)
+    assert k["target_pct_resist"] == 5.0        # (105-100)/100
+    assert k["stop_pct_atr"] == 3.5             # 1.75 * 2.0
+    assert k["reward_risk"] == round(5.0 / 3.5, 2)  # ~1.43 → weak setup (< 2)
+
+def test_key_levels_stop_scales_with_volatility():
+    # a calm name (0.8% ADR) floors at 2%; a volatile one (5% ADR) gets a wide stop
+    calm = _compute_key_levels(100, 110, 90, 120, 80, 95, 90, 0.8)
+    vol  = _compute_key_levels(100, 110, 90, 120, 80, 95, 90, 5.0)
+    assert calm["stop_pct_atr"] == 2.0          # floored (1.75*0.8=1.4 < 2)
+    assert vol["stop_pct_atr"] == 8.8           # 1.75 * 5.0 — much wider, per volatility
+    assert vol["stop_pct_atr"] > calm["stop_pct_atr"]
 
 
 # ── fundamentals extractor ────────────────────────────────────────────────────
@@ -321,3 +340,72 @@ def test_compute_scorecard_discipline_and_concentration():
     # MU is the dominant winner → high concentration share
     assert sc["top_trade"]["ticker"] == "MU" and sc["top_trade_profit_share"] >= 60
     assert compute_scorecard([])["trades"] == 0
+
+
+# ── chat history trimming (token budget) ────────────────────────────────────
+def _convo(n):
+    """n messages alternating user/assistant, starting with user."""
+    return [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"}
+        for i in range(n)
+    ]
+
+
+def test_trim_history_short_conversations_pass_through():
+    assert trim_history([], limit=4) == []
+    short = _convo(3)
+    assert trim_history(short, limit=4) == short
+    exact = _convo(4)
+    assert trim_history(exact, limit=4) == exact
+
+
+def test_trim_history_keeps_tail_and_does_not_mutate():
+    convo = _convo(10)
+    original = list(convo)
+    out = trim_history(convo, limit=4)
+    assert convo == original                      # input untouched
+    assert out[-1]["content"] == "m9"             # newest message survives
+    assert len(out) <= 4
+
+
+def test_trim_history_always_starts_on_user():
+    # A naive tail slice here lands on an assistant turn, which the API rejects with
+    # a 400. The window must snap forward to the next user message.
+    convo = _convo(10)                            # even idx = user, odd = assistant
+    out = trim_history(convo, limit=5)            # raw tail would start at m5 (assistant)
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == "m6"
+    assert out[-1]["content"] == "m9"
+
+    for limit in range(1, 12):
+        trimmed = trim_history(_convo(11), limit=limit)
+        assert not trimmed or trimmed[0]["role"] == "user"
+
+
+def test_trim_history_all_assistant_window_sends_nothing():
+    # Degenerate input: better to send nothing than a guaranteed 400.
+    convo = [{"role": "user", "content": "hi"}] + [
+        {"role": "assistant", "content": f"a{i}"} for i in range(5)
+    ]
+    assert trim_history(convo, limit=3) == []
+
+
+def test_argus_system_base_clears_cacheable_floor():
+    # Prompt caching needs the static system block over the model's minimum prefix
+    # (1024 tokens for Sonnet 4.6). ARGUS_SYSTEM_BASE measured 1,222 tokens at 4,626
+    # chars — only ~16% of headroom. If someone trims the prompt below the floor,
+    # caching stops working silently, so guard it here with a char-count proxy.
+    import os
+    import re
+
+    app_py = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dashboard", "app.py"
+    )
+    with open(app_py, encoding="utf-8") as f:
+        src = f.read()
+    m = re.search(r"const ARGUS_SYSTEM_BASE = `(.*?)`;", src, re.S)
+    assert m, "ARGUS_SYSTEM_BASE not found — did the chat widget move?"
+    assert len(m.group(1)) >= SYSTEM_BASE_MIN_CHARS, (
+        f"ARGUS_SYSTEM_BASE is {len(m.group(1))} chars, below the "
+        f"{SYSTEM_BASE_MIN_CHARS} floor — prompt caching will silently stop working"
+    )
