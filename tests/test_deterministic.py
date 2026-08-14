@@ -22,6 +22,10 @@ from analysis.scorecard import parse_band, classify_exit, compute_scorecard
 from alerts.entry_checker import _parse_triggers, _is_hit
 from alerts.exit_checker import _relevant_new_headlines
 from chat_budget import trim_history, SYSTEM_BASE_MIN_CHARS
+from trading_guards import (
+    OrderIntent, GuardState, check_order, record_placed,
+    MAX_ORDERS_PER_DAY, DAILY_LOSS_LIMIT_PCT, MIN_BUYING_POWER, MAX_SINGLE_ORDER_FRACTION,
+)
 
 
 # ── technicals ──────────────────────────────────────────────────────────────
@@ -409,3 +413,125 @@ def test_argus_system_base_clears_cacheable_floor():
         f"ARGUS_SYSTEM_BASE is {len(m.group(1))} chars, below the "
         f"{SYSTEM_BASE_MIN_CHARS} floor — prompt caching will silently stop working"
     )
+
+
+# --- trading_guards: order-safety layer for MCP execution (Path B) --------------------
+
+def _buy(dollars, client_id="", ticker="ABC"):
+    return OrderIntent(ticker=ticker, side="buy", dollars=dollars, client_id=client_id)
+
+
+def _sell(qty, client_id="", ticker="ABC"):
+    return OrderIntent(ticker=ticker, side="sell", quantity=qty, client_id=client_id)
+
+
+def test_guard_allows_normal_buy():
+    st = GuardState(start_equity=1000.0)
+    assert check_order(_buy(100.0), st, buying_power=500.0).allowed
+
+
+def test_guard_blocks_buy_over_buying_power():
+    st = GuardState(start_equity=1000.0)
+    r = check_order(_buy(600.0), st, buying_power=500.0)
+    assert not r.allowed and "buying power" in r.reason
+
+
+def test_guard_blocks_buy_below_min_buying_power():
+    st = GuardState(start_equity=1000.0)
+    r = check_order(_buy(5.0), st, buying_power=MIN_BUYING_POWER - 1)
+    assert not r.allowed
+
+
+def test_guard_enforces_single_name_cap():
+    st = GuardState(start_equity=1000.0)
+    # 45% of equity exceeds the 40% single-name cap even though buying power covers it.
+    over = MAX_SINGLE_ORDER_FRACTION * 1000.0 + 50.0
+    r = check_order(_buy(over), st, buying_power=1000.0)
+    assert not r.allowed and "single-name cap" in r.reason
+
+
+def test_guard_daily_order_cap():
+    st = GuardState(start_equity=1000.0, orders_today=MAX_ORDERS_PER_DAY)
+    r = check_order(_buy(50.0), st, buying_power=1000.0)
+    assert not r.allowed and "cap" in r.reason
+
+
+def test_guard_daily_loss_kill_switch():
+    st = GuardState(start_equity=1000.0)
+    st.day_pnl = -(DAILY_LOSS_LIMIT_PCT * 1000.0) - 1  # just past the limit
+    r = check_order(_buy(50.0), st, buying_power=1000.0)
+    assert not r.allowed and "loss limit" in r.reason
+
+
+def test_guard_idempotency_blocks_duplicate_client_id():
+    st = GuardState(start_equity=1000.0)
+    intent = _buy(50.0, client_id="trade-xyz")
+    assert check_order(intent, st, buying_power=1000.0).allowed
+    record_placed(intent, st)
+    r = check_order(_buy(50.0, client_id="trade-xyz"), st, buying_power=1000.0)
+    assert not r.allowed and "duplicate" in r.reason
+
+
+def test_guard_rejects_malformed_intents():
+    st = GuardState(start_equity=1000.0)
+    assert not check_order(_buy(0.0), st, 1000.0).allowed          # non-positive buy
+    assert not check_order(_sell(0.0), st, 1000.0).allowed         # non-positive sell
+    bad = OrderIntent(ticker="ABC", side="hold")
+    assert not check_order(bad, st, 1000.0).allowed                # unknown side
+
+
+def test_guard_sell_allowed_regardless_of_buying_power():
+    st = GuardState(start_equity=1000.0)
+    assert check_order(_sell(1.5), st, buying_power=0.0).allowed
+
+
+def test_record_placed_increments_and_tracks():
+    st = GuardState(start_equity=1000.0)
+    record_placed(_buy(10.0, client_id="a"), st)
+    assert st.orders_today == 1 and "a" in st.placed_client_ids
+
+
+# --- robinhood_mcp: reads degrade safely, orders honor DRY_RUN + guards ---------------
+
+def test_mcp_reads_degrade_to_empty_when_disabled(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "USE_MCP", False, raising=False)
+    assert mcp.fetch_positions() == []
+    assert mcp.fetch_buying_power() is None
+    assert mcp.fetch_quotes(["AAPL"]) == {}
+
+
+def test_mcp_reads_degrade_when_enabled_but_unwired(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "USE_MCP", True, raising=False)
+    # _call_tool raises MCPNotWired; reads must swallow it, not crash.
+    assert mcp.fetch_positions() == []
+    assert mcp.fetch_buying_power() is None
+    assert mcp.fetch_quotes(["AAPL"]) == {}
+
+
+def test_mcp_dry_run_order_logs_not_sends(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "DRY_RUN", True, raising=False)
+    st = GuardState(start_equity=1000.0)
+    res = mcp.place_order(_buy(100.0, client_id="d1"), st, buying_power=500.0)
+    assert res["status"] == "dry_run" and st.orders_today == 1
+
+
+def test_mcp_rejected_order_not_counted(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "DRY_RUN", True, raising=False)
+    st = GuardState(start_equity=1000.0)
+    res = mcp.place_order(_buy(9999.0, client_id="d2"), st, buying_power=100.0)
+    assert res["status"] == "rejected" and st.orders_today == 0
+
+
+def test_mcp_normalize_positions_shape():
+    from ingestion.robinhood_mcp import _normalize_positions
+    raw = [{"symbol": "ABC", "quantity": "2", "average_cost": "10", "price": "12", "name": "Abc Co"}]
+    out = _normalize_positions(raw)
+    assert out[0]["ticker"] == "ABC" and out[0]["equity"] == 24.0 and out[0]["pnl_pct"] == 20.0

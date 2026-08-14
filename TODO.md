@@ -2,6 +2,21 @@
 
 ## Done
 
+### 33. Robinhood agentic execution — Path B scaffolding (R25) ✅
+Branch `feat/robinhood-mcp-agentic`. Groundwork for using Robinhood's official Trading MCP as the
+sanctioned execution path (ends the `robin_stocks` 429; auto-places exits so no 24/7 watch). Design A
+(Argus computes orders, MCP executes literally — no LLM per trade), confirm-first, DRY_RUN default ON.
+Shipped **additive + flag-gated** so native Argus is untouched (`config.USE_MCP=False`, `DRY_RUN=True`):
+- `config.py` — `USE_MCP`/`DRY_RUN`/`ROBINHOOD_MCP_URL`.
+- `trading_guards.py` — OrderIntent/GuardState + `check_order` (idempotency, daily order cap,
+  daily-loss kill switch, buying-power + 40% single-name cap). Pure logic, 11 new tests.
+- `ingestion/robinhood_mcp.py` — MCP client: mirrors robinhood.py read shapes + guarded DRY_RUN-safe
+  `place_order`. Live tool calls stubbed at `_call_tool` (`MCPNotWired`) until the spike; reads degrade
+  to empty. 4 new tests.
+- `scripts/mcp_spike.py` — one-shot OAuth-handshake probe (tools/list, places nothing).
+- Docs: CLAUDE.md Key Files + new "Robinhood agentic execution (R25)" section.
+**NOT live** — blocked on the spike + a funded Agentic account (see Backlog + plan file). 58 tests green.
+
 ### 32. Apply structure exits to EXISTING positions (R24b) ✅
 R24 only fed the analyst for new ideas; owned tickers are excluded from recommendations, so there was
 no way to use the new exit math on positions you already hold. Now each open-position expander in My
@@ -613,6 +628,22 @@ Lowest core-fit; do last or not at all.
 ---
 
 ## Backlog
+
+### R25b. Wire the Robinhood MCP (blocked on spike + funded Agentic account)
+Scaffolding shipped (R25, Done). To go live:
+1. **Spike first** (`venv\Scripts\python.exe scripts\mcp_spike.py`, needs `pip install "mcp[cli]"`):
+   answer the gates — order types (native stop/limit/bracket?), OAuth handshake completes headless,
+   token/refresh lifetimes, read scope (agentic only vs main). Places nothing; stops at the funding
+   wall if hit.
+2. **User decision:** open + fund a dedicated Agentic account (the MCP does nothing without it).
+3. **Wire** `robinhood_mcp._call_tool` (OAuth session via `mcp` SDK) + fill the `_TOOL_*` names and
+   `_order_args` schema from the spike's `tools/list`; revisit the `_normalize_*` field names.
+4. **Exit routing:** point a fired `alerts/exit_checker` trigger at `place_order` (behind DRY_RUN +
+   confirm-first) so exits auto-place — the 24/7-watch fix. If gate#1 shows native stop orders, place
+   a standing stop once instead (set-and-forget, no polling).
+5. **DRY_RUN diff** several clean days → then ONE tiny live confirm-first order → then enable the loop.
+   Keep confirm-first + tiny size until the edge beats SPY across >2 trades.
+Full detail in the plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
 
 ### B1. Robinhood MCP sync
 Official read-only position import via agent.robinhood.com MCP instead of

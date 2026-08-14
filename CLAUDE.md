@@ -101,10 +101,22 @@ run_checks.bat                Run exit+entry alert checks once (UTF-8 env + venv
 run_checks_silent.vbs         Same, hidden — what the "Argus Alert Checks" scheduled task calls
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
-config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
+config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
+                              flags USE_MCP/DRY_RUN + ROBINHOOD_MCP_URL (R25) — single source of truth
 chat_budget.py                Chat token budget: history window + max_tokens + the system-prompt
                               char floor that keeps prompt caching alive (R23). Separate module so
                               it's testable without importing app.py (which boots Streamlit)
+trading_guards.py             Broker-agnostic order-safety guardrails (R25) — OrderIntent/GuardState +
+                              check_order (idempotency, daily order cap, daily-loss kill switch,
+                              buying-power + single-name cap). Pure logic, network-free, unit-tested.
+ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — OAuth/MCP isolated
+                              here; mirrors robinhood.py read shapes (fetch_positions/buying_power/
+                              quotes) + guarded, DRY_RUN-safe place_order. Trades ONLY the Agentic
+                              account. Live tool calls stubbed at _call_tool until the OAuth spike wires
+                              real tool names/order schema. USE_MCP=False → never touched (today's Argus).
+scripts/mcp_spike.py          One-shot OAuth-handshake probe (R25) — connects to the MCP, runs
+                              tools/list, prints schemas to answer the gates (order types / handshake /
+                              token lifetimes / read scope). Places NO orders. Needs `mcp[cli]` in venv.
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
@@ -331,6 +343,26 @@ conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core
 - Aligned with the analyst's watch-floor + shorts (R1): knows the list always
   includes watches by design and walks the user through them on weak days instead
   of dismissing; understands `short` ideas (bearish, stocks-only, invert P&L)
+
+### Robinhood agentic execution — Path B / Design A (R25, scaffolding only)
+Goal: kill two pains — (1) the `robin_stocks` 429/device-approval reset, and (2) exit-selling that
+needs 24/7 attention (the emailer only notifies, ~once/day). Path A (auto-orders via `robin_stocks`)
+was rejected: it's a ToS violation that escalates ban risk. Path B uses Robinhood's **official Trading
+MCP** (OAuth refresh tokens end the 429; sanctioned for agents). **Design A**: Argus computes the exact
+orders with its existing math (pyramid sizing + structure exits) and calls MCP `place_order` literally —
+**no LLM between analysis and execution** (keeps token cost ~current; the Claude-agent-per-trade design
+was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
+- **Isolation:** all MCP/OAuth lives in `ingestion/robinhood_mcp.py` (mirrors robinhood.py read shapes
+  so callers swap via the `config.USE_MCP` flag). All order safety lives in `trading_guards.py`.
+- **Account boundary:** the MCP trades/reads ONLY a dedicated, funded **Agentic account**, never the
+  main account (Robinhood-enforced). Main-account holdings do NOT migrate automatically.
+- **STATUS: scaffolding, not live.** `USE_MCP=False` + `DRY_RUN=True` by default → Argus is unchanged.
+  Live MCP calls are stubbed at `robinhood_mcp._call_tool` (raises `MCPNotWired`); reads degrade to
+  empty. Blocked on the **OAuth-handshake spike** (`scripts/mcp_spike.py`) to confirm the gates
+  (tool names, order types, token lifetimes, read scope) before wiring. See the plan file
+  `~/.claude/plans/crystalline-sniffing-kurzweil.md` "APPROVED DIRECTION".
+- **To revert to native Argus entirely:** `git checkout main` (this work is on branch
+  `feat/robinhood-mcp-agentic`).
 
 ## Claude Analysis JSON Schema
 Each recommendation must have:
