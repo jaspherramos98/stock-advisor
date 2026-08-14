@@ -345,6 +345,8 @@ def _order_args(intent: OrderIntent, account_number: str) -> dict:
         args["limit_price"] = f"{intent.limit_price:.2f}"
     if intent.stop_price is not None:
         args["stop_price"] = f"{intent.stop_price:.2f}"
+    if intent.time_in_force:
+        args["time_in_force"] = intent.time_in_force
     if intent.client_id:
         args["ref_id"] = intent.client_id
     return args

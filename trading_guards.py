@@ -33,6 +33,8 @@ class OrderIntent:
     order_type: str = "market"         # market | limit | stop | stop_limit
     limit_price: float | None = None
     stop_price: float | None = None
+    time_in_force: str | None = None   # 'gtc' | 'gfd'; None → broker default (gfd). Protective
+                                       # stops MUST be 'gtc' or they expire at the close.
     reason: str = ""                   # entry rationale / exit trigger — for the audit log
     client_id: str = ""                # idempotency key
 

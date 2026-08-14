@@ -586,17 +586,34 @@ def test_plan_protective_stops():
     abc = tickers["ABC"]
     assert abc.side == "sell" and abc.order_type == "stop" and abc.quantity == 3
     assert abc.stop_price == 96.0 and abc.client_id == "stop-ABC-96.0"
+    assert abc.time_in_force == "gtc"          # protective stops MUST be GTC, not gfd
     assert tickers["PART"].quantity == 2 and tickers["PART"].stop_price == 18.0
 
 
-def test_existing_stop_tickers():
-    from alerts.agentic_stops import _existing_stop_tickers
+def test_open_stops_parsing():
+    from alerts.agentic_stops import _open_stops
     payload = {"data": {"orders": [
-        {"symbol": "ABC", "side": "sell", "type": "stop_market", "state": "queued"},
-        {"symbol": "XYZ", "side": "sell", "type": "limit", "state": "queued"},       # not a stop
-        {"symbol": "OLD", "side": "sell", "type": "stop_market", "state": "cancelled"},  # not open
+        # Real RH shape: a stop is type='market' WITH a stop_price, not type='stop_market'.
+        {"id": "o1", "symbol": "ABC", "side": "sell", "type": "market", "stop_price": "96.00",
+         "state": "queued", "time_in_force": "gtc"},
+        {"id": "o2", "symbol": "GFD", "side": "sell", "type": "market", "stop_price": "40.00",
+         "state": "queued", "time_in_force": "gfd"},                    # stale → replace
+        {"id": "o3", "symbol": "XYZ", "side": "sell", "type": "limit", "state": "queued"},   # no stop_price
+        {"id": "o4", "symbol": "OLD", "side": "sell", "type": "market", "stop_price": "5.00",
+         "state": "cancelled"},                                          # not open
     ]}}
-    assert _existing_stop_tickers(payload) == {"ABC"}
+    stops = _open_stops(payload)
+    assert set(stops) == {"ABC", "GFD"}
+    assert stops["ABC"]["tif"] == "gtc" and stops["GFD"]["tif"] == "gfd"
+    assert stops["GFD"]["order_id"] == "o2"
+
+
+def test_mcp_order_args_includes_tif():
+    from ingestion.robinhood_mcp import _order_args
+    intent = OrderIntent(ticker="ABC", side="sell", quantity=1, order_type="stop",
+                         stop_price=96.0, time_in_force="gtc")
+    args = _order_args(intent, "AGENTIC")
+    assert args["time_in_force"] == "gtc" and args["type"] == "stop_market"
 
 
 def test_account_reads_dispatch(monkeypatch):

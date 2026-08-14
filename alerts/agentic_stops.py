@@ -56,15 +56,20 @@ def plan_protective_stops(positions: list[dict], stop_pct_by_ticker: dict[str, f
             quantity=whole,
             order_type="stop",              # → place_equity_order type 'stop_market'
             stop_price=stop_px,
+            time_in_force="gtc",            # MUST rest until hit — gfd would expire at the close
             reason=f"protective stop ~{stop_pct}% (ATR) on {whole} sh",
             client_id=f"stop-{ticker}-{stop_px}",
         ))
     return intents
 
 
-def _existing_stop_tickers(orders_payload) -> set[str]:
-    """Tickers that already have an OPEN stop sell order, so we don't stack duplicates."""
-    out: set[str] = set()
+_OPEN_STATES = ("queued", "confirmed", "unconfirmed", "open")
+
+
+def _open_stops(orders_payload) -> dict[str, dict]:
+    """Map ticker → its OPEN stop sell order details ({order_id, tif}). Used to skip tickers
+    already protected by a GTC stop, and to cancel-and-replace a non-GTC (gfd) one."""
+    out: dict[str, dict] = {}
     data = orders_payload.get("data") if isinstance(orders_payload, dict) else None
     rows = (data or {}).get("orders", []) if isinstance(data, dict) else []
     for o in rows:
@@ -72,8 +77,16 @@ def _existing_stop_tickers(orders_payload) -> set[str]:
         otype = (o.get("type") or "").lower()
         side = (o.get("side") or "").lower()
         sym = o.get("symbol")
-        if sym and side == "sell" and "stop" in otype and state in ("queued", "confirmed", "unconfirmed", "open"):
-            out.add(sym)
+        # Robinhood reports a stop as type='market'/'limit' WITH a stop_price set — so detect
+        # by the stop_price, not the type string ('stop' in type alone misses real stops).
+        try:
+            has_stop_price = float(o.get("stop_price") or 0) > 0
+        except (ValueError, TypeError):
+            has_stop_price = False
+        is_stop = has_stop_price or "stop" in otype
+        if sym and side == "sell" and is_stop and state in _OPEN_STATES:
+            out[sym] = {"order_id": o.get("id") or o.get("order_id"),
+                        "tif": (o.get("time_in_force") or "").lower()}
     return out
 
 
@@ -98,13 +111,32 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
     if not positions:
         return [{"status": "noop", "reason": "no agentic positions to protect"}]
 
-    # Existing open stop orders → skip those tickers.
+    # Existing open stop orders: a GTC stop means the ticker is already protected (skip); a
+    # non-GTC (gfd) stop must be cancelled + replaced (it would expire at the close).
     try:
         orders = mcp._unwrap_tool_result(mcp_auth.call_tool("get_equity_orders", {"account_number": acct}))
-        have_stop = _existing_stop_tickers(orders)
+        open_stops = _open_stops(orders)
     except Exception as e:  # noqa: BLE001
         print(f"agentic_stops: could not read existing orders — {e}")
-        have_stop = set()
+        open_stops = {}
+
+    protected = {t for t, s in open_stops.items() if s.get("tif") == "gtc"}
+    to_replace = {t: s for t, s in open_stops.items() if s.get("tif") and s["tif"] != "gtc"}
+
+    # Cancel stale non-GTC stops so we can re-place them as GTC (DRY_RUN logs the intent).
+    for ticker, s in to_replace.items():
+        oid = s.get("order_id")
+        if not oid:
+            continue
+        if config.DRY_RUN:
+            print(f"[DRY_RUN CANCEL] stale {s.get('tif')} stop on {ticker} (order {oid})")
+        else:
+            try:
+                mcp_auth.call_tool("cancel_equity_order", {"account_number": acct, "order_id": oid})
+                print(f"[CANCELLED] stale {s.get('tif')} stop on {ticker} (order {oid})")
+            except Exception as e:  # noqa: BLE001
+                print(f"agentic_stops: cancel failed for {ticker} — {e}; leaving as-is, skipping")
+                protected.add(ticker)  # couldn't cancel → don't stack a second stop
 
     # R24 ATR stop % per ticker from live structure.
     stop_pct_by_ticker: dict[str, float] = {}
@@ -118,7 +150,7 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
     except Exception as e:  # noqa: BLE001
         print(f"agentic_stops: structure lookup failed — {e}")
 
-    to_place = [p for p in positions if p["ticker"] not in have_stop]
+    to_place = [p for p in positions if p["ticker"] not in protected]
     intents = plan_protective_stops(to_place, stop_pct_by_ticker)
 
     # Guard state sized to the agentic account value (denominator for caps/kill-switch).
@@ -133,6 +165,7 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
                 "account_number": acct, "symbol": intent.ticker, "side": "sell",
                 "type": "stop_market", "quantity": str(intent.quantity),
                 "stop_price": f"{intent.stop_price:.2f}",
+                "time_in_force": intent.time_in_force or "gtc",
             }))
             checks = ((preview.get("data") or {}).get("order_checks")) if isinstance(preview, dict) else None
             if verbose:
