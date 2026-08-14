@@ -543,12 +543,8 @@ with st.sidebar:
     budget = _effective_budget()
     if budget > 0:
         st.metric("Budget = live buying power", f"\\${budget:,.2f}")
-        st.caption(f"Allocations size to your real Robinhood cash. Dollar allocation runs at "
-                   f"\\${MIN_ALLOCATION_BUDGET:,.0f}+; below that, ideas still show with \\$0.")
     else:
         st.metric("Budget = live buying power", "—")
-        st.caption("Connect Robinhood (credentials in .env) to size positions. "
-                   "Ideas still show with \\$0 until buying power is available.")
 
     st.divider()
 
@@ -563,9 +559,6 @@ with st.sidebar:
     st.divider()
 
     run_button = st.button("🔄 Run pipeline", use_container_width=True, type="primary")
-    st.caption("Fetches fresh news, scores it, and runs Claude analysis. Takes ~30 seconds. "
-               "💸 Each run costs Claude tokens — news rarely shifts intraday, so **once a day is "
-               "usually enough**; re-running the same day mostly re-spends for the same read.")
 
     # Robinhood sync
     from ingestion.account_reads import is_available as rh_available, positions as rh_fetch, buying_power as rh_buying_power
@@ -611,9 +604,6 @@ with st.sidebar:
                     st.rerun()
             else:
                 st.error("Could not fetch Robinhood positions. Check credentials in .env.")
-        st.caption("Read-only — imports positions, does not trade. Each synced position gets a "
-                   "**structure-anchored** exit (target to resistance / ATR stop) when its chart "
-                   "supports one, else a 10% / 5% default — editable under My Positions.")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:
@@ -2129,6 +2119,28 @@ if True:
             if st.session_state.get("agent_live_result"):
                 st.markdown("#### 🔴 Last LIVE cycle result")
                 st.json(st.session_state["agent_live_result"])
+
+            # --- agentic equity positions + sync/refresh ---
+            st.markdown("### 📈 Agentic positions")
+            if st.button("🔄 Sync positions", use_container_width=True, disabled=not _acct,
+                         key="agent_sync_positions"):
+                st.rerun()
+            _eq = []
+            if _acct:
+                try:
+                    _eq = _amcp.fetch_positions(_acct)   # agentic-account equity holdings
+                except Exception as _e:  # noqa: BLE001
+                    st.caption(f"Could not read agentic equity positions: {_e}")
+            if _eq:
+                st.dataframe(
+                    pd.DataFrame([{
+                        "Ticker": p["ticker"], "Shares": p["shares"],
+                        "Avg cost": f"${p['avg_cost']:.2f}", "Price": f"${p['current_price']:.2f}",
+                        "Equity": f"${p['equity']:.2f}", "P&L %": f"{p['pnl_pct']:+.1f}%",
+                    } for p in _eq]),
+                    use_container_width=True, hide_index=True)
+            else:
+                st.caption("No agentic equity positions.")
 
             # --- observe open option positions + per-position override ---
             st.markdown("### 📂 Open option positions (agentic) — override exits")

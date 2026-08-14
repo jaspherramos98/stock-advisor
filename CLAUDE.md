@@ -533,9 +533,10 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
    (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
    **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`
-   only around the call, never process-wide; **open option positions** with live P&L + the agent's
-   exit decision (hold/close + reason) and a per-position **Close now** override. Exits are poll-based
-   (re-checked each cycle, not a resting stop).
+   only around the call, never process-wide; **agentic equity positions** + a **🔄 Sync positions**
+   refresh; **open option positions** with live P&L + the agent's exit decision (hold/close + reason)
+   and a per-position **Close now** override. Exits are poll-based (re-checked each cycle, not a
+   resting stop). (Sidebar was decluttered — helper captions removed.)
 
 ## Known Issues / Constraints
 - `robin_stocks` is unofficial — if Robinhood changes their app it may break; only edit `ingestion/robinhood.py`
