@@ -151,6 +151,12 @@ scripts/agentic_stops.py      Run agentic_stops.sync_protective_stops() (DRY_RUN
 scripts/mcp_login.py          One-time interactive login (R25) — run after funding the Agentic account:
                               browser auth, stores tokens, prints the tool list + schemas (answers gate #1
                               order types + gate #4 read scope). Needs `pip install "mcp[cli]"` in venv.
+scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — market-hours gated; DRY unless
+                              ARM flag `agent_live.arm` exists (then LIVE); honors kill switch
+                              (`agentic_halt.flag`) + credit ledger; logs actions to agent_scheduler.log.
+run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
+                              it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs.
+                              Manage: schtasks /Query|/Run|/Change|/Delete /TN "Argus Options Agent".
 scripts/mcp_spike.py          Pre-auth probe (R25) — confirmed the server is OAuth-gated, DCR works
                               (custom client OK), refresh_token grant exists (429 dies). Places NO orders.
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
