@@ -4,60 +4,66 @@ Robinhood Trading MCP client — the official/sanctioned execution + read path (
 WHY THIS EXISTS: the existing ingestion/robinhood.py uses the *unofficial* robin_stocks
 library, which (a) violates Robinhood's ToS for automated orders and (b) re-triggers a
 device-approval challenge every few days (the 429 loop). Robinhood's first-party Trading
-MCP is OAuth-based (refresh tokens → no re-login churn) and sanctioned for agents. This
-module talks to it. It trades/reads ONLY the dedicated *Agentic* account, never the main
-account — that boundary is Robinhood-enforced, not ours.
+MCP is OAuth-based (refresh tokens → no re-login churn) and sanctioned for agents.
+
+ACCOUNT SCOPE (confirmed live 2026-08-14 via get_accounts):
+  - READS span ALL brokerage accounts, including the MAIN account (agentic_allowed=false).
+    So the dashboard can read your real holdings/buying power here → drop robin_stocks for
+    reads → the 429 is gone. Reads default to the MAIN (is_default, non-agentic) account.
+  - ORDERS are accepted ONLY on the dedicated AGENTIC account (agentic_allowed=true);
+    place_equity_order rejects non-agentic accounts. So auto-exit via native stops only
+    works for positions HELD in the agentic account; main-account holdings are read-only here.
 
 DESIGN (see the plan file "APPROVED DIRECTION"):
-  - All MCP + OAuth code is isolated HERE (same rule robin_stocks stays only in
-    ingestion/robinhood.py). Callers see the same read interface as robin_stocks:
-    fetch_positions() / fetch_buying_power() / fetch_quotes() — so swapping is a config flag.
+  - All MCP + OAuth code is isolated HERE + ingestion/mcp_auth.py. Callers see the same read
+    interface as robin_stocks (fetch_positions / fetch_buying_power / fetch_quotes) so swapping
+    is a config flag.
   - config.USE_MCP gates whether this path is used at all (default False → today's Argus).
   - config.DRY_RUN gates execution: True → an ALLOWED order is logged, not sent. Default True.
   - trading_guards.check_order() vets every order in BOTH dry and live runs.
 
-STATUS: read/order plumbing is scaffolded but the actual MCP tool calls are NOT wired yet —
-they are blocked on the OAuth-handshake spike (plan gate #1: which tool names + order types
-the server exposes). _call_tool() is the single chokepoint to fill in once the spike returns
-`tools/list`. Until then, reads degrade to empty (like robin_stocks logged-out) and order
-placement only works under DRY_RUN. Nothing here can place a live order yet.
+Reads degrade to empty (never raise) when USE_MCP is off, the SDK is absent, or no session is
+stored — and never launch a browser (auth is only via scripts/mcp_login.py).
 """
 from __future__ import annotations
 
 import config
 from trading_guards import GuardState, OrderIntent, check_order, record_placed
 
-# Tool names the Robinhood MCP exposes. PLACEHOLDERS — fill from the spike's `tools/list`
-# output (plan gate #1). Kept as constants so wiring is a one-place edit.
-_TOOL_POSITIONS = "get_positions"       # TODO(spike): confirm exact tool name
-_TOOL_BUYING_POWER = "get_buying_power"  # TODO(spike): confirm exact tool name
-_TOOL_QUOTES = "get_quotes"             # TODO(spike): confirm exact tool name
-_TOOL_PLACE_ORDER = "place_order"       # TODO(spike): confirm exact tool name + arg schema
+# Confirmed Robinhood MCP tool names (get_accounts tools/list, 2026-08-14).
+_TOOL_ACCOUNTS = "get_accounts"
+_TOOL_POSITIONS = "get_equity_positions"
+_TOOL_PORTFOLIO = "get_portfolio"          # holds buying_power + total_value
+_TOOL_QUOTES = "get_equity_quotes"
+_TOOL_REVIEW_ORDER = "review_equity_order"  # pre-trade simulation (confirm-first)
+_TOOL_PLACE_ORDER = "place_equity_order"    # requires an agentic_allowed=true account
+
+# OrderIntent.order_type -> place_equity_order 'type'. Native stop support = set-and-forget exits.
+_ORDER_TYPE_MAP = {
+    "market": "market",
+    "limit": "limit",
+    "stop": "stop_market",
+    "stop_market": "stop_market",
+    "stop_limit": "stop_limit",
+}
 
 
 class MCPNotWired(RuntimeError):
-    """Raised when a live MCP call is attempted before the spike has wired _call_tool.
-    Reads catch this and degrade to empty; live orders surface it (dry-run never hits it)."""
+    """Raised when a live MCP call can't be made (SDK absent or no stored session). Reads
+    catch this and degrade to empty; live orders surface it (dry-run never hits it)."""
 
 
 def is_available() -> bool:
-    """True only when the MCP path is switched on. Callers use this to decide whether to
-    prefer this module over the robin_stocks reads. Does not prove the OAuth session is
-    live — that's checked lazily on first _call_tool."""
+    """True only when the MCP path is switched on. Does not prove a session is live — that's
+    checked lazily on first _call_tool (which degrades cleanly if not)."""
     return bool(getattr(config, "USE_MCP", False))
 
 
 def _call_tool(name: str, arguments: dict | None = None):
-    """Single chokepoint for every Robinhood MCP tool invocation.
-
-    Delegates to the OAuth transport in ingestion.mcp_auth (imported lazily so CI, which
-    doesn't install `mcp`, can still import this module). Non-interactive: uses the stored
-    token (silent refresh); never launches a browser from here. Returns the tool result
-    already unwrapped into a plain dict/list for the normalizers.
-
-    Raises MCPNotWired if the SDK isn't installed or no session is stored (login not done) —
-    reads catch it and degrade to empty; orders surface it.
-    """
+    """Single chokepoint for every Robinhood MCP tool invocation. Delegates to the OAuth
+    transport in ingestion.mcp_auth (lazy import → CI, which lacks `mcp`, still imports this
+    module). Non-interactive: uses the stored token (silent refresh), never a browser. Returns
+    the result already unwrapped to a plain dict/list."""
     try:
         from ingestion import mcp_auth
     except ImportError as e:
@@ -75,7 +81,6 @@ def _unwrap_tool_result(result):
     else parses the text content blocks as JSON; else returns the raw text/result."""
     structured = getattr(result, "structuredContent", None)
     if structured is not None:
-        # Some servers wrap the payload as {"result": ...}; unwrap that common shape.
         if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
             return structured["result"]
         return structured
@@ -93,73 +98,145 @@ def _unwrap_tool_result(result):
     return result
 
 
+def _data(payload):
+    """The MCP wraps tool payloads as {"data": {...}, "guide": "..."}. Return the data body."""
+    if isinstance(payload, dict) and "data" in payload:
+        return payload["data"]
+    return payload
+
+
+# --- account resolution ---------------------------------------------------------------
+# Cached per process; account membership changes rarely and every read needs a number.
+_accounts_cache: list | None = None
+
+
+def _accounts(force: bool = False) -> list:
+    global _accounts_cache
+    if _accounts_cache is not None and not force:
+        return _accounts_cache
+    data = _data(_call_tool(_TOOL_ACCOUNTS))
+    accts = data.get("accounts", []) if isinstance(data, dict) else []
+    _accounts_cache = accts
+    return accts
+
+
+def _main_account_number() -> str | None:
+    """The user's primary self-directed account (holds the real portfolio). Prefer the
+    default, non-agentic account; fall back to the first non-agentic; then the first."""
+    accts = _accounts()
+    for a in accts:
+        if a.get("is_default") and not a.get("agentic_allowed"):
+            return a.get("account_number")
+    for a in accts:
+        if not a.get("agentic_allowed"):
+            return a.get("account_number")
+    return accts[0].get("account_number") if accts else None
+
+
+def agentic_account_number() -> str | None:
+    """The dedicated Agentic account — the ONLY one that accepts orders via the MCP."""
+    for a in _accounts():
+        if a.get("agentic_allowed"):
+            return a.get("account_number")
+    return None
+
+
 # --- reads: mirror ingestion/robinhood.py shapes so callers swap cleanly --------------
 
-def fetch_positions() -> list[dict]:
-    """Same shape as ingestion.robinhood.fetch_positions (ticker/company_name/shares/
-    avg_cost/current_price/amount_invested/equity/pnl_pct). Degrades to [] until wired."""
+def fetch_positions(account_number: str | None = None) -> list[dict]:
+    """Same shape as ingestion.robinhood.fetch_positions. Defaults to the MAIN account.
+    MCP positions lack live price/name, so we enrich current_price via fetch_quotes and
+    compute equity/pnl. Degrades to [] on any failure."""
     if not is_available():
         return []
     try:
-        raw = _call_tool(_TOOL_POSITIONS)
+        acct = account_number or _main_account_number()
+        if not acct:
+            return []
+        rows: list[dict] = []
+        cursor = None
+        for _ in range(10):  # bounded pagination
+            args = {"account_number": acct}
+            if cursor:
+                args["cursor"] = cursor
+            data = _data(_call_tool(_TOOL_POSITIONS, args))
+            rows.extend(data.get("positions", []) if isinstance(data, dict) else [])
+            cursor = data.get("cursor") if isinstance(data, dict) else None
+            if not cursor:
+                break
     except MCPNotWired as e:
         print(f"Robinhood MCP positions: {e}")
         return []
     except Exception as e:  # noqa: BLE001 — never crash a dashboard rerun on a read
         print(f"Robinhood MCP positions: fetch failed — {e}")
         return []
-    return _normalize_positions(raw)
+    symbols = [r.get("symbol") for r in rows if r.get("symbol")]
+    quotes = fetch_quotes(symbols) if symbols else {}
+    return _normalize_positions(rows, quotes)
 
 
-def fetch_buying_power() -> float | None:
-    """Same contract as ingestion.robinhood.fetch_buying_power: dollars or None. Reads the
-    AGENTIC account's buying power. Degrades to None until wired."""
+def fetch_buying_power(account_number: str | None = None) -> float | None:
+    """Same contract as ingestion.robinhood.fetch_buying_power: dollars or None. Defaults to
+    the MAIN account (matches the dashboard budget semantics). Pass the agentic account to
+    size MCP orders."""
     if not is_available():
         return None
     try:
-        raw = _call_tool(_TOOL_BUYING_POWER)
+        acct = account_number or _main_account_number()
+        if not acct:
+            return None
+        data = _data(_call_tool(_TOOL_PORTFOLIO, {"account_number": acct}))
     except MCPNotWired as e:
         print(f"Robinhood MCP buying power: {e}")
         return None
     except Exception as e:  # noqa: BLE001
         print(f"Robinhood MCP buying power: fetch failed — {e}")
         return None
-    return _normalize_buying_power(raw)
+    return _normalize_buying_power(data)
 
 
 def fetch_quotes(tickers: list[str]) -> dict[str, dict]:
     """Same shape as ingestion.robinhood.fetch_quotes: {ticker: {price,change,change_pct,
-    high,low}} or {ticker: None}. Degrades to {} until wired."""
+    high,low}} or {ticker: None}. Degrades to {}."""
     if not tickers or not is_available():
         return {}
     try:
-        raw = _call_tool(_TOOL_QUOTES, {"symbols": list(tickers)})
+        data = _data(_call_tool(_TOOL_QUOTES, {"symbols": list(tickers)}))
     except MCPNotWired as e:
         print(f"Robinhood MCP quotes: {e}")
         return {}
     except Exception as e:  # noqa: BLE001
         print(f"Robinhood MCP quotes: fetch failed — {e}")
         return {}
-    return _normalize_quotes(tickers, raw)
+    return _normalize_quotes(tickers, data)
 
 
-# --- normalizers: parse whatever the MCP returns into Argus's existing shapes ----------
-# Schemas are unknown until the spike; these are written defensively and MUST be revisited
-# against the real payloads (they currently assume dict-ish records with common field names).
+# --- normalizers: parse the real MCP payloads into Argus's existing shapes -------------
 
-def _normalize_positions(raw) -> list[dict]:
+def _to_float(v, default=0.0):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+
+def _normalize_positions(rows, quotes: dict | None = None) -> list[dict]:
+    """Pure: build Argus position dicts from MCP rows + a quotes map (no network). current_price
+    falls back to avg_cost when a quote is missing so equity/pnl stay defined."""
+    quotes = quotes or {}
     positions: list[dict] = []
-    for item in raw or []:
+    for item in rows or []:
         try:
-            ticker = item.get("symbol") or item.get("ticker")
-            shares = float(item.get("quantity", 0) or 0)
+            ticker = item.get("symbol")
+            shares = _to_float(item.get("quantity"))
             if not ticker or shares <= 0:
                 continue
-            avg_cost = float(item.get("average_cost", item.get("average_buy_price", 0)) or 0)
-            current = float(item.get("price", 0) or 0)
+            avg_cost = _to_float(item.get("average_buy_price"))
+            q = quotes.get(ticker) or {}
+            current = _to_float(q.get("price")) or avg_cost
             positions.append({
                 "ticker":          ticker,
-                "company_name":    item.get("name", ticker),
+                "company_name":    ticker,  # MCP position rows carry no name
                 "shares":          shares,
                 "avg_cost":        avg_cost,
                 "current_price":   current,
@@ -172,39 +249,38 @@ def _normalize_positions(raw) -> list[dict]:
     return positions
 
 
-def _normalize_buying_power(raw) -> float | None:
-    if raw is None:
+def _normalize_buying_power(data) -> float | None:
+    if not isinstance(data, dict):
         return None
+    bp = data.get("buying_power")
+    # get_portfolio nests it as {"buying_power": {"buying_power": "25.0000", ...}}
+    if isinstance(bp, dict):
+        bp = bp.get("buying_power")
+    if bp is None:
+        bp = data.get("cash")
     try:
-        if isinstance(raw, (int, float, str)):
-            return round(float(raw), 2)
-        for field in ("buying_power", "cash", "cash_available"):
-            if isinstance(raw, dict) and raw.get(field) is not None:
-                return round(float(raw[field]), 2)
+        return round(float(bp), 2) if bp is not None else None
     except (ValueError, TypeError):
         return None
-    return None
 
 
-def _normalize_quotes(tickers: list[str], raw) -> dict[str, dict]:
-    # Accept either a dict keyed by symbol or a list aligned to `tickers`.
-    by_symbol: dict = {}
-    if isinstance(raw, dict):
-        by_symbol = raw
-    elif isinstance(raw, list):
-        by_symbol = {t: q for t, q in zip(tickers, raw)}
-
-    results: dict[str, dict] = {}
+def _normalize_quotes(tickers: list[str], data) -> dict[str, dict]:
+    results: dict[str, dict] = {t: None for t in tickers}
+    rows = data.get("results", []) if isinstance(data, dict) else []
+    by_symbol = {}
+    for r in rows:
+        quote = r.get("quote") if isinstance(r, dict) else None
+        if isinstance(quote, dict) and quote.get("symbol"):
+            by_symbol[quote["symbol"]] = quote
     for ticker in tickers:
         q = by_symbol.get(ticker)
-        if not q or not isinstance(q, dict):
-            results[ticker] = None
+        if not q:
             continue
         try:
-            last = float(q.get("last_price", q.get("price", 0)) or 0)
-            prev = float(q.get("previous_close", 0) or 0)
+            # Prefer the extended/overnight print when present (matches robin_stocks behavior).
+            last = _to_float(q.get("last_non_reg_trade_price")) or _to_float(q.get("last_trade_price"))
+            prev = _to_float(q.get("previous_close")) or _to_float(q.get("adjusted_previous_close"))
             if last == 0:
-                results[ticker] = None
                 continue
             change = last - prev if prev else 0.0
             results[ticker] = {
@@ -221,14 +297,12 @@ def _normalize_quotes(tickers: list[str], raw) -> dict[str, dict]:
 
 # --- orders: guarded, DRY_RUN-safe -----------------------------------------------------
 
-def place_order(intent: OrderIntent, state: GuardState, buying_power: float) -> dict:
-    """Vet an order through trading_guards, then either DRY_RUN-log it or (live) send it.
-
-    Returns a result dict: {status, reason, intent, dry_run}. status is one of
-    'rejected' (a guard blocked it), 'dry_run' (allowed + logged, not sent), or 'placed'
-    (live send — not reachable until _call_tool is wired). Never raises on a guard
-    rejection; a live-send failure propagates so the caller can halt.
-    """
+def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
+                account_number: str | None = None) -> dict:
+    """Vet an order through trading_guards, then either DRY_RUN-log it or (live) send it to
+    the AGENTIC account. Returns {status, reason, intent, dry_run}: 'rejected' (a guard
+    blocked it), 'dry_run' (allowed + logged, not sent), or 'placed'. Never raises on a guard
+    rejection; a live-send failure propagates so the caller can halt."""
     verdict = check_order(intent, state, buying_power)
     if not verdict.allowed:
         print(f"[ORDER REJECTED] {intent.side} {intent.ticker} — {verdict.reason}")
@@ -243,26 +317,34 @@ def place_order(intent: OrderIntent, state: GuardState, buying_power: float) -> 
         )
         return {"status": "dry_run", "reason": "logged, not sent", "intent": intent, "dry_run": True}
 
-    # Live path — blocked until the spike wires _call_tool. record_placed only after a
-    # confirmed send so the idempotency/counter state can't run ahead of reality.
-    result = _call_tool(_TOOL_PLACE_ORDER, _order_args(intent))
+    # Live path — orders only go to the agentic account. record_placed only after a confirmed
+    # send so the idempotency/counter state can't run ahead of reality.
+    acct = account_number or agentic_account_number()
+    if not acct:
+        raise MCPNotWired("no agentic account available to place orders")
+    result = _call_tool(_TOOL_PLACE_ORDER, _order_args(intent, acct))
     record_placed(intent, state)
     print(f"[ORDER PLACED] {intent.side} {intent.ticker} :: {intent.reason}")
     return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "raw": result}
 
 
-def _order_args(intent: OrderIntent) -> dict:
-    """Map an OrderIntent to the MCP place_order argument schema. PLACEHOLDER field names —
-    confirm against the real tool schema from the spike (plan gate #1)."""
-    args = {"symbol": intent.ticker, "side": intent.side, "type": intent.order_type}
-    if intent.dollars is not None:
-        args["amount"] = intent.dollars
+def _order_args(intent: OrderIntent, account_number: str) -> dict:
+    """Map an OrderIntent to the place_equity_order schema (all values are strings)."""
+    otype = _ORDER_TYPE_MAP.get(intent.order_type, "market")
+    args: dict = {
+        "account_number": account_number,
+        "symbol": intent.ticker,
+        "side": intent.side,
+        "type": otype,
+    }
+    if intent.dollars is not None and otype == "market":
+        args["dollar_amount"] = f"{intent.dollars:.2f}"
     if intent.quantity is not None:
-        args["quantity"] = intent.quantity
+        args["quantity"] = str(intent.quantity)
     if intent.limit_price is not None:
-        args["limit_price"] = intent.limit_price
+        args["limit_price"] = f"{intent.limit_price:.2f}"
     if intent.stop_price is not None:
-        args["stop_price"] = intent.stop_price
+        args["stop_price"] = f"{intent.stop_price:.2f}"
     if intent.client_id:
-        args["client_order_id"] = intent.client_id
+        args["ref_id"] = intent.client_id
     return args

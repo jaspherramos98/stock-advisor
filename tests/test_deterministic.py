@@ -502,11 +502,16 @@ def test_mcp_reads_degrade_to_empty_when_disabled(monkeypatch):
     assert mcp.fetch_quotes(["AAPL"]) == {}
 
 
-def test_mcp_reads_degrade_when_enabled_but_unwired(monkeypatch):
+def test_mcp_reads_degrade_when_enabled_but_no_session(monkeypatch):
     import config
     from ingestion import robinhood_mcp as mcp
     monkeypatch.setattr(config, "USE_MCP", True, raising=False)
-    # _call_tool raises MCPNotWired; reads must swallow it, not crash.
+    # Force the not-authenticated path deterministically (independent of ambient login):
+    # every tool call raises MCPNotWired; reads must swallow it and degrade, not crash.
+    def _boom(*a, **k):
+        raise mcp.MCPNotWired("no session (test)")
+    monkeypatch.setattr(mcp, "_call_tool", _boom)
+    mcp._accounts_cache = None
     assert mcp.fetch_positions() == []
     assert mcp.fetch_buying_power() is None
     assert mcp.fetch_quotes(["AAPL"]) == {}
@@ -531,7 +536,42 @@ def test_mcp_rejected_order_not_counted(monkeypatch):
 
 
 def test_mcp_normalize_positions_shape():
+    # Real MCP get_equity_positions fields (average_buy_price) + a quotes map (pure, no network).
     from ingestion.robinhood_mcp import _normalize_positions
-    raw = [{"symbol": "ABC", "quantity": "2", "average_cost": "10", "price": "12", "name": "Abc Co"}]
-    out = _normalize_positions(raw)
+    raw = [{"symbol": "ABC", "quantity": "2", "average_buy_price": "10", "type": "long"}]
+    quotes = {"ABC": {"price": 12.0}}
+    out = _normalize_positions(raw, quotes)
     assert out[0]["ticker"] == "ABC" and out[0]["equity"] == 24.0 and out[0]["pnl_pct"] == 20.0
+
+
+def test_mcp_normalize_positions_falls_back_without_quote():
+    from ingestion.robinhood_mcp import _normalize_positions
+    raw = [{"symbol": "ABC", "quantity": "2", "average_buy_price": "10", "type": "long"}]
+    out = _normalize_positions(raw, {})           # no quote → current falls back to avg_cost
+    assert out[0]["current_price"] == 10.0 and out[0]["equity"] == 20.0 and out[0]["pnl_pct"] == 0.0
+
+
+def test_mcp_normalize_buying_power_nested():
+    from ingestion.robinhood_mcp import _normalize_buying_power
+    data = {"buying_power": {"buying_power": "25.0000", "display_currency": "USD"}, "cash": "25"}
+    assert _normalize_buying_power(data) == 25.0
+    assert _normalize_buying_power({"cash": "13.5"}) == 13.5   # fallback to cash
+    assert _normalize_buying_power({}) is None
+
+
+def test_mcp_normalize_quotes_shape():
+    from ingestion.robinhood_mcp import _normalize_quotes
+    data = {"results": [{"quote": {"symbol": "AAPL", "last_trade_price": "305.31",
+                                    "previous_close": "305.26"}}]}
+    out = _normalize_quotes(["AAPL", "MSFT"], data)
+    assert out["AAPL"]["price"] == 305.31 and out["MSFT"] is None
+
+
+def test_mcp_order_args_native_stop():
+    # OrderIntent 'stop' maps to the MCP's native 'stop_market' with a string stop_price.
+    from ingestion.robinhood_mcp import _order_args
+    intent = OrderIntent(ticker="ABC", side="sell", quantity=1.5, order_type="stop",
+                         stop_price=97.5, client_id="x1")
+    args = _order_args(intent, "AGENTIC123")
+    assert args["type"] == "stop_market" and args["stop_price"] == "97.50"
+    assert args["account_number"] == "AGENTIC123" and args["ref_id"] == "x1"

@@ -364,17 +364,23 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   so callers swap via the `config.USE_MCP` flag). All order safety lives in `trading_guards.py`.
 - **Account boundary:** the MCP trades/reads ONLY a dedicated, funded **Agentic account**, never the
   main account (Robinhood-enforced). Main-account holdings do NOT migrate automatically.
-- **OAuth verified (spike, 2026-08-14):** server is OAuth-gated; **Dynamic Client Registration works**
-  (Argus can self-register — public PKCE client, no secret, localhost redirect accepted → gate #2 YES);
-  **refresh_token grant supported** (ends the 429 → gate #3 YES). authorization_code + PKCE, one browser
-  login then silent refresh.
-- **STATUS: OAuth wired, execution not live.** `USE_MCP=False` + `DRY_RUN=True` by default → Argus is
-  unchanged. The OAuth transport (`ingestion/mcp_auth.py`) is complete; `robinhood_mcp._call_tool`
-  delegates to it. Reads degrade to empty until a token is stored, and NEVER pop a browser (auth is only
-  via `scripts/mcp_login.py`). **Remaining before live:** open + fund the Agentic account, run
-  `scripts/mcp_login.py` (one browser auth) → that prints the real tool list to settle gate #1 (order
-  types) + gate #4 (read scope) and lets us fill the `_TOOL_*` names + `_order_args` schema. Then
-  DRY_RUN-diff before any live order. See plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
+- **All gates resolved + reads proven live (2026-08-14):** authenticated via `scripts/mcp_login.py`
+  (DCR + PKCE, refresh-token → silent renewal → **429 dead**). The MCP exposes 54 tools.
+  - **Gate #1 order types = ✅** `place_equity_order.type` ∈ {market, limit, **stop_market, stop_limit**},
+    `time_in_force` gtc, `market_hours` regular/extended/all_day (stop_* are regular-hours only). Native
+    standing stops → set-and-forget exits, no polling. `review_equity_order` = pre-trade sim (confirm-first).
+  - **Gate #4 read scope = ✅** `get_accounts` returns ALL accounts incl. MAIN (agentic_allowed=false);
+    reads work on any account. **Orders only on the agentic account** (place_equity_order rejects
+    non-agentic). So auto-exit via stops only for positions HELD in the agentic account.
+  - **Reads wired to real tools + verified live:** `fetch_positions` (get_equity_positions, enriched with
+    get_equity_quotes for price/P&L), `fetch_buying_power` (get_portfolio), `fetch_quotes`
+    (get_equity_quotes). Default to the MAIN account; `agentic_account_number()` for order sizing.
+- **STATUS: reads wired + proven; execution wired but DRY_RUN. Dashboard NOT yet swapped.** `USE_MCP=False`
+  + `DRY_RUN=True` by default → Argus is unchanged (still robin_stocks). `robinhood_mcp` is complete and
+  proven against the live account, but nothing in the app calls it yet. **Next:** (a) swap dashboard reads
+  to MCP (kill the 429 in-app, behind USE_MCP with robin_stocks fallback); (b) route exits to
+  `place_order` native stops on the agentic account (DRY_RUN + confirm-first). See plan file.
+  Minor: the SDK logs a harmless `Session termination failed: 400` on each call teardown.
 - **To revert to native Argus entirely:** `git checkout main` (this work is on branch
   `feat/robinhood-mcp-agentic`).
 

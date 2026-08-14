@@ -629,21 +629,23 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### R25b. Wire the Robinhood MCP — OAuth done; blocked on funded account + login
-**Spike DONE (2026-08-14):** server OAuth-gated; DCR works (custom client OK, PKCE, no secret);
-refresh_token grant → 429 dies. **OAuth transport DONE:** `ingestion/mcp_auth.py` (SDK
-OAuthClientProvider + file token storage + localhost callback); `robinhood_mcp._call_tool` delegates
-to it. Remaining:
-1. **User:** open + fund a dedicated Agentic account (small pilot amount; no stated minimum).
-2. **User:** run `venv\Scripts\python.exe scripts\mcp_login.py` (needs `pip install "mcp[cli]"`) — one
-   browser auth, stores tokens, prints the tool list + schemas → answers gate #1 (order types) + gate #4
-   (read scope). Paste the tool list back.
-3. **Wire from that list:** fill `_TOOL_*` names + `_order_args` schema in `robinhood_mcp.py`; verify
-   `_normalize_*` field names against a real `fetch_positions`/`fetch_buying_power` call.
-4. **Exit routing:** point a fired `alerts/exit_checker` trigger at `place_order` (DRY_RUN +
-   confirm-first). If gate #1 shows native stop orders, place a standing stop once (set-and-forget).
-5. **DRY_RUN diff** several clean days → ONE tiny live confirm-first order → then enable the loop.
-   Keep confirm-first + tiny size until the edge beats SPY across >2 trades.
+### R25b. Robinhood MCP — authenticated, reads wired + proven; dashboard swap + exits pending
+**DONE (2026-08-14):** funded a dedicated Agentic account + authenticated via `scripts/mcp_login.py`
+(DCR + PKCE + refresh token → 429 dead). All gates resolved (see CLAUDE.md R25): native stop orders
+exist (#1), reads span the MAIN account, orders agentic-only (#4). `ingestion/robinhood_mcp.py` reads
+(`fetch_positions`/`fetch_buying_power`/`fetch_quotes`) wired to the real tools and **verified live**
+(read main buying power $150 + 6 positions with P&L). Orders wired (`place_equity_order`, native stop
+mapping) but DRY_RUN. 62 tests green. Nothing in the app calls it yet (`USE_MCP=False`).
+Remaining:
+1. **Swap dashboard reads to MCP** (behind `USE_MCP`, robin_stocks as fallback): `_live_buying_power`,
+   position reads, quotes in `dashboard/app.py` + `ingestion/prices.py`. This is what actually kills the
+   429 in-app. Decide which account the dashboard shows (main = current holdings; agentic = the bot book).
+2. **Route exits to native stops:** on a fired `alerts/exit_checker` trigger for an agentic-held position,
+   `place_order` a `stop_market`/`stop_limit` GTC (DRY_RUN + confirm-first via `review_equity_order`).
+   Main-account positions stay manual (MCP can't order them).
+3. **DRY_RUN diff** several clean days → ONE tiny live confirm-first order → then enable.
+   Confirm-first + tiny size until the edge beats SPY across >2 trades.
+4. **Minor:** suppress the SDK's `Session termination failed: 400` teardown warning.
 Full detail in the plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
 
 ### B1. Robinhood MCP sync
