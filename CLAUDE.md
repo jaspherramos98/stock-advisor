@@ -128,6 +128,15 @@ ingestion/options_data.py     Option contract selection (R26/Phase 2) — chain�
                               strike(OTM %)→quote→liquidity+affordability, via MCP option-data tools.
                               Pure helpers (_dte/pick_expiration/pick_contract_by_moneyness/liquidity_ok/
                               contract_cost) unit-tested; select_contract orchestrates live.
+analysis/options_strategies.py Options strategy library (Phase 2) — codified playbooks
+                              (short_dte_momentum, catalyst_momentum) mapping an Argus signal+regime to
+                              an option PLAN (right/DTE/OTM%/alloc/exit); applicable_plans (priority w/
+                              fallback), size_contracts, option_exit_decision. Pure, unit-tested.
+alerts/agentic_options.py     Autonomous options agent (Phase 2) — ENTRIES (signals→strategy→
+                              options_data.select_contract→place_option_order) + EXITS (option positions→
+                              exit policy→close). DRY_RUN-safe, review-first, guarded, market-hours gated,
+                              kill-switch file `agentic_halt.flag`. AGENTIC account only. run via
+                              scripts/agentic_options.py. Position size uncapped (pilot).
 alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
                               stop_market per AGENTIC-account position (set-and-forget; Robinhood
                               auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first

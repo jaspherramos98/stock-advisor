@@ -567,6 +567,39 @@ def test_mcp_normalize_quotes_shape():
     assert out["AAPL"]["price"] == 305.31 and out["MSFT"] is None
 
 
+def test_options_strategies_select_and_size():
+    from analysis.options_strategies import (
+        select_strategy, size_contracts, catalyst_momentum, short_dte_momentum)
+    # short_dte needs conviction>=80 + risk_on; wins over catalyst when both qualify.
+    hot = {"direction": "buy", "conviction": 85}
+    plan = select_strategy(hot, {"risk": "risk_on"})
+    assert plan["strategy"] == "short_dte_momentum" and plan["right"] == "call"
+    # risk-off downgrades to catalyst_momentum (still fires on conviction>=70).
+    plan2 = select_strategy(hot, {"risk": "risk_off"})
+    assert plan2["strategy"] == "catalyst_momentum"
+    # bearish → put
+    assert select_strategy({"direction": "short", "conviction": 75}, {"risk": "neutral"})["right"] == "put"
+    # too weak / non-directional → nothing
+    assert select_strategy({"direction": "buy", "conviction": 60}, {"risk": "risk_on"}) is None
+    assert select_strategy({"direction": "watch", "conviction": 99}, {"risk": "risk_on"}) is None
+
+    # sizing: floor(alloc*bp/cost), min 1 if affordable, capped by bp.
+    assert size_contracts(1.0, 100.0, 18.0) == 5     # floor(100/18)=5
+    assert size_contracts(0.5, 100.0, 18.0) == 2     # floor(50/18)=2
+    assert size_contracts(0.1, 100.0, 18.0) == 1     # floor(10/18)=0 → min 1 (affordable)
+    assert size_contracts(1.0, 10.0, 18.0) == 0      # unaffordable
+
+
+def test_option_exit_decision():
+    from analysis.options_strategies import option_exit_decision
+    rule = {"profit_pct": 60, "stop_pct": 50, "close_dte": 2}
+    assert option_exit_decision(0.20, 0.34, 20, rule)[0] == "close"   # +70% ≥ target
+    assert option_exit_decision(0.20, 0.09, 20, rule)[0] == "close"   # -55% ≤ stop
+    assert option_exit_decision(0.20, 0.22, 1, rule)[0] == "close"    # 1 DTE ≤ 2
+    assert option_exit_decision(0.20, 0.24, 20, rule)[0] == "hold"    # +20%, healthy
+    assert option_exit_decision(0.0, 0.10, 20, rule)[0] == "hold"     # no basis, DTE ok
+
+
 def test_options_data_pure_helpers():
     import datetime as _dt
     from ingestion.options_data import (
