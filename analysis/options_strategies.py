@@ -53,8 +53,55 @@ def short_dte_momentum(signal: dict, regime: dict) -> dict | None:
             "exit": {"profit_pct": 100, "stop_pct": 60, "close_dte": 1}}
 
 
-# Priority order: try the most aggressive that qualifies first.
-STRATEGIES = [short_dte_momentum, catalyst_momentum]
+def pre_earnings_iv(signal: dict, regime: dict) -> dict | None:
+    """LOTTERY / usually -EV: buy directional OTM options 1-7 days BEFORE a report, expiry just
+    after it. IV crush after the print means you can be right on direction and still lose — the
+    user accepted this as a max-upside gamble on disposable capital. Needs days_to_earnings."""
+    right = _right(signal.get("direction"))
+    dte_e = signal.get("days_to_earnings")
+    if not right or dte_e is None or not (1 <= dte_e <= 7) or (signal.get("conviction") or 0) < 75:
+        return None
+    return {"strategy": "pre_earnings_iv", "right": right,
+            "dte_min": max(dte_e + 1, 3), "dte_max": dte_e + 14, "otm_pct": 7.0, "alloc_pct": 1.0,
+            "exit": {"profit_pct": 100, "stop_pct": 60, "close_dte": 1}}
+
+
+def post_earnings_momentum(signal: dict, regime: dict) -> dict | None:
+    """Ride the drift AFTER a fresh report (last 3 days) in the signal's direction — avoids IV
+    crush (vol already collapsed). Needs days_since_earnings. The safe way to play earnings."""
+    right = _right(signal.get("direction"))
+    dse = signal.get("days_since_earnings")
+    if not right or dse is None or dse > 3 or (signal.get("conviction") or 0) < 70:
+        return None
+    return {"strategy": "post_earnings_momentum", "right": right,
+            "dte_min": 14, "dte_max": 30, "otm_pct": 4.0, "alloc_pct": 0.5,
+            "exit": {"profit_pct": 60, "stop_pct": 50, "close_dte": 7}}
+
+
+def mean_reversion(signal: dict, regime: dict) -> dict | None:
+    """Fade an RSI extreme in the signal's direction: oversold (RSI ≤ 35) bullish → call,
+    overbought (RSI ≥ 65) bearish → put. Needs rsi. Lower conviction bar — the technical setup
+    carries it."""
+    rsi = signal.get("rsi")
+    direction = (signal.get("direction") or "").lower()
+    if rsi is None or (signal.get("conviction") or 0) < 60:
+        return None
+    if direction == "buy" and rsi <= 35:
+        right = "call"
+    elif direction == "short" and rsi >= 65:
+        right = "put"
+    else:
+        return None
+    return {"strategy": "mean_reversion", "right": right,
+            "dte_min": 14, "dte_max": 30, "otm_pct": 3.0, "alloc_pct": 0.5,
+            "exit": {"profit_pct": 50, "stop_pct": 40, "close_dte": 5}}
+
+
+# Priority order: earnings-context plays first (they self-gate on data presence), then the
+# momentum/technical plays, then the catalyst catch-all. The loop tries each until one yields a
+# tradable/affordable contract.
+STRATEGIES = [pre_earnings_iv, post_earnings_momentum, short_dte_momentum,
+              mean_reversion, catalyst_momentum]
 
 
 def applicable_plans(signal: dict, regime: dict) -> list[dict]:

@@ -94,10 +94,13 @@ def _run_entries(mcp, acct, buying_power, verbose) -> list[dict]:
     avail = buying_power
     results: list[dict] = []
 
+    from ingestion.signal_context import enrich
+
     for sig in _signals():
         ticker = (sig.get("ticker") or "").upper()
         if ticker in held:
             continue
+        sig = enrich(sig)   # add rsi + earnings context for the technical/earnings strategies
         plans = applicable_plans(sig, regime)
         if not plans:
             continue

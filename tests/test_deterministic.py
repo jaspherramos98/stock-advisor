@@ -606,6 +606,43 @@ def test_options_strategies_select_and_size():
     assert size_contracts(1.0, 10.0, 18.0) == 0      # unaffordable
 
 
+def test_signal_context_parsers():
+    import datetime as _dt
+    from ingestion.signal_context import _parse_rsi, _parse_earnings
+    rsi_payload = {"data": {"indicators": [{"type": "rsi", "series": [
+        {"begins_at": "2026-08-12T00:00:00Z", "value": 55.5},
+        {"begins_at": "2026-08-13T00:00:00Z", "value": 28.9}]}]}}
+    assert _parse_rsi(rsi_payload) == 28.9
+    assert _parse_rsi({"data": {"indicators": []}}) is None
+
+    today = _dt.date(2026, 8, 14)
+    earn = {"data": {"results": [
+        {"report": {"date": "2026-07-31"}, "eps": {"estimate": "1.42", "actual": "1.57"}},  # past, beat
+        {"report": {"date": "2026-08-18"}, "eps": {"estimate": "1.60", "actual": ""}},       # upcoming
+    ]}}
+    ctx = _parse_earnings(earn, today)
+    assert ctx["days_to_earnings"] == 4 and ctx["days_since_earnings"] == 14 and ctx["last_beat"] is True
+
+
+def test_new_option_strategies():
+    from analysis.options_strategies import (
+        pre_earnings_iv, post_earnings_momentum, mean_reversion, applicable_plans)
+    # pre-earnings gamble: report in 3 days, high conviction bull → call lottery
+    p = pre_earnings_iv({"direction": "buy", "conviction": 80, "days_to_earnings": 3}, {})
+    assert p and p["strategy"] == "pre_earnings_iv" and p["right"] == "call" and p["alloc_pct"] == 1.0
+    assert pre_earnings_iv({"direction": "buy", "conviction": 80, "days_to_earnings": 20}, {}) is None
+    # post-earnings drift: reported yesterday
+    assert post_earnings_momentum({"direction": "short", "conviction": 75, "days_since_earnings": 1}, {})["right"] == "put"
+    assert post_earnings_momentum({"direction": "buy", "conviction": 75, "days_since_earnings": 9}, {}) is None
+    # mean reversion: oversold bull → call; overbought bull → nothing
+    assert mean_reversion({"direction": "buy", "conviction": 65, "rsi": 30}, {})["right"] == "call"
+    assert mean_reversion({"direction": "buy", "conviction": 65, "rsi": 55}, {}) is None
+    assert mean_reversion({"direction": "buy", "conviction": 65, "rsi": None}, {}) is None
+    # priority: earnings gamble beats plain momentum when both qualify
+    sig = {"direction": "buy", "conviction": 85, "days_to_earnings": 2, "rsi": 30}
+    assert applicable_plans(sig, {"risk": "risk_on"})[0]["strategy"] == "pre_earnings_iv"
+
+
 def test_option_exit_decision():
     from analysis.options_strategies import option_exit_decision
     rule = {"profit_pct": 60, "stop_pct": 50, "close_dte": 2}

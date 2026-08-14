@@ -132,10 +132,15 @@ ingestion/options_data.py     Option contract selection (R26/Phase 2) — chain�
                               strike(OTM %)→quote→liquidity+affordability, via MCP option-data tools.
                               Pure helpers (_dte/pick_expiration/pick_contract_by_moneyness/liquidity_ok/
                               contract_cost) unit-tested; select_contract orchestrates live.
-analysis/options_strategies.py Options strategy library (Phase 2) — codified playbooks
-                              (short_dte_momentum, catalyst_momentum) mapping an Argus signal+regime to
-                              an option PLAN (right/DTE/OTM%/alloc/exit); applicable_plans (priority w/
+analysis/options_strategies.py Options strategy library (Phase 2) — 5 codified playbooks mapping an
+                              (enriched) Argus signal+regime to an option PLAN (right/DTE/OTM%/alloc/exit):
+                              pre_earnings_iv (lottery, -EV), post_earnings_momentum, short_dte_momentum,
+                              mean_reversion (RSI), catalyst_momentum. applicable_plans (priority w/
                               fallback), size_contracts, option_exit_decision. Pure, unit-tested.
+ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_equity_technical_indicators)
+                              + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
+                              per ticker, so the technical/earnings strategies have their inputs. Pure
+                              parsers unit-tested; enrich() called in the agent's entry loop.
 alerts/agentic_options.py     Autonomous options agent (Phase 2) — ENTRIES (signals→strategy→
                               options_data.select_contract→place_option_order) + EXITS (option positions→
                               exit policy→close). DRY_RUN-safe, review-first, guarded, market-hours gated,
