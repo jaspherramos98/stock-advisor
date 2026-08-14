@@ -637,9 +637,11 @@ exist (#1), reads span the MAIN account, orders agentic-only (#4). `ingestion/ro
 (read main buying power $150 + 6 positions with P&L). Orders wired (`place_equity_order`, native stop
 mapping) but DRY_RUN. 62 tests green. Nothing in the app calls it yet (`USE_MCP=False`).
 Remaining:
-1. **Swap dashboard reads to MCP** (behind `USE_MCP`, robin_stocks as fallback): `_live_buying_power`,
-   position reads, quotes in `dashboard/app.py` + `ingestion/prices.py`. This is what actually kills the
-   429 in-app. Decide which account the dashboard shows (main = current holdings; agentic = the bot book).
+1. ✅ **DONE — dashboard reads swapped to MCP (429 gone in-app).** New `ingestion/account_reads.py`
+   dispatcher (MCP when `USE_MCP`, else robin_stocks, no cross-fallback) backs buying power / positions /
+   quotes in `dashboard/app.py` + `ingestion/prices.py`; `main.py` skips robin_stocks news under USE_MCP so
+   no login fires. `config.USE_MCP=True` on this branch (reads MAIN account = the real book; agentic =
+   pilot). Verified live. `git checkout main` / `USE_MCP=False` reverts.
 2. **Route exits to native stops:** on a fired `alerts/exit_checker` trigger for an agentic-held position,
    `place_order` a `stop_market`/`stop_limit` GTC (DRY_RUN + confirm-first via `review_equity_order`).
    Main-account positions stay manual (MCP can't order them).

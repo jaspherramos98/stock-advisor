@@ -79,9 +79,9 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
 
     results: dict[str, dict] = {}
 
-    # --- Primary: Robinhood ---
+    # --- Primary: Robinhood (MCP or robin_stocks, per config.USE_MCP) ---
     try:
-        from ingestion.robinhood import is_available, fetch_quotes
+        from ingestion.account_reads import is_available, quotes as fetch_quotes
         if is_available():
             rh_results = fetch_quotes(tickers)
             for ticker in tickers:

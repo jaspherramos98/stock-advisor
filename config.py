@@ -25,8 +25,11 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 #              This is the safety default and must stay True until a clean multi-day dry
 #              run is diffed against manual orders. Never default this to False.
 #
-# The Robinhood Trading MCP endpoint (first-party OAuth server). Reads/writes only ever
-# hit the dedicated *Agentic* account, never the main account (Robinhood-enforced).
-USE_MCP = False
+# USE_MCP=True (this branch): the dashboard/pipeline read account data via the official MCP
+# (OAuth refresh tokens → no 429), defaulting to the MAIN account. Requires `mcp[cli]` in the
+# venv + a stored session from scripts/mcp_login.py; if absent, reads degrade to unavailable
+# ($0) and the app still runs. To return to the unofficial robin_stocks path, set False (or
+# `git checkout main`). ORDERS remain gated by DRY_RUN and only ever hit the AGENTIC account.
+USE_MCP = True
 DRY_RUN = True
 ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading"

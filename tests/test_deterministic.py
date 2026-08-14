@@ -567,6 +567,22 @@ def test_mcp_normalize_quotes_shape():
     assert out["AAPL"]["price"] == 305.31 and out["MSFT"] is None
 
 
+def test_account_reads_dispatch(monkeypatch):
+    # The dispatcher routes to robin_stocks or the MCP purely on config.USE_MCP, with no
+    # cross-fallback (so USE_MCP=on can't secretly re-trigger the robin_stocks 429).
+    import config
+    from ingestion import account_reads
+    from ingestion import robinhood_mcp, robinhood as rh
+
+    monkeypatch.setattr(config, "USE_MCP", False, raising=False)
+    monkeypatch.setattr(rh, "fetch_buying_power", lambda: 111.0)
+    monkeypatch.setattr(robinhood_mcp, "fetch_buying_power", lambda *a, **k: 999.0)
+    assert account_reads.buying_power() == 111.0     # robin_stocks path
+
+    monkeypatch.setattr(config, "USE_MCP", True, raising=False)
+    assert account_reads.buying_power() == 999.0     # MCP path
+
+
 def test_mcp_order_args_native_stop():
     # OrderIntent 'stop' maps to the MCP's native 'stop_market' with a string stop_price.
     from ingestion.robinhood_mcp import _order_args

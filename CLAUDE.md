@@ -114,6 +114,10 @@ ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B
                               place_order. Trades ONLY the Agentic account. _call_tool delegates to
                               mcp_auth (lazy import); _TOOL_* names + _order_args schema are placeholders
                               to confirm from the live tool list. USE_MCP=False → never touched.
+ingestion/account_reads.py    Read dispatcher (R25) — buying_power/positions/quotes/is_available routed
+                              to the MCP (USE_MCP=True, no 429) or robin_stocks (False), NO cross-fallback
+                              (so MCP-on can't silently re-trigger the robin_stocks login). Dashboard +
+                              prices import from HERE. News stays on robin_stocks and is skipped when USE_MCP.
 ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mcp SDK OAuthClientProvider
                               (DCR + PKCE + silent refresh) with file-backed token storage
                               (~/.tokens/robinhood_mcp.json, NOT in repo) + localhost browser callback.
@@ -375,12 +379,15 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   - **Reads wired to real tools + verified live:** `fetch_positions` (get_equity_positions, enriched with
     get_equity_quotes for price/P&L), `fetch_buying_power` (get_portfolio), `fetch_quotes`
     (get_equity_quotes). Default to the MAIN account; `agentic_account_number()` for order sizing.
-- **STATUS: reads wired + proven; execution wired but DRY_RUN. Dashboard NOT yet swapped.** `USE_MCP=False`
-  + `DRY_RUN=True` by default → Argus is unchanged (still robin_stocks). `robinhood_mcp` is complete and
-  proven against the live account, but nothing in the app calls it yet. **Next:** (a) swap dashboard reads
-  to MCP (kill the 429 in-app, behind USE_MCP with robin_stocks fallback); (b) route exits to
-  `place_order` native stops on the agentic account (DRY_RUN + confirm-first). See plan file.
-  Minor: the SDK logs a harmless `Session termination failed: 400` on each call teardown.
+- **STATUS: reads LIVE via MCP (429 gone); execution wired but DRY_RUN.** On this branch `USE_MCP=True`
+  + `DRY_RUN=True`. The dashboard buying power / positions / quotes and the pipeline's quote source read
+  through `ingestion/account_reads.py` → the MCP (MAIN account), and robin_stocks news is skipped, so no
+  robin_stocks login fires → the 429 is gone from the read + pipeline paths. Verified live (main BP $150 +
+  6 positions). Account model: MAIN = the real book (manual); the AGENTIC account is a funded pilot.
+  robin_stocks stays only for the (now-skipped) news path; `git checkout main` or `USE_MCP=False` fully
+  reverts. **Next (not done):** route exits to `place_order` native `stop_market`/`stop_limit` GTC on the
+  AGENTIC account (DRY_RUN + confirm-first via `review_equity_order`) — auto-exit only covers agentic-held
+  positions; main holdings stay manual. Minor: SDK logs a harmless `Session termination failed: 400` per call.
 - **To revert to native Argus entirely:** `git checkout main` (this work is on branch
   `feat/robinhood-mcp-agentic`).
 

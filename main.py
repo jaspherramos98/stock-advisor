@@ -50,6 +50,12 @@ def run_ingestion_and_analysis(
     all_items = []
 
     def fetch_rh_news():
+        # When the MCP read-path is on, skip robin_stocks news entirely: the MCP has no news
+        # endpoint, and touching robin_stocks would fire its device-approval login (the 429
+        # this whole swap exists to kill). The other sources (finnhub/rss/sec/reddit) cover news.
+        import config
+        if getattr(config, "USE_MCP", False):
+            return []
         try:
             from ingestion.robinhood import is_available, fetch_robinhood_news
             if is_available():
