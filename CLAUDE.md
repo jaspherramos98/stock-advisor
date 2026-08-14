@@ -109,14 +109,22 @@ chat_budget.py                Chat token budget: history window + max_tokens + t
 trading_guards.py             Broker-agnostic order-safety guardrails (R25) — OrderIntent/GuardState +
                               check_order (idempotency, daily order cap, daily-loss kill switch,
                               buying-power + single-name cap). Pure logic, network-free, unit-tested.
-ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — OAuth/MCP isolated
-                              here; mirrors robinhood.py read shapes (fetch_positions/buying_power/
-                              quotes) + guarded, DRY_RUN-safe place_order. Trades ONLY the Agentic
-                              account. Live tool calls stubbed at _call_tool until the OAuth spike wires
-                              real tool names/order schema. USE_MCP=False → never touched (today's Argus).
-scripts/mcp_spike.py          One-shot OAuth-handshake probe (R25) — connects to the MCP, runs
-                              tools/list, prints schemas to answer the gates (order types / handshake /
-                              token lifetimes / read scope). Places NO orders. Needs `mcp[cli]` in venv.
+ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — mirrors robinhood.py
+                              read shapes (fetch_positions/buying_power/quotes) + guarded, DRY_RUN-safe
+                              place_order. Trades ONLY the Agentic account. _call_tool delegates to
+                              mcp_auth (lazy import); _TOOL_* names + _order_args schema are placeholders
+                              to confirm from the live tool list. USE_MCP=False → never touched.
+ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mcp SDK OAuthClientProvider
+                              (DCR + PKCE + silent refresh) with file-backed token storage
+                              (~/.tokens/robinhood_mcp.json, NOT in repo) + localhost browser callback.
+                              login() = interactive (once); call_tool()/list_tools() = non-interactive,
+                              stored-token only (never pops a browser from a read). mcp SDK is an OPTIONAL
+                              dep (not in requirements.txt) → imported lazily so CI stays clean.
+scripts/mcp_login.py          One-time interactive login (R25) — run after funding the Agentic account:
+                              browser auth, stores tokens, prints the tool list + schemas (answers gate #1
+                              order types + gate #4 read scope). Needs `pip install "mcp[cli]"` in venv.
+scripts/mcp_spike.py          Pre-auth probe (R25) — confirmed the server is OAuth-gated, DCR works
+                              (custom client OK), refresh_token grant exists (429 dies). Places NO orders.
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
@@ -356,11 +364,17 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   so callers swap via the `config.USE_MCP` flag). All order safety lives in `trading_guards.py`.
 - **Account boundary:** the MCP trades/reads ONLY a dedicated, funded **Agentic account**, never the
   main account (Robinhood-enforced). Main-account holdings do NOT migrate automatically.
-- **STATUS: scaffolding, not live.** `USE_MCP=False` + `DRY_RUN=True` by default → Argus is unchanged.
-  Live MCP calls are stubbed at `robinhood_mcp._call_tool` (raises `MCPNotWired`); reads degrade to
-  empty. Blocked on the **OAuth-handshake spike** (`scripts/mcp_spike.py`) to confirm the gates
-  (tool names, order types, token lifetimes, read scope) before wiring. See the plan file
-  `~/.claude/plans/crystalline-sniffing-kurzweil.md` "APPROVED DIRECTION".
+- **OAuth verified (spike, 2026-08-14):** server is OAuth-gated; **Dynamic Client Registration works**
+  (Argus can self-register — public PKCE client, no secret, localhost redirect accepted → gate #2 YES);
+  **refresh_token grant supported** (ends the 429 → gate #3 YES). authorization_code + PKCE, one browser
+  login then silent refresh.
+- **STATUS: OAuth wired, execution not live.** `USE_MCP=False` + `DRY_RUN=True` by default → Argus is
+  unchanged. The OAuth transport (`ingestion/mcp_auth.py`) is complete; `robinhood_mcp._call_tool`
+  delegates to it. Reads degrade to empty until a token is stored, and NEVER pop a browser (auth is only
+  via `scripts/mcp_login.py`). **Remaining before live:** open + fund the Agentic account, run
+  `scripts/mcp_login.py` (one browser auth) → that prints the real tool list to settle gate #1 (order
+  types) + gate #4 (read scope) and lets us fill the `_TOOL_*` names + `_order_args` schema. Then
+  DRY_RUN-diff before any live order. See plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
 - **To revert to native Argus entirely:** `git checkout main` (this work is on branch
   `feat/robinhood-mcp-agentic`).
 

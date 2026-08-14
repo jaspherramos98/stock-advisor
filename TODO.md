@@ -629,19 +629,20 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### R25b. Wire the Robinhood MCP (blocked on spike + funded Agentic account)
-Scaffolding shipped (R25, Done). To go live:
-1. **Spike first** (`venv\Scripts\python.exe scripts\mcp_spike.py`, needs `pip install "mcp[cli]"`):
-   answer the gates — order types (native stop/limit/bracket?), OAuth handshake completes headless,
-   token/refresh lifetimes, read scope (agentic only vs main). Places nothing; stops at the funding
-   wall if hit.
-2. **User decision:** open + fund a dedicated Agentic account (the MCP does nothing without it).
-3. **Wire** `robinhood_mcp._call_tool` (OAuth session via `mcp` SDK) + fill the `_TOOL_*` names and
-   `_order_args` schema from the spike's `tools/list`; revisit the `_normalize_*` field names.
-4. **Exit routing:** point a fired `alerts/exit_checker` trigger at `place_order` (behind DRY_RUN +
-   confirm-first) so exits auto-place — the 24/7-watch fix. If gate#1 shows native stop orders, place
-   a standing stop once instead (set-and-forget, no polling).
-5. **DRY_RUN diff** several clean days → then ONE tiny live confirm-first order → then enable the loop.
+### R25b. Wire the Robinhood MCP — OAuth done; blocked on funded account + login
+**Spike DONE (2026-08-14):** server OAuth-gated; DCR works (custom client OK, PKCE, no secret);
+refresh_token grant → 429 dies. **OAuth transport DONE:** `ingestion/mcp_auth.py` (SDK
+OAuthClientProvider + file token storage + localhost callback); `robinhood_mcp._call_tool` delegates
+to it. Remaining:
+1. **User:** open + fund a dedicated Agentic account (small pilot amount; no stated minimum).
+2. **User:** run `venv\Scripts\python.exe scripts\mcp_login.py` (needs `pip install "mcp[cli]"`) — one
+   browser auth, stores tokens, prints the tool list + schemas → answers gate #1 (order types) + gate #4
+   (read scope). Paste the tool list back.
+3. **Wire from that list:** fill `_TOOL_*` names + `_order_args` schema in `robinhood_mcp.py`; verify
+   `_normalize_*` field names against a real `fetch_positions`/`fetch_buying_power` call.
+4. **Exit routing:** point a fired `alerts/exit_checker` trigger at `place_order` (DRY_RUN +
+   confirm-first). If gate #1 shows native stop orders, place a standing stop once (set-and-forget).
+5. **DRY_RUN diff** several clean days → ONE tiny live confirm-first order → then enable the loop.
    Keep confirm-first + tiny size until the edge beats SPY across >2 trades.
 Full detail in the plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
 

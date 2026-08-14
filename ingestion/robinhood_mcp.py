@@ -50,16 +50,47 @@ def is_available() -> bool:
 def _call_tool(name: str, arguments: dict | None = None):
     """Single chokepoint for every Robinhood MCP tool invocation.
 
-    NOT YET IMPLEMENTED — blocked on the OAuth-handshake spike (plan gate #1/#2). Once the
-    spike confirms the transport + tool schemas, this establishes/reuses the OAuth session
-    (official `mcp` Python SDK, streamable-HTTP transport against config.ROBINHOOD_MCP_URL)
-    and returns the tool result. Import the SDK lazily inside this function so CI (which
-    doesn't install `mcp`) can still import this module.
+    Delegates to the OAuth transport in ingestion.mcp_auth (imported lazily so CI, which
+    doesn't install `mcp`, can still import this module). Non-interactive: uses the stored
+    token (silent refresh); never launches a browser from here. Returns the tool result
+    already unwrapped into a plain dict/list for the normalizers.
+
+    Raises MCPNotWired if the SDK isn't installed or no session is stored (login not done) —
+    reads catch it and degrade to empty; orders surface it.
     """
-    raise MCPNotWired(
-        f"MCP tool '{name}' not wired yet — run the OAuth spike first (plan gate #1). "
-        f"Endpoint: {config.ROBINHOOD_MCP_URL}"
-    )
+    try:
+        from ingestion import mcp_auth
+    except ImportError as e:
+        raise MCPNotWired(f"mcp SDK not installed — {e}") from e
+
+    try:
+        result = mcp_auth.call_tool(name, arguments)
+    except mcp_auth.NotAuthenticated as e:
+        raise MCPNotWired(str(e)) from e
+    return _unwrap_tool_result(result)
+
+
+def _unwrap_tool_result(result):
+    """Turn an MCP CallToolResult into a plain Python object. Prefers structuredContent;
+    else parses the text content blocks as JSON; else returns the raw text/result."""
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        # Some servers wrap the payload as {"result": ...}; unwrap that common shape.
+        if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
+            return structured["result"]
+        return structured
+
+    content = getattr(result, "content", None)
+    if content:
+        import json
+        texts = [t for block in content if (t := getattr(block, "text", None)) is not None]
+        joined = "\n".join(texts).strip()
+        if joined:
+            try:
+                return json.loads(joined)
+            except (ValueError, TypeError):
+                return joined
+    return result
 
 
 # --- reads: mirror ingestion/robinhood.py shapes so callers swap cleanly --------------
