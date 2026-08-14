@@ -124,6 +124,13 @@ ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mc
                               login() = interactive (once); call_tool()/list_tools() = non-interactive,
                               stored-token only (never pops a browser from a read). mcp SDK is an OPTIONAL
                               dep (not in requirements.txt) → imported lazily so CI stays clean.
+alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
+                              stop_market per AGENTIC-account position (set-and-forget; Robinhood
+                              auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first
+                              via review_equity_order; DRY_RUN-safe + trading_guards. Whole-share only
+                              (fractional <1 sh skipped). Agentic account only — main book stays manual.
+scripts/agentic_stops.py      Run agentic_stops.sync_protective_stops() (DRY_RUN) — logs the stops it
+                              would place; flip config.DRY_RUN=False to place real resting stops.
 scripts/mcp_login.py          One-time interactive login (R25) — run after funding the Agentic account:
                               browser auth, stores tokens, prints the tool list + schemas (answers gate #1
                               order types + gate #4 read scope). Needs `pip install "mcp[cli]"` in venv.

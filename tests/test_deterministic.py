@@ -567,6 +567,38 @@ def test_mcp_normalize_quotes_shape():
     assert out["AAPL"]["price"] == 305.31 and out["MSFT"] is None
 
 
+def test_plan_protective_stops():
+    from alerts.agentic_stops import plan_protective_stops, _stop_price
+    # stop price = current × (1 − pct/100)
+    assert _stop_price(100.0, 4.0) == 96.0
+    assert _stop_price(0, 4.0) is None and _stop_price(100.0, 0) is None
+
+    positions = [
+        {"ticker": "ABC", "shares": 3, "current_price": 100.0},     # whole → stop planned
+        {"ticker": "FRAC", "shares": 0.4, "current_price": 50.0},   # fractional-only → skipped
+        {"ticker": "PART", "shares": 2.7, "current_price": 20.0},   # floor to 2 whole shares
+        {"ticker": "NOPCT", "shares": 5, "current_price": 10.0},    # no stop% → skipped
+    ]
+    stops = {"ABC": 4.0, "FRAC": 5.0, "PART": 10.0}
+    out = plan_protective_stops(positions, stops)
+    tickers = {i.ticker: i for i in out}
+    assert set(tickers) == {"ABC", "PART"}                          # FRAC + NOPCT dropped
+    abc = tickers["ABC"]
+    assert abc.side == "sell" and abc.order_type == "stop" and abc.quantity == 3
+    assert abc.stop_price == 96.0 and abc.client_id == "stop-ABC-96.0"
+    assert tickers["PART"].quantity == 2 and tickers["PART"].stop_price == 18.0
+
+
+def test_existing_stop_tickers():
+    from alerts.agentic_stops import _existing_stop_tickers
+    payload = {"data": {"orders": [
+        {"symbol": "ABC", "side": "sell", "type": "stop_market", "state": "queued"},
+        {"symbol": "XYZ", "side": "sell", "type": "limit", "state": "queued"},       # not a stop
+        {"symbol": "OLD", "side": "sell", "type": "stop_market", "state": "cancelled"},  # not open
+    ]}}
+    assert _existing_stop_tickers(payload) == {"ABC"}
+
+
 def test_account_reads_dispatch(monkeypatch):
     # The dispatcher routes to robin_stocks or the MCP purely on config.USE_MCP, with no
     # cross-fallback (so USE_MCP=on can't secretly re-trigger the robin_stocks 429).

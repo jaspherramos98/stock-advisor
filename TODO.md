@@ -642,13 +642,18 @@ Remaining:
    quotes in `dashboard/app.py` + `ingestion/prices.py`; `main.py` skips robin_stocks news under USE_MCP so
    no login fires. `config.USE_MCP=True` on this branch (reads MAIN account = the real book; agentic =
    pilot). Verified live. `git checkout main` / `USE_MCP=False` reverts.
-2. **Route exits to native stops:** on a fired `alerts/exit_checker` trigger for an agentic-held position,
-   `place_order` a `stop_market`/`stop_limit` GTC (DRY_RUN + confirm-first via `review_equity_order`).
-   Main-account positions stay manual (MCP can't order them).
+2. ✅ **DONE (capability) — auto-exit native stops.** `alerts/agentic_stops.py`
+   (`sync_protective_stops`) places a standing GTC `stop_market` per AGENTIC-account position:
+   ATR stop % from R24 structure, confirm-first via `review_equity_order`, DRY_RUN-safe +
+   trading_guards, whole-share only. `scripts/agentic_stops.py` runs it. Verified end-to-end
+   (simulated 1-sh F holding → real structure stop @ $13.07, live review, DRY_RUN place). Main
+   book stays manual (MCP can't order it). **Remaining:** hook it to a dashboard button / the
+   15-min runner, and flip DRY_RUN=False after a live pilot position exists.
 3. **DRY_RUN diff** several clean days → ONE tiny live confirm-first order → then enable.
    Confirm-first + tiny size until the edge beats SPY across >2 trades.
 4. ✅ **DONE** — silenced the SDK's benign `Session termination failed: 400` teardown warning
    (`mcp_auth.py` lowers that logger to ERROR).
+5. **Sync positions button** ✅ — synced holdings get R24 structure exits (not flat 10/5).
 Full detail in the plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
 
 ### B1. Robinhood MCP sync
