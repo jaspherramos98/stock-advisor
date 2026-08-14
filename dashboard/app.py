@@ -535,6 +535,84 @@ except Exception:
 if os.getenv("MOCK_MODE", "false").lower() == "true":
     st.warning("⚠️ MOCK MODE active — showing test data. No real Claude API calls. Set MOCK_MODE=false in .env for real analysis.")
 
+def _render_alloc_table(allocations):
+    """Render ONE allocation table (called once per enabled asset class, R28). Builds the
+    DataFrame, applies the direction/risk/HR styling, and renders st.dataframe with the tuned
+    column widths + 2-line row height so it fits without horizontal scroll."""
+    if not allocations:
+        return
+    df = pd.DataFrame(allocations)
+    df["flags"] = [
+        ("⭐" if a.get("highly_recommended") else "") + ("⚠" if a.get("flagged") else "")
+        for a in allocations
+    ]
+
+    def _short(text, limit=72):
+        t = " ".join(str(text or "").split())
+        return t if len(t) <= limit else t[:limit - 1].rstrip(" ,.;") + "…"
+
+    df["entry_trigger"] = df["entry_trigger"].map(_short)
+    df["exit_condition"] = df["exit_condition"].map(_short)
+    df = df[[
+        "ticker", "direction", "current_price", "change_pct",
+        "dollar_amount", "percentage", "risk_level", "conviction", "confidence_score",
+        "entry_trigger", "exit_condition", "flags",
+    ]].rename(columns={
+        "ticker": "Ticker", "direction": "Direction", "current_price": "Price",
+        "change_pct": "Today", "dollar_amount": "Amount ($)", "percentage": "Alloc %",
+        "risk_level": "Risk", "conviction": "Conviction", "confidence_score": "Confidence",
+        "entry_trigger": "Buy when", "exit_condition": "Sell when", "flags": "Flags",
+    })
+
+    def color_direction(val):
+        if val == "buy":   return "color: #2ecc71; font-weight: bold"
+        if val == "short": return "color: #e74c3c; font-weight: bold"
+        if val == "watch": return "color: #f39c12"
+        return "color: #e74c3c"
+
+    def color_risk(val):
+        if val == "low":    return "color: #2ecc71"
+        if val == "medium": return "color: #f39c12"
+        return "color: #e74c3c; font-weight: bold"
+
+    def color_change(val):
+        if val == "N/A":        return ""
+        if val.startswith("+"): return "color: #2ecc71"
+        if val.startswith("-"): return "color: #e74c3c"
+        return ""
+
+    def highlight_hr(row):
+        if "⭐" in str(row.get("Flags", "")):
+            return ["background-color: rgba(255, 215, 0, 0.08); border-left: 3px solid #FFD700"] * len(row)
+        return [""] * len(row)
+
+    styled_df = (
+        df.style
+        .apply(highlight_hr, axis=1)
+        .map(color_direction, subset=["Direction"])
+        .map(color_risk,      subset=["Risk"])
+        .map(color_change,    subset=["Today"])
+        .format({
+            "Amount ($)": "${:.2f}", "Alloc %": "{:.1f}%", "Confidence": "{:.2f}",
+            "Conviction": lambda v: f"{int(v)}" if pd.notna(v) else "—",
+        })
+    )
+    _narrow = {"Direction": 74, "Price": 74, "Today": 72, "Amount ($)": 84,
+               "Alloc %": 72, "Risk": 74, "Conviction": 84, "Confidence": 84}
+    _table_height = min(len(df) * 70 + 45, 800)
+    st.dataframe(
+        styled_df, use_container_width=True, hide_index=True,
+        row_height=70, height=_table_height,
+        column_config={
+            "Ticker":    st.column_config.TextColumn("Ticker", width=64, pinned=True),
+            "Flags":     st.column_config.TextColumn("Flags", width=48),
+            "Buy when":  st.column_config.TextColumn("Buy when",  width=215),
+            "Sell when": st.column_config.TextColumn("Sell when", width=215),
+            **{c: st.column_config.Column(c, width=w) for c, w in _narrow.items()},
+        },
+    )
+
+
 # --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
@@ -734,106 +812,18 @@ if True:
                 a.setdefault("conviction", None)
                 a.setdefault("entry_trigger", "")
 
-            df = pd.DataFrame(allocations)
-            # Merge the two flag columns into one narrow badge column, and drop Company
-            # (it's in the expander title right below) — both changes buy horizontal room
-            # so the table fits without scrolling right.
-            df["flags"] = [
-                ("⭐" if a.get("highly_recommended") else "") + ("⚠" if a.get("flagged") else "")
-                for a in allocations
-            ]
-
-            # The analyst writes long prose triggers (100-180 chars). Truncate for the
-            # table so each cell fits the 2-line row height without forcing a horizontal
-            # scroll; the FULL text is shown in the "Stock details" expander below.
-            def _short(text, limit=72):
-                t = " ".join(str(text or "").split())
-                return t if len(t) <= limit else t[:limit - 1].rstrip(" ,.;") + "…"
-
-            df["entry_trigger"] = df["entry_trigger"].map(_short)
-            df["exit_condition"] = df["exit_condition"].map(_short)
-            df = df[[
-                "ticker", "direction",
-                "current_price", "change_pct",
-                "dollar_amount", "percentage",
-                "risk_level", "conviction", "confidence_score",
-                "entry_trigger", "exit_condition", "flags"
-            ]].rename(columns={
-                "ticker":             "Ticker",
-                "direction":          "Direction",
-                "current_price":      "Price",
-                "change_pct":         "Today",
-                "dollar_amount":      "Amount ($)",
-                "percentage":         "Alloc %",
-                "risk_level":         "Risk",
-                "conviction":         "Conviction",
-                "confidence_score":   "Confidence",
-                "entry_trigger":      "Buy when",
-                "exit_condition":     "Sell when",
-                "flags":              "Flags",
-            })
-
-            def color_direction(val):
-                if val == "buy":   return "color: #2ecc71; font-weight: bold"
-                if val == "short": return "color: #e74c3c; font-weight: bold"
-                if val == "watch": return "color: #f39c12"
-                return "color: #e74c3c"
-
-            def color_risk(val):
-                if val == "low":    return "color: #2ecc71"
-                if val == "medium": return "color: #f39c12"
-                return "color: #e74c3c; font-weight: bold"
-
-            def color_change(val):
-                if val == "N/A":        return ""
-                if val.startswith("+"): return "color: #2ecc71"
-                if val.startswith("-"): return "color: #e74c3c"
-                return ""
-
-            def highlight_hr(row):
-                if "⭐" in str(row.get("Flags", "")):
-                    return ["background-color: rgba(255, 215, 0, 0.08); border-left: 3px solid #FFD700"] * len(row)
-                return [""] * len(row)
-
-            styled_df = (
-                df.style
-                .apply(highlight_hr, axis=1)
-                .map(color_direction, subset=["Direction"])
-                .map(color_risk,      subset=["Risk"])
-                .map(color_change,    subset=["Today"])
-                .format({
-                    "Amount ($)": "${:.2f}",
-                    "Alloc %":    "{:.1f}%",
-                    "Confidence": "{:.2f}",
-                    "Conviction": lambda v: f"{int(v)}" if pd.notna(v) else "—",
-                })
-            )
-
-            # Fixed narrow widths on the numeric columns leave the rest of the width for
-            # the two long text columns, so nothing needs horizontal scrolling. Double
-            # row height lets "Buy when"/"Sell when" wrap onto a second line.
-            # Widths are tuned so all 12 columns sum to roughly the content area of a
-            # normal desktop window — no horizontal scrolling — leaving the remainder to
-            # the two text columns, which wrap onto the 2-line row height.
-            _narrow = {"Direction": 74, "Price": 74, "Today": 72, "Amount ($)": 84,
-                       "Alloc %": 72, "Risk": 74, "Conviction": 84, "Confidence": 84}
-            # Size the table to show every row at once (no inner vertical scrollbar),
-            # capped so a long list still can't push the rest of the page off-screen.
-            _table_height = min(len(df) * 70 + 45, 800)
-            st.dataframe(
-                styled_df,
-                use_container_width=True,
-                hide_index=True,
-                row_height=70,
-                height=_table_height,
-                column_config={
-                    "Ticker":    st.column_config.TextColumn("Ticker", width=64, pinned=True),
-                    "Flags":     st.column_config.TextColumn("Flags", width=48),
-                    "Buy when":  st.column_config.TextColumn("Buy when",  width=215),
-                    "Sell when": st.column_config.TextColumn("Sell when", width=215),
-                    **{c: st.column_config.Column(c, width=w) for c, w in _narrow.items()},
-                },
-            )
+            # Per-class tables (R28): one table per asset class so each checkbox gets its own
+            # ~10 ideas instead of all classes sharing one crowded list.
+            _cls_labels = [("stock", "📈 Stocks"), ("etf", "📊 ETFs"), ("crypto", "🪙 Crypto")]
+            _grouped = {k: [a for a in allocations if (a.get("asset_type") or "stock") == k]
+                        for k, _ in _cls_labels}
+            if any(_grouped[k] for k, _ in _cls_labels):
+                for _k, _lbl in _cls_labels:
+                    if _grouped[_k]:
+                        st.markdown(f"#### {_lbl} — {len(_grouped[_k])}")
+                        _render_alloc_table(_grouped[_k])
+            else:
+                _render_alloc_table(allocations)   # no asset_type on any rec → single table
             # NOTE: escape every '$' as '\$' — Streamlit renders paired '$...$' as LaTeX,
             # which silently ate the dollar signs and mangled this caption.
             st.caption(
