@@ -606,6 +606,25 @@ def test_options_strategies_select_and_size():
     assert size_contracts(1.0, 10.0, 18.0) == 0      # unaffordable
 
 
+def test_agent_signals_merge_chat_buys(tmp_path, monkeypatch):
+    import json as _json
+    from alerts import agentic_options as ao
+    from storage import entry_watch as ew
+    # pipeline cache: RDDT only a watch, plus one real buy
+    cache = tmp_path / "pipeline_cache.json"
+    cache.write_text(_json.dumps({"recommendations": [
+        {"ticker": "RDDT", "direction": "watch", "conviction": 55},
+        {"ticker": "NVDA", "direction": "buy", "conviction": 80}]}), encoding="utf-8")
+    monkeypatch.setattr(ao, "_CACHE", str(cache))
+    monkeypatch.setattr(ew, "get_chat_suggestions", lambda: [
+        {"ticker": "RDDT", "action": "buy"}, {"ticker": "MSFT", "action": "watch"}])
+    sigs = {s["ticker"]: s for s in ao._signals()}
+    assert sigs["NVDA"]["direction"] == "buy" and sigs["NVDA"]["conviction"] == 80   # pipeline buy
+    assert sigs["RDDT"]["direction"] == "buy" and sigs["RDDT"]["source"] == "chat"   # chat upgraded the watch
+    assert sigs["RDDT"]["conviction"] == ao.CHAT_BUY_CONVICTION
+    assert "MSFT" not in sigs                                                         # chat 'watch' not an entry
+
+
 def test_signal_context_parsers():
     import datetime as _dt
     from ingestion.signal_context import _parse_rsi, _parse_earnings

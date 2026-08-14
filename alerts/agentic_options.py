@@ -54,19 +54,40 @@ def _regime() -> dict:
         return {"risk": "neutral"}
 
 
+# Argus chat is the sharper, more-decisive brain (it upgrades pipeline 'watch' ideas to real
+# buys — e.g. it called RDDT's S&P-inclusion catalyst a Buy while the pipeline left it a watch).
+# Chat picks carry no numeric conviction, so a chat "Buy" is treated as this conviction — high
+# enough to clear catalyst_momentum (≥70) but below the short_dte/pre-earnings bars (75-80).
+CHAT_BUY_CONVICTION = 72
+
+
 def _signals() -> list[dict]:
-    """Directional buy/short recommendations from today's pipeline cache (deduped by ticker)."""
+    """Directional entry signals for the agent, deduped by ticker:
+      1. buy/short recommendations from today's pipeline cache (real conviction), then
+      2. Argus chat's last 'Buy' suggestions (get_chat_suggestions) for tickers the pipeline
+         didn't already flag buy/short — this is choice B: let the chat's calls reach the agent."""
+    out, seen = [], set()
     try:
         with open(_CACHE, encoding="utf-8") as f:
             recs = (json.load(f) or {}).get("recommendations", []) or []
     except (OSError, ValueError):
-        return []
-    out, seen = [], set()
+        recs = []
     for r in recs:
         t = (r.get("ticker") or "").upper()
         if t and t not in seen and (r.get("direction") or "").lower() in ("buy", "short"):
             seen.add(t)
             out.append(r)
+
+    try:
+        from storage.entry_watch import get_chat_suggestions
+        for s in get_chat_suggestions():
+            t = (s.get("ticker") or "").upper()
+            if t and t not in seen and (s.get("action") or "").lower() == "buy":
+                seen.add(t)
+                out.append({"ticker": t, "direction": "buy",
+                            "conviction": CHAT_BUY_CONVICTION, "source": "chat"})
+    except Exception as e:  # noqa: BLE001 — chat merge is additive; never break pipeline signals
+        print(f"agentic_options: chat-suggestion merge failed — {e}")
     return out
 
 
