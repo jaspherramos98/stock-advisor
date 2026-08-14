@@ -107,6 +107,18 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
     if not acct:
         return [{"status": "skipped", "reason": "no agentic account"}]
 
+    # stop_market is regular-hours-only — Robinhood rejects it pre/post-market. Don't attempt
+    # a placement off-hours (it would only produce a confusing rejection). Reads above are fine.
+    if not config.DRY_RUN:
+        try:
+            import market_hours as mh
+            status = mh.market_session()["status"]
+            if status not in ("open", "open_half_day"):
+                return [{"status": "skipped",
+                         "reason": f"market {status} — stop_market places only in regular hours (9:30–16:00 ET)"}]
+        except Exception as e:  # noqa: BLE001 — if the calendar fails, fall through and let RH decide
+            print(f"agentic_stops: market-hours check failed — {e}")
+
     positions = mcp.fetch_positions(acct)
     if not positions:
         return [{"status": "noop", "reason": "no agentic positions to protect"}]
@@ -176,7 +188,13 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
             results.append({"ticker": intent.ticker, "status": "review_failed", "reason": str(e)})
             continue
 
-        res = mcp.place_order(intent, state, buying_power=start_equity, account_number=acct)
-        results.append({"ticker": intent.ticker, "stop_price": intent.stop_price, **{k: res[k] for k in ("status", "reason")}})
+        try:
+            res = mcp.place_order(intent, state, buying_power=start_equity, account_number=acct)
+            results.append({"ticker": intent.ticker, "stop_price": intent.stop_price,
+                            **{k: res[k] for k in ("status", "reason")}})
+        except Exception as e:  # noqa: BLE001 — surface a rejection, don't abort the whole run
+            print(f"[ORDER FAILED] {intent.ticker} stop @ ${intent.stop_price} — {e}")
+            results.append({"ticker": intent.ticker, "stop_price": intent.stop_price,
+                            "status": "failed", "reason": str(e)})
 
     return results

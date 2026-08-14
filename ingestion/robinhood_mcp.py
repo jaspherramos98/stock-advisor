@@ -53,6 +53,11 @@ class MCPNotWired(RuntimeError):
     catch this and degrade to empty; live orders surface it (dry-run never hits it)."""
 
 
+class MCPToolError(RuntimeError):
+    """Raised when a tool call returns is_error=True (e.g. an order rejected server-side).
+    Without this, an error response would be mistaken for success — the false 'placed' bug."""
+
+
 def is_available() -> bool:
     """True only when the MCP path is switched on. Does not prove a session is live — that's
     checked lazily on first _call_tool (which degrades cleanly if not)."""
@@ -73,6 +78,10 @@ def _call_tool(name: str, arguments: dict | None = None):
         result = mcp_auth.call_tool(name, arguments)
     except mcp_auth.NotAuthenticated as e:
         raise MCPNotWired(str(e)) from e
+    # A tool can fail without raising — it returns is_error=True with the reason in content.
+    # Surface that as an exception so a rejected order is never mistaken for a placed one.
+    if getattr(result, "is_error", False) or getattr(result, "isError", False):
+        raise MCPToolError(f"{name} error: {_unwrap_tool_result(result)}")
     return _unwrap_tool_result(result)
 
 
