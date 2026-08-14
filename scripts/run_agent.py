@@ -32,10 +32,23 @@ _LOG = os.path.join(_REPO, "agent_scheduler.log")
 
 
 def _log(msg: str) -> None:
-    line = f"[{_dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n"
+    line = f"[{_dt.datetime.now():%Y-%m-%d %H:%M:%S %p PT}] {msg}\n"
     try:
         with open(_LOG, "a", encoding="utf-8") as f:
             f.write(line)
+        _trim()
+    except OSError:
+        pass
+
+
+def _trim(keep: int = 500) -> None:
+    """Keep only the last `keep` lines so a heartbeat-per-cycle log can't grow unbounded."""
+    try:
+        with open(_LOG, encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) > keep:
+            with open(_LOG, "w", encoding="utf-8") as f:
+                f.writelines(lines[-keep:])
     except OSError:
         pass
 
@@ -49,26 +62,29 @@ def _market_open() -> bool:
 
 
 def main() -> int:
-    # Gate BOTH modes on market hours so DRY doesn't spam the log off-hours and LIVE only
-    # ever trades in-session. (run_options_agent also blocks live placement when closed.)
+    armed = os.path.exists(_ARM)
+    mode = "LIVE" if armed else "DRY"
+
+    # Heartbeat every cycle so the log always exists + ticks (visible liveness). Off-hours we
+    # don't run the agent (options fill in regular hours) — just a one-line skip.
     if not _market_open():
+        _log(f"[{mode}] heartbeat — market closed, skip")
         return 0
 
-    armed = os.path.exists(_ARM)
     config.DRY_RUN = not armed
     out = run_options_agent(verbose=False)
 
     status = out.get("status")
-    if status:  # halted / skipped / no-account — only log the non-routine ones
-        if status != "skipped":
-            _log(f"{status}: {out.get('reason', '')}")
+    if status:  # halted / no-account / market-closed-live
+        _log(f"[{mode}] {status}: {out.get('reason', '')}")
         return 0
 
     entries, exits = out.get("entries", []), out.get("exits", [])
     halted = out.get("entries_halted")
     if entries or exits or halted:
-        mode = "LIVE" if armed else "DRY"
-        _log(f"mode={mode} entries={entries} exits={exits}" + (f" [{halted}]" if halted else ""))
+        _log(f"[{mode}] entries={entries} exits={exits}" + (f" [{halted}]" if halted else ""))
+    else:
+        _log(f"[{mode}] market open — no actionable signal this cycle")
     return 0
 
 
