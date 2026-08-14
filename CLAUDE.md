@@ -387,7 +387,8 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   robin_stocks stays only for the (now-skipped) news path; `git checkout main` or `USE_MCP=False` fully
   reverts. **Next (not done):** route exits to `place_order` native `stop_market`/`stop_limit` GTC on the
   AGENTIC account (DRY_RUN + confirm-first via `review_equity_order`) — auto-exit only covers agentic-held
-  positions; main holdings stay manual. Minor: SDK logs a harmless `Session termination failed: 400` per call.
+  positions; main holdings stay manual. (The SDK's benign `Session termination failed: 400` teardown
+  warning is silenced in `mcp_auth.py` by lowering that one logger to ERROR.)
 - **To revert to native Argus entirely:** `git checkout main` (this work is on branch
   `feat/robinhood-mcp-agentic`).
 

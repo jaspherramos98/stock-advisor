@@ -647,7 +647,8 @@ Remaining:
    Main-account positions stay manual (MCP can't order them).
 3. **DRY_RUN diff** several clean days → ONE tiny live confirm-first order → then enable.
    Confirm-first + tiny size until the edge beats SPY across >2 trades.
-4. **Minor:** suppress the SDK's `Session termination failed: 400` teardown warning.
+4. ✅ **DONE** — silenced the SDK's benign `Session termination failed: 400` teardown warning
+   (`mcp_auth.py` lowers that logger to ERROR).
 Full detail in the plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
 
 ### B1. Robinhood MCP sync

@@ -26,9 +26,16 @@ from __future__ import annotations
 
 import asyncio
 import http.server
+import logging
 import threading
 import urllib.parse
 from pathlib import Path
+
+# Robinhood answers the MCP session-terminate (DELETE) with a 400, so the SDK logs a benign
+# "Session termination failed: 400" WARNING on every call teardown. The reads still succeed;
+# quiet just that logger (ERROR+ still surfaces real transport failures) so it doesn't spam
+# each Streamlit rerun.
+logging.getLogger("mcp.client.streamable_http").setLevel(logging.ERROR)
 
 import anyio
 import httpx2
