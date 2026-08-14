@@ -567,6 +567,58 @@ def test_mcp_normalize_quotes_shape():
     assert out["AAPL"]["price"] == 305.31 and out["MSFT"] is None
 
 
+def test_options_data_pure_helpers():
+    import datetime as _dt
+    from ingestion.options_data import (
+        _dte, pick_expiration, pick_contract_by_moneyness, liquidity_ok, contract_cost)
+    today = _dt.date(2026, 8, 14)
+    dates = ["2026-08-15", "2026-08-21", "2026-09-04", "2026-09-18", "2026-11-20"]
+    assert _dte("2026-08-21", today) == 7
+    # window 21-40 DTE → 2026-09-04 (21d) and 2026-09-18 (35d); mid=30.5 → 09-04 closer? |21-30.5|=9.5 vs |35-30.5|=4.5 → 09-18
+    assert pick_expiration(dates, 21, 40, today) == "2026-09-18"
+    assert pick_expiration(dates, 200, 400, today) is None
+
+    contracts = [{"strike_price": str(s), "state": "active", "tradability": "tradable"}
+                 for s in (90, 95, 100, 105, 110)]
+    call = pick_contract_by_moneyness(contracts, spot=100, right="call", otm_pct=4)  # target 104 → 105
+    assert call["strike"] == 105.0
+    put = pick_contract_by_moneyness(contracts, spot=100, right="put", otm_pct=4)    # target 96 → 95
+    assert put["strike"] == 95.0
+
+    assert liquidity_ok({"bid_price": "1.00", "ask_price": "1.10"})           # 9.5% spread ok
+    assert not liquidity_ok({"bid_price": "0", "ask_price": "0.50"})          # no bid
+    assert not liquidity_ok({"bid_price": "1.00", "ask_price": "2.00"})       # 66% spread
+    assert contract_cost({"ask_price": "3.95"}, 1) == 395.0
+    assert contract_cost(0.20, 2) == 40.0
+
+
+def test_check_option_order():
+    from trading_guards import OptionOrderIntent, GuardState, check_option_order
+    st = GuardState(start_equity=25.0)
+    ok = OptionOrderIntent(underlying="F", option_id="x", right="call", side="buy",
+                           position_effect="open", quantity=1, price=0.10)  # $10 premium
+    assert check_option_order(ok, st, buying_power=25.0).allowed
+    too_dear = OptionOrderIntent(underlying="AAPL", option_id="y", right="call", side="buy",
+                                 position_effect="open", quantity=1, price=3.95)  # $395
+    r = check_option_order(too_dear, st, buying_power=25.0)
+    assert not r.allowed and "exceeds buying power" in r.reason
+    bad = OptionOrderIntent(underlying="F", option_id="z", right="stock", side="buy",
+                            position_effect="open")
+    assert not check_option_order(bad, st, 25.0).allowed
+    assert ok.premium == 10.0
+
+
+def test_option_args_shape():
+    from ingestion.robinhood_mcp import _option_args
+    from trading_guards import OptionOrderIntent
+    intent = OptionOrderIntent(underlying="F", option_id="opt-1", right="call", side="buy",
+                               position_effect="open", quantity=2, price=0.12)
+    args = _option_args(intent, "AGENTIC")
+    assert args["legs"][0] == {"option_id": "opt-1", "side": "buy",
+                               "position_effect": "open", "ratio_quantity": 1}
+    assert args["quantity"] == "2" and args["price"] == "0.12" and args["direction"] == "debit"
+
+
 def test_plan_protective_stops():
     from alerts.agentic_stops import plan_protective_stops, _stop_price
     # stop price = current × (1 − pct/100)

@@ -124,6 +124,10 @@ ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mc
                               login() = interactive (once); call_tool()/list_tools() = non-interactive,
                               stored-token only (never pops a browser from a read). mcp SDK is an OPTIONAL
                               dep (not in requirements.txt) → imported lazily so CI stays clean.
+ingestion/options_data.py     Option contract selection (R26/Phase 2) — chain→expiration(DTE window)→
+                              strike(OTM %)→quote→liquidity+affordability, via MCP option-data tools.
+                              Pure helpers (_dte/pick_expiration/pick_contract_by_moneyness/liquidity_ok/
+                              contract_cost) unit-tested; select_contract orchestrates live.
 alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
                               stop_market per AGENTIC-account position (set-and-forget; Robinhood
                               auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first

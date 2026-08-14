@@ -40,6 +40,29 @@ class OrderIntent:
 
 
 @dataclass
+class OptionOrderIntent:
+    """A single-leg option order (Level 2: long/short call/put). Premium = price × 100 × qty."""
+    underlying: str
+    option_id: str
+    right: str                         # 'call' | 'put'
+    side: str                          # 'buy' | 'sell'
+    position_effect: str               # 'open' | 'close'
+    quantity: int = 1                  # contracts
+    order_type: str = "limit"          # limit | market | stop_limit | stop_market
+    price: float | None = None         # per-contract limit price (× 100 = per-contract $)
+    direction: str = "debit"           # 'debit' (buy) | 'credit' (sell)
+    time_in_force: str = "gfd"
+    strike: float | None = None        # for logging/audit only
+    expiration: str | None = None      # for logging/audit only
+    reason: str = ""
+    client_id: str = ""
+
+    @property
+    def premium(self) -> float:
+        return round((self.price or 0) * 100 * max(1, self.quantity), 2)
+
+
+@dataclass
 class GuardState:
     """Per-day mutable execution state. Rebuilt each trading day; `start_equity` is the
     account equity at session start (the denominator for the loss limit + single-name cap)."""
@@ -93,7 +116,30 @@ def check_order(intent: OrderIntent, state: GuardState, buying_power: float) -> 
     return GuardResult(True, "ok")
 
 
-def record_placed(intent: OrderIntent, state: GuardState) -> None:
+def check_option_order(intent: OptionOrderIntent, state: GuardState, buying_power: float) -> GuardResult:
+    """Vet a single-leg option order. Position SIZE is uncapped by design (pilot) — the only
+    money bound is you can't spend more premium than the buying power on an OPEN buy. The rest
+    are correctness guards: idempotency, the runaway per-day order cap, and basic well-formedness."""
+    if intent.client_id and intent.client_id in state.placed_client_ids:
+        return GuardResult(False, "duplicate client_id — already placed")
+    if state.orders_today >= MAX_ORDERS_PER_DAY:
+        return GuardResult(False, f"daily order cap {MAX_ORDERS_PER_DAY} reached (runaway guard)")
+    if intent.right not in ("call", "put") or intent.side not in ("buy", "sell"):
+        return GuardResult(False, "malformed option intent (right/side)")
+    if intent.position_effect not in ("open", "close"):
+        return GuardResult(False, "position_effect must be open|close")
+    if intent.quantity < 1:
+        return GuardResult(False, "quantity must be >= 1 contract")
+    if intent.order_type in ("limit", "stop_limit") and (intent.price is None or intent.price <= 0):
+        return GuardResult(False, "limit order needs a positive price")
+    # Buying to OPEN spends premium — can't exceed available buying power.
+    if intent.side == "buy" and intent.position_effect == "open":
+        if buying_power < intent.premium:
+            return GuardResult(False, f"premium ${intent.premium:.2f} exceeds buying power ${buying_power:.2f}")
+    return GuardResult(True, "ok")
+
+
+def record_placed(intent, state: GuardState) -> None:
     """Mark an order as placed: increment the day counter and remember its client_id so a
     retry can't duplicate it. Call this only after check_order() allowed it AND it was sent
     (or dry-run logged) — never before, or the counters drift."""

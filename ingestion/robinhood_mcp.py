@@ -37,6 +37,8 @@ _TOOL_PORTFOLIO = "get_portfolio"          # holds buying_power + total_value
 _TOOL_QUOTES = "get_equity_quotes"
 _TOOL_REVIEW_ORDER = "review_equity_order"  # pre-trade simulation (confirm-first)
 _TOOL_PLACE_ORDER = "place_equity_order"    # requires an agentic_allowed=true account
+_TOOL_REVIEW_OPTION = "review_option_order"
+_TOOL_PLACE_OPTION = "place_option_order"   # single-leg, requires option_level_2 + agentic
 
 # OrderIntent.order_type -> place_equity_order 'type'. Native stop support = set-and-forget exits.
 _ORDER_TYPE_MAP = {
@@ -335,6 +337,61 @@ def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
     record_placed(intent, state)
     print(f"[ORDER PLACED] {intent.side} {intent.ticker} :: {intent.reason}")
     return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "raw": result}
+
+
+def place_option_order(intent, state: GuardState, buying_power: float,
+                       account_number: str | None = None, review: bool = True) -> dict:
+    """Place a single-leg option order on the AGENTIC account, review-first + DRY_RUN-safe +
+    guarded (trading_guards.check_option_order). Returns {status, reason, intent, dry_run} with
+    status 'rejected' | 'review_failed' | 'dry_run' | 'placed'. Live-send failures propagate."""
+    from trading_guards import check_option_order
+    verdict = check_option_order(intent, state, buying_power)
+    if not verdict.allowed:
+        print(f"[OPTION REJECTED] {intent.side} {intent.underlying} {intent.right} — {verdict.reason}")
+        return {"status": "rejected", "reason": verdict.reason, "intent": intent, "dry_run": config.DRY_RUN}
+
+    acct = account_number or agentic_account_number()
+    if not acct:
+        raise MCPNotWired("no agentic account available for options")
+    args = _option_args(intent, acct)
+    tag = f"{intent.quantity} {intent.underlying} {intent.strike}{intent.right[0].upper()} @ {intent.price}"
+
+    # Confirm-first: review before placing (both dry and live) to surface pre-trade alerts.
+    if review:
+        try:
+            preview = _call_tool(_TOOL_REVIEW_OPTION, args)
+            checks = preview.get("order_checks") if isinstance(preview, dict) else None
+            print(f"[OPTION REVIEW] {intent.side} {tag} — checks: {checks or 'none'}")
+        except Exception as e:  # noqa: BLE001 — a failed review must not place the order
+            print(f"[OPTION REVIEW FAILED] {intent.underlying} — {e}")
+            return {"status": "review_failed", "reason": str(e), "intent": intent, "dry_run": config.DRY_RUN}
+
+    if config.DRY_RUN:
+        record_placed(intent, state)
+        print(f"[DRY_RUN OPTION] {intent.side}/{intent.position_effect} {tag} "
+              f"exp {intent.expiration} premium ${intent.premium} :: {intent.reason}")
+        return {"status": "dry_run", "reason": "logged, not sent", "intent": intent, "dry_run": True}
+
+    result = _call_tool(_TOOL_PLACE_OPTION, args)
+    record_placed(intent, state)
+    print(f"[OPTION PLACED] {intent.side}/{intent.position_effect} {tag} :: {intent.reason}")
+    return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "raw": result}
+
+
+def _option_args(intent, account_number: str) -> dict:
+    """Map an OptionOrderIntent to the review/place_option_order leg schema (string values)."""
+    args: dict = {
+        "account_number": account_number,
+        "legs": [{"option_id": intent.option_id, "side": intent.side,
+                  "position_effect": intent.position_effect, "ratio_quantity": 1}],
+        "type": intent.order_type,
+        "quantity": str(intent.quantity),
+        "time_in_force": intent.time_in_force,
+        "direction": intent.direction,
+    }
+    if intent.price is not None:
+        args["price"] = f"{intent.price:.2f}"
+    return args
 
 
 def _order_args(intent: OrderIntent, account_number: str) -> dict:
