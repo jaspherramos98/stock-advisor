@@ -2145,15 +2145,21 @@ if True:
                     figc = go.Figure(data=[go.Candlestick(
                         x=_df["t"], open=_df["open_price"], high=_df["high_price"],
                         low=_df["low_price"], close=_df["close_price"], name=_csym)])
-                    # Overlay this ticker's paper entries/exits as time markers.
+                    # Overlay this ticker's paper entries/exits as time markers. Use add_shape +
+                    # add_annotation (NOT add_vline — it does Timestamp arithmetic that pandas 3.0
+                    # rejects). Pass the raw ISO string so plotly parses it on the datetime axis.
+                    def _marker(_ts, _color, _dash, _label, _yanchor):
+                        figc.add_shape(type="line", xref="x", yref="paper", x0=_ts, x1=_ts,
+                                       y0=0, y1=1, line=dict(color=_color, dash=_dash, width=1))
+                        figc.add_annotation(x=_ts, yref="paper", y=1, text=_label, showarrow=False,
+                                            font=dict(color=_color, size=10), yanchor=_yanchor)
                     for p in _book.get("open", []):
                         if p["ticker"] == _csym and p.get("opened_at"):
-                            figc.add_vline(x=pd.to_datetime(p["opened_at"]), line_color="#26a69a",
-                                           line_dash="dash", annotation_text=f"BUY {p['strike']:g}{p['right'][0].upper()}")
+                            _marker(p["opened_at"], "#26a69a", "dash",
+                                    f"BUY {p['strike']:g}{p['right'][0].upper()}", "bottom")
                     for c in _book.get("closed", []):
                         if c["ticker"] == _csym and c.get("closed_at"):
-                            figc.add_vline(x=pd.to_datetime(c["closed_at"]), line_color="#ef5350",
-                                           line_dash="dot", annotation_text=f"SELL {c['pnl']:+.0f}")
+                            _marker(c["closed_at"], "#ef5350", "dot", f"SELL {c['pnl']:+.0f}", "top")
                     figc.update_layout(height=420, margin=dict(l=0, r=0, t=10, b=0),
                                        xaxis_rangeslider_visible=False, showlegend=False)
                     st.plotly_chart(figc, use_container_width=True)
