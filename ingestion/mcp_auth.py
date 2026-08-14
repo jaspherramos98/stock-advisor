@@ -187,6 +187,9 @@ def _provider(interactive: bool) -> OAuthClientProvider:
 async def _with_session(interactive: bool, fn):
     provider = _provider(interactive)
     async with httpx2.AsyncClient(auth=provider, timeout=60.0) as http:
+        # Keep terminate_on_close=True (default): Robinhood 400s the teardown DELETE, but that
+        # warning is already silenced above; disabling termination instead breaks the stream's
+        # async-generator close (a noisier failure). Log-suppression is the clean fix here.
         async with streamable_http_client(config.ROBINHOOD_MCP_URL, http_client=http) as streams:
             read, write = streams[0], streams[1]
             async with ClientSession(read, write) as session:

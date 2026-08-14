@@ -157,6 +157,23 @@ def _suggested_exit(ticker: str, asset_type: str = "stock"):
         return None
 
 
+def _structure_exit_condition(ticker: str, asset_type: str = "stock"):
+    """R24 structure exit as a 'target X% gain, stop loss at Y%' string, or None when there's
+    no usable price structure. Blue-sky (no overhead resistance) → target a measured move of
+    2× the ATR stop so reward stays ≥ 2× risk. Used so SYNCED positions get a per-chart exit
+    instead of a flat 10/5 guess (same math as the My Positions 'Apply' button)."""
+    kl = _suggested_exit(ticker, asset_type)
+    if not kl:
+        return None
+    stp = kl.get("stop_pct_atr")
+    if stp is None:
+        return None
+    tgt = kl.get("target_pct_resist")
+    if tgt is None:
+        tgt = round(2 * stp, 1)
+    return f"target {tgt}% gain, stop loss at {stp}%"
+
+
 def _capture_chat_suggestions(reply_text: str):
     """
     Pulls Buy/Watch lines out of Argus's action-list reply and stores them as entry-watch
@@ -571,11 +588,14 @@ with st.sidebar:
                     if rp["ticker"] in existing_tickers:
                         skipped += 1
                         continue
+                    _crypto = bool(TICKER_TO_COINGECKO_ID.get(rp["ticker"], ""))
+                    exit_cond = (_structure_exit_condition(rp["ticker"], "crypto" if _crypto else "stock")
+                                 or "target 10% gain, stop loss at 5%")
                     add_position(
                         ticker=          rp["ticker"],
                         company_name=    rp["company_name"],
                         reference_price= rp["avg_cost"],
-                        exit_condition=  "target 10% gain, stop loss at 5%",
+                        exit_condition=  exit_cond,
                         direction=       "buy",
                         confidence=      0.0,
                         source_title=    "Robinhood sync",
@@ -587,7 +607,9 @@ with st.sidebar:
                     st.rerun()
             else:
                 st.error("Could not fetch Robinhood positions. Check credentials in .env.")
-        st.caption("Read-only — imports positions, does not trade. Synced positions get a default 10% gain / 5% stop exit you can edit under My Positions → Manage positions.")
+        st.caption("Read-only — imports positions, does not trade. Each synced position gets a "
+                   "**structure-anchored** exit (target to resistance / ATR stop) when its chart "
+                   "supports one, else a 10% / 5% default — editable under My Positions.")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:
