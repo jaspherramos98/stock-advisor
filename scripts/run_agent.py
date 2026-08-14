@@ -25,7 +25,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
 import config
-from alerts.agentic_options import run_options_agent
+from alerts.agentic_options import run_options_agent, run_paper_agent
 
 _ARM = os.path.join(_REPO, "agent_live.arm")
 _LOG = os.path.join(_REPO, "agent_scheduler.log")
@@ -63,16 +63,20 @@ def _market_open() -> bool:
 
 def main() -> int:
     armed = os.path.exists(_ARM)
-    mode = "LIVE" if armed else "DRY"
+    mode = "LIVE" if armed else "PAPER"
 
     # Heartbeat every cycle so the log always exists + ticks (visible liveness). Off-hours we
-    # don't run the agent (options fill in regular hours) — just a one-line skip.
+    # don't run (option prices move in-session) — just a one-line skip.
     if not _market_open():
         _log(f"[{mode}] heartbeat — market closed, skip")
         return 0
 
-    config.DRY_RUN = not armed
-    out = run_options_agent(verbose=False)
+    # UNARMED → paper simulation (tracks P&L, no money). ARMED → real orders.
+    if armed:
+        config.DRY_RUN = False
+        out = run_options_agent(verbose=False)
+    else:
+        out = run_paper_agent(verbose=False)
 
     status = out.get("status")
     if status:  # halted / no-account / market-closed-live

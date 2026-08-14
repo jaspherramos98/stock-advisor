@@ -137,6 +137,10 @@ analysis/options_strategies.py Options strategy library (Phase 2) — 5 codified
                               pre_earnings_iv (lottery, -EV), post_earnings_momentum, short_dte_momentum,
                               mean_reversion (RSI), catalyst_momentum. applicable_plans (priority w/
                               fallback), size_contracts, option_exit_decision. Pure, unit-tested.
+storage/paper_book.py         Paper-trading book (Phase 2) — virtual cash account the agent trades
+                              against live option prices (zero money): open/close positions, realized +
+                              unrealized P&L, summarize(). Persisted paper_book.json (gitignored). Pure
+                              P&L helpers unit-tested. Agent 'paper' mode = run_paper_agent().
 ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_equity_technical_indicators)
                               + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
                               per ticker, so the technical/earnings strategies have their inputs. Pure
@@ -540,7 +544,10 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    Owned tickers are excluded from ENTRY alerts by design (you're already in).
 5. **History** — Google Sheets export history with charts
 6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
-   Status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit left);
+   **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
+   equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset buttons.
+   **🕯 Live chart**: plotly candlesticks (get_equity_historicals) per ticker/interval with paper BUY/SELL
+   markers + refresh. Then: status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit left);
    **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
    (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
    **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`

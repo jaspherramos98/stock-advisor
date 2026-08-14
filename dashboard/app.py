@@ -2047,6 +2047,123 @@ if True:
                 st.warning("Agentic account not connected (USE_MCP off or not logged in). "
                            "Run scripts/mcp_login.py.")
 
+            # --- Paper trading (simulation) ---
+            st.markdown("### 📊 Paper trading — simulated, zero money at risk")
+            st.caption("The agent trades a VIRTUAL account against live option prices so you can "
+                       "judge the strategies before arming real money. The scheduler runs this every "
+                       "cycle while unarmed.")
+            try:
+                from storage import paper_book as _pb
+                from ingestion import options_data as _pod2
+                _book = _pb.get_book()
+                _marks = {}
+                for _pp in _book.get("open", []):
+                    _q = _pod2.fetch_quote(_pp["option_id"]) or {}
+                    _marks[_pp["option_id"]] = float(_q.get("mark_price") or _q.get("bid_price") or _pp["entry_price"])
+                _ps = _pb.summarize(_book, _marks)
+
+                pm1, pm2, pm3, pm4 = st.columns(4)
+                pm1.metric("Paper equity", f"\\${_ps['equity']:,.2f}",
+                           f"{_ps['total_pnl']:+.2f} ({_ps['total_pnl_pct']:+.1f}%)")
+                pm2.metric("Cash", f"\\${_ps['cash']:,.2f}")
+                pm3.metric("Realized P&L", f"\\${_ps['realized']:,.2f}")
+                pm4.metric("Win rate", f"{_ps['win_rate']:.0f}%" if _ps['win_rate'] is not None
+                           else "—", f"{_ps['n_closed']} closed")
+
+                _pc1, _pc2, _pc3 = st.columns([1, 1, 1])
+                with _pc1:
+                    if st.button("▶ Run paper cycle now", use_container_width=True, key="paper_run"):
+                        from alerts.agentic_options import run_paper_agent
+                        st.session_state["paper_result"] = run_paper_agent(verbose=False)
+                        st.rerun()
+                with _pc2:
+                    _pstart = st.number_input("Reset with $", min_value=1.0, value=float(_book.get("start", 25.0)),
+                                              step=25.0, key="paper_reset_amt")
+                with _pc3:
+                    st.write("")
+                    if st.button("↺ Reset paper book", use_container_width=True, key="paper_reset"):
+                        _pb.reset(_pstart)
+                        st.rerun()
+                if st.session_state.get("paper_result"):
+                    st.caption(f"Last paper cycle: {st.session_state['paper_result']}")
+
+                if _book.get("open"):
+                    st.markdown("**Open (paper)**")
+                    st.dataframe(pd.DataFrame([{
+                        "Ticker": p["ticker"], "Contract": f"{p['strike']:g}{p['right'][0].upper()} {p['expiration']}",
+                        "Strategy": p["strategy"], "Qty": p["qty"], "Entry": f"${p['entry_price']:.2f}",
+                        "Mark": f"${_marks.get(p['option_id'], p['entry_price']):.2f}",
+                        "Unreal $": f"{_pb.position_pnl(p['entry_price'], _marks.get(p['option_id'], p['entry_price']), p['qty'])[0]:+.2f}",
+                        "Unreal %": f"{_pb.position_pnl(p['entry_price'], _marks.get(p['option_id'], p['entry_price']), p['qty'])[1]:+.0f}%",
+                    } for p in _book["open"]]), use_container_width=True, hide_index=True)
+                if _book.get("closed"):
+                    st.markdown("**Closed (paper)**")
+                    st.dataframe(pd.DataFrame([{
+                        "Ticker": c["ticker"], "Contract": f"{c['strike']:g}{c['right'][0].upper()}",
+                        "Entry→Exit": f"${c['entry_price']:.2f}→${c['exit_price']:.2f}",
+                        "P&L $": f"{c['pnl']:+.2f}", "P&L %": f"{c['pnl_pct']:+.0f}%", "Why": c["reason"],
+                    } for c in reversed(_book["closed"][-20:])]), use_container_width=True, hide_index=True)
+                if not _book.get("open") and not _book.get("closed"):
+                    st.caption("No paper trades yet — run a cycle (needs an affordable buy signal, e.g. F/NIO/SNAP).")
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Paper book unavailable: {_e}")
+
+            # --- Live candlestick chart ---
+            st.markdown("### 🕯 Live chart")
+            try:
+                import datetime as _cdt
+                _open_ticks = sorted({p["ticker"] for p in _book.get("open", [])}) if "_book" in dir() else []
+                _chart_ticks = _open_ticks + [t for t in ("F", "NIO", "SNAP", "SPY") if t not in _open_ticks]
+                _csel1, _csel2, _csel3 = st.columns([2, 1, 1])
+                with _csel1:
+                    _csym = st.selectbox("Ticker", _chart_ticks, key="agent_chart_sym")
+                with _csel2:
+                    _civ = st.selectbox("Interval", ["5minute", "10minute", "hour", "day"], key="agent_chart_iv")
+                with _csel3:
+                    st.write("")
+                    _refresh = st.button("🔄 Refresh", use_container_width=True, key="agent_chart_refresh")
+
+                _days = 2 if _civ in ("5minute", "10minute") else (10 if _civ == "hour" else 120)
+
+                @st.cache_data(ttl=60, show_spinner=False)
+                def _agent_candles(sym, interval, days):
+                    from ingestion import robinhood_mcp as _cm
+                    start = (_cdt.datetime.now(_cdt.timezone.utc) - _cdt.timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+                    d = _cm._data(_cm._call_tool("get_equity_historicals",
+                                                 {"symbols": [sym], "start_time": start, "interval": interval}))
+                    res = (d.get("results") or []) if isinstance(d, dict) else []
+                    return res[0].get("bars", []) if res else []
+
+                if _refresh:
+                    _agent_candles.clear()
+                _bars = _agent_candles(_csym, _civ, _days)
+                if _bars:
+                    _df = pd.DataFrame(_bars)
+                    _df["t"] = pd.to_datetime(_df["begins_at"])
+                    for _c in ("open_price", "high_price", "low_price", "close_price"):
+                        _df[_c] = _df[_c].astype(float)
+                    figc = go.Figure(data=[go.Candlestick(
+                        x=_df["t"], open=_df["open_price"], high=_df["high_price"],
+                        low=_df["low_price"], close=_df["close_price"], name=_csym)])
+                    # Overlay this ticker's paper entries/exits as time markers.
+                    for p in _book.get("open", []):
+                        if p["ticker"] == _csym and p.get("opened_at"):
+                            figc.add_vline(x=pd.to_datetime(p["opened_at"]), line_color="#26a69a",
+                                           line_dash="dash", annotation_text=f"BUY {p['strike']:g}{p['right'][0].upper()}")
+                    for c in _book.get("closed", []):
+                        if c["ticker"] == _csym and c.get("closed_at"):
+                            figc.add_vline(x=pd.to_datetime(c["closed_at"]), line_color="#ef5350",
+                                           line_dash="dot", annotation_text=f"SELL {c['pnl']:+.0f}")
+                    figc.update_layout(height=420, margin=dict(l=0, r=0, t=10, b=0),
+                                       xaxis_rangeslider_visible=False, showlegend=False)
+                    st.plotly_chart(figc, use_container_width=True)
+                    st.caption(f"{_csym} · {_civ} · dashed teal = paper BUY, dotted red = paper SELL. "
+                               "Click Refresh for the latest (60s cache).")
+                else:
+                    st.caption(f"No candles for {_csym} ({_civ}).")
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Chart unavailable: {_e}")
+
             # --- LLM credit ledger (token budget halt) ---
             st.markdown("### 💳 LLM credit — token-budget halt")
             st.caption("Anthropic has no live-balance API, so this is a local ledger: set your "

@@ -606,6 +606,36 @@ def test_options_strategies_select_and_size():
     assert size_contracts(1.0, 10.0, 18.0) == 0      # unaffordable
 
 
+def test_paper_book_flow(tmp_path, monkeypatch):
+    from storage import paper_book as pb
+    monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))
+    pb.reset(25.0)
+    assert pb.cash() == 25.0
+    # buy 1 F 15C @ 0.18 = $18
+    assert pb.open_position({"option_id": "o1", "ticker": "F", "right": "call", "strike": 15,
+                             "expiration": "2026-09-18", "strategy": "catalyst_momentum",
+                             "qty": 1, "entry_price": 0.18})
+    assert pb.cash() == 7.0 and pb.open_tickers() == {"F"}
+    # can't afford a $18 second contract with $7 left
+    assert not pb.open_position({"option_id": "o2", "ticker": "NIO", "right": "call", "strike": 5,
+                                 "qty": 1, "entry_price": 0.18})
+    # no duplicate option_id
+    assert not pb.open_position({"option_id": "o1", "ticker": "F", "qty": 1, "entry_price": 0.10})
+    # close at 0.30 → pnl (0.30-0.18)*100 = $12; cash back to 7 + 30 = 37
+    rec = pb.close_position("o1", 0.30, "target")
+    assert rec["pnl"] == 12.0 and pb.cash() == 37.0 and not pb.get_open()
+
+    s = pb.summarize(pb.get_book(), {})
+    assert s["realized"] == 12.0 and s["equity"] == 37.0 and s["total_pnl"] == 12.0 and s["win_rate"] == 100.0
+
+
+def test_paper_position_pnl():
+    from storage.paper_book import position_pnl
+    assert position_pnl(0.20, 0.30, 1) == (10.0, 50.0)
+    assert position_pnl(0.20, 0.10, 2) == (-20.0, -50.0)
+    assert position_pnl(0, 0.10, 1) == (0.0, 0.0)
+
+
 def test_agent_signals_merge_chat_buys(tmp_path, monkeypatch):
     import json as _json
     from alerts import agentic_options as ao

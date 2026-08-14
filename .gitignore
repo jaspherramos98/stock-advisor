@@ -8,6 +8,7 @@ credit_ledger.json
 agentic_halt.flag
 agent_live.arm
 agent_scheduler.log
+paper_book.json
 pipeline_cache_backup.json
 positions.json
 positions_backup_*.json

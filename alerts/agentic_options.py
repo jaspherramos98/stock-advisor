@@ -210,6 +210,97 @@ def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
     return results
 
 
+def _run_paper_exits(verbose: bool) -> list[dict]:
+    from storage import paper_book as pb
+    from ingestion import options_data as od
+    from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
+    results = []
+    for p in pb.get_open():
+        try:
+            q = od.fetch_quote(p["option_id"]) or {}
+            mark = float(q.get("mark_price") or q.get("bid_price") or 0)
+            dte = od._dte(p.get("expiration")) if p.get("expiration") else None
+            action, reason = option_exit_decision(p["entry_price"], mark, dte, DEFAULT_EXIT)
+            if verbose:
+                print(f"  [paper] {p['ticker']} entry {p['entry_price']} mark {mark} dte {dte} → {action} ({reason})")
+            if action == "close":
+                rec = pb.close_position(p["option_id"], exit_price=mark, reason=reason)
+                if rec:
+                    results.append({"close": p["ticker"], "pnl": rec["pnl"], "reason": reason})
+        except Exception as e:  # noqa: BLE001
+            print(f"agentic_options: paper exit failed for {p.get('ticker')} — {e}")
+    return results
+
+
+def _run_paper_entries(verbose: bool) -> list[dict]:
+    from storage import paper_book as pb
+    from ingestion import options_data as od
+    from ingestion import account_reads as ar
+    from analysis.options_strategies import applicable_plans, size_contracts
+    from ingestion.signal_context import enrich
+
+    regime = _regime()
+    held = pb.open_tickers()
+    results = []
+    for sig in _signals():
+        ticker = (sig.get("ticker") or "").upper()
+        if not ticker or ticker in held:
+            continue
+        cash = pb.cash()
+        if cash <= 0:
+            break
+        sig = enrich(sig)
+        plans = applicable_plans(sig, regime)
+        if not plans:
+            continue
+        spot = (ar.quotes([ticker]).get(ticker) or {}).get("price")
+        if not spot:
+            continue
+        plan, contract = None, None
+        for cand in plans:
+            c = od.select_contract(ticker, spot, cand["right"], cand["dte_min"],
+                                   cand["dte_max"], cand["otm_pct"], max_premium=cash)
+            if c:
+                plan, contract = cand, c
+                break
+        if not contract:
+            continue
+        n = size_contracts(plan["alloc_pct"], cash, contract["cost_1x"])
+        if n < 1:
+            continue
+        ok = pb.open_position({
+            "option_id": contract["instrument_id"], "ticker": ticker, "right": plan["right"],
+            "strike": contract["strike"], "expiration": contract["expiration"],
+            "strategy": plan["strategy"], "qty": n, "entry_price": round(contract["ask"], 2)})
+        if ok:
+            held.add(ticker)
+            results.append({"ticker": ticker, "strategy": plan["strategy"], "qty": n,
+                            "contract": f"{contract['strike']:g}{plan['right'][0].upper()} {contract['expiration']}",
+                            "cost": round(contract["ask"] * 100 * n, 2)})
+            if verbose:
+                print(f"  [paper] BUY {n} {ticker} {contract['strike']:g}{plan['right'][0].upper()} "
+                      f"@ {contract['ask']} = ${contract['ask']*100*n:.0f} ({plan['strategy']})")
+    return results
+
+
+def run_paper_agent(verbose: bool = True) -> dict:
+    """Simulation cycle — exits then entries against the paper book (storage.paper_book). No real
+    orders, no real money; uses LIVE option quotes so P&L is realistic. Honors the kill switch.
+    This is what the scheduler runs while UNARMED, building a track record to judge the strategies."""
+    from ingestion import robinhood_mcp as mcp
+    if _halted():
+        return {"status": "halted", "reason": "kill switch present"}
+    if not mcp.is_available():
+        return {"status": "skipped", "reason": "USE_MCP off"}
+    if verbose:
+        print("== Paper options agent ==\n-- paper exits --")
+    exits = _run_paper_exits(verbose)
+    if verbose:
+        print("-- paper entries --")
+    entries = _run_paper_entries(verbose)
+    return {"entries": entries, "exits": exits, "mode": "paper"}
+
+
 def run_options_agent(verbose: bool = True) -> dict:
     """One full cycle: exits first (free capital), then entries. Honors the kill switch, market
     hours (for live placement), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}."""
