@@ -629,6 +629,21 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
+### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)
+Agentic account approved for option_level_2 (2026-08-14). Built + verified in DRY_RUN:
+- `ingestion/options_data.py` (contract selection), `trading_guards.OptionOrderIntent`/
+  `check_option_order`, `robinhood_mcp.place_option_order` (leg schema, review-first, is_error, agentic).
+- `analysis/options_strategies.py` (short_dte_momentum + catalyst_momentum, exit policy).
+- `alerts/agentic_options.py` `run_options_agent()` (entries+exits, kill switch `agentic_halt.flag`,
+  market-hours gate) + `scripts/agentic_options.py`.
+Uncapped position size (disposable pilot); guards are correctness-only. 71 tests. Verified DRY_RUN end
+to end (F 15C via strategy fallback, review clean, logged not sent).
+**Remaining:** (1) run a few DRY_RUN cycles during market hours + inspect; (2) verify exit-path field
+mapping against a REAL option position (avg_open_price/expiration shapes unconfirmed — no positions
+existed at build); (3) tiny live cycle (DRY_RUN off, market hours); (4) scheduler (Task Scheduler,
+market-hours gated, like run_checks) + document the kill switch. Blunt: uncapped short-DTE options on an
+unproven signal is high-variance / likely -EV — pilot can go to zero by design.
+
 ### R26. Agentic control tab (PARKED — future feature)
 A dashboard tab to control the agentic account directly: account view (buying power/positions/open
 orders), a deterministic order ticket (ticker/side/type/$ or shares/price → review_equity_order →
