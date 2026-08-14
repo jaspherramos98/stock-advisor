@@ -87,6 +87,10 @@ def _log_chat_usage(usage, sent_messages):
             f"cache_read={cache_read} cache_write={cache_write} "
             f"msgs_sent={sent_messages}"
         )
+        # Decrement the local credit ledger (Anthropic exposes no live balance API).
+        from llm_budget import cost_of, record_cost
+        record_cost(cost_of(CLAUDE_MODEL, usage.get("input_tokens", 0),
+                            usage.get("output_tokens", 0), cache_read))
     except Exception:
         pass
 
@@ -693,7 +697,7 @@ if True:
                 st.session_state.welcome_dismissed = True
                 st.rerun()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History", "🤖 Agent"])
 
     # =========================================================
     # TAB 1 — Today's Recommendations
@@ -2013,6 +2017,178 @@ if True:
                 use_container_width=True,
                 hide_index=True,
             )
+
+
+    with tab6:
+        st.subheader("🤖 Agentic options agent")
+        st.caption("Autonomous options trader on the **isolated Agentic pilot** account only "
+                   "(never your main book). Observe what it holds and would do, override any "
+                   "decision, and control run mode + the kill switch. Position size is uncapped "
+                   "by design — this is a disposable-capital experiment, high-variance / likely -EV.")
+
+        import config as _cfg
+        import llm_budget as _lb
+        try:
+            from ingestion import robinhood_mcp as _amcp
+            from ingestion import options_data as _aod
+            from alerts.agentic_options import run_options_agent, _HALT_FLAG, _run_exits
+            from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
+            from trading_guards import OptionOrderIntent, GuardState
+            from ingestion import mcp_auth as _amcpauth
+            _agent_ok = True
+        except Exception as _e:  # noqa: BLE001
+            st.error(f"Agent modules unavailable: {_e}")
+            _agent_ok = False
+
+        if _agent_ok:
+            _acct = _amcp.agentic_account_number() if _amcp.is_available() else None
+            _halted = os.path.exists(_HALT_FLAG)
+            _agbp = _amcp.fetch_buying_power(_acct) if _acct else None
+            _led = _lb.get_state()
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Mode", "🔴 LIVE-capable" if not _cfg.DRY_RUN else "🟢 DRY_RUN")
+            m2.metric("Kill switch", "⛔ HALTED" if _halted else "▶ active")
+            m3.metric("Agentic buying power", f"\\${_agbp:,.2f}" if _agbp is not None else "—")
+            m4.metric("LLM credit left", f"\\${_led['remaining']:,.2f}"
+                      if _led["balance"] > 0 else "not set")
+
+            if not _acct:
+                st.warning("Agentic account not connected (USE_MCP off or not logged in). "
+                           "Run scripts/mcp_login.py.")
+
+            # --- LLM credit ledger (token budget halt) ---
+            st.markdown("### 💳 LLM credit — token-budget halt")
+            st.caption("Anthropic has no live-balance API, so this is a local ledger: set your "
+                       "current console balance; Argus subtracts each Claude call's cost and "
+                       "**halts new agent entries + chat when the remainder hits the reserve** "
+                       "(default \\$0.50), leaving leeway to top up.")
+            lc1, lc2, lc3 = st.columns([2, 1, 1])
+            with lc1:
+                _newbal = st.number_input("Set balance from console ($)", min_value=0.0,
+                                          value=float(_led["balance"]), step=1.0, key="agent_setbal")
+            with lc2:
+                _newres = st.number_input("Reserve ($)", min_value=0.0,
+                                          value=float(_led["reserve"]), step=0.25, key="agent_setres")
+            with lc3:
+                st.write("")
+                if st.button("💾 Update ledger", use_container_width=True):
+                    _lb.set_balance(_newbal, _newres)
+                    st.rerun()
+            if _led["balance"] > 0:
+                st.caption(f"Spent since set: \\${_led['spent']:.4f} · remaining "
+                           f"\\${_led['remaining']:.2f} · reserve \\${_led['reserve']:.2f}")
+                if _led["remaining"] <= _led["reserve"]:
+                    st.error("⛔ Credit at/under reserve — new agent entries + chat are halted. "
+                             "Top up, then update the balance above.")
+
+            # --- controls ---
+            st.markdown("### 🎛 Controls")
+            k1, k2 = st.columns(2)
+            with k1:
+                if _halted:
+                    if st.button("▶ Remove kill switch (resume)", use_container_width=True):
+                        try:
+                            os.remove(_HALT_FLAG)
+                        except OSError:
+                            pass
+                        st.rerun()
+                else:
+                    if st.button("⛔ HALT agent (kill switch)", use_container_width=True, type="primary"):
+                        with open(_HALT_FLAG, "w", encoding="utf-8") as _f:
+                            _f.write("halted from dashboard\n")
+                        st.rerun()
+            with k2:
+                if st.button("🔮 Preview cycle (dry run — places nothing)", use_container_width=True,
+                             disabled=not _acct):
+                    _old = _cfg.DRY_RUN
+                    _cfg.DRY_RUN = True
+                    try:
+                        st.session_state["agent_preview"] = run_options_agent(verbose=False)
+                    finally:
+                        _cfg.DRY_RUN = _old
+                    st.rerun()
+
+            # LIVE run — explicit, guarded, scoped (never flips DRY_RUN process-wide).
+            with st.expander("🔴 Run a LIVE cycle (places REAL option orders)"):
+                st.warning("This places real orders on the agentic account with real money. "
+                           "Uncapped size. Only runs during market hours.")
+                _confirm = st.checkbox("I understand — trade real money now", key="agent_live_confirm")
+                if st.button("Execute LIVE cycle", disabled=not (_confirm and _acct and not _halted)):
+                    _old = _cfg.DRY_RUN
+                    _cfg.DRY_RUN = False
+                    try:
+                        st.session_state["agent_live_result"] = run_options_agent(verbose=False)
+                    finally:
+                        _cfg.DRY_RUN = _old
+                    st.rerun()
+
+            if st.session_state.get("agent_preview"):
+                st.markdown("#### 🔮 Preview result (dry run)")
+                st.json(st.session_state["agent_preview"])
+            if st.session_state.get("agent_live_result"):
+                st.markdown("#### 🔴 Last LIVE cycle result")
+                st.json(st.session_state["agent_live_result"])
+
+            # --- observe open option positions + per-position override ---
+            st.markdown("### 📂 Open option positions (agentic) — override exits")
+            _positions = []
+            if _acct:
+                try:
+                    _pdata = _amcp._data(_amcp._unwrap_tool_result(_amcpauth.call_tool(
+                        "get_option_positions", {"account_number": _acct, "nonzero": True})))
+                    _positions = _pdata.get("positions", []) if isinstance(_pdata, dict) else []
+                except Exception as _e:  # noqa: BLE001
+                    st.caption(f"Could not read option positions: {_e}")
+            if not _positions:
+                st.caption("No open option positions on the agentic account.")
+            for _p in _positions:
+                try:
+                    _oid = _p.get("option_id") or _p.get("option") or _p.get("id")
+                    _qty = int(float(_p.get("quantity") or 0))
+                    if not _oid or _qty < 1:
+                        continue
+                    _entry = float(_p.get("average_open_price") or _p.get("average_price") or 0)
+                    if _entry > 5:
+                        _entry /= 100.0
+                    _q = _aod.fetch_quote(_oid) or {}
+                    _mark = float(_q.get("mark_price") or _q.get("bid_price") or 0)
+                    _exp = _p.get("expiration_date") or _p.get("expiration")
+                    _dte = _aod._dte(_exp) if _exp else None
+                    _act, _why = option_exit_decision(_entry, _mark, _dte, DEFAULT_EXIT)
+                    _pnl = ((_mark - _entry) / _entry * 100) if _entry else 0.0
+                    _sym = _p.get("chain_symbol") or _p.get("symbol") or "?"
+                    _rt = (_p.get("type") or "call").lower()
+                    cc1, cc2 = st.columns([4, 1])
+                    with cc1:
+                        st.markdown(
+                            f"**{_sym} {_rt.upper()}** ×{_qty} · exp {_exp} (DTE {_dte}) · "
+                            f"entry \\${_entry:.2f} → mark \\${_mark:.2f} "
+                            f"(**{_pnl:+.0f}%**) · agent: **{_act}** ({_why})")
+                    with cc2:
+                        if st.button("Close now", key=f"agent_close_{_oid}", use_container_width=True):
+                            _intent = OptionOrderIntent(
+                                underlying=_sym, option_id=_oid, right=_rt, side="sell",
+                                position_effect="close", quantity=_qty,
+                                price=round(float(_q.get("bid_price") or _mark), 2),
+                                direction="credit", expiration=_exp,
+                                reason="manual override close (dashboard)",
+                                client_id=f"uiclose-{_oid}")
+                            _old = _cfg.DRY_RUN
+                            _cfg.DRY_RUN = False   # a manual override click IS the confirmation
+                            try:
+                                _res = _amcp.place_option_order(
+                                    _intent, GuardState(start_equity=_agbp or 0),
+                                    buying_power=_agbp or 0, account_number=_acct)
+                            finally:
+                                _cfg.DRY_RUN = _old
+                            st.success(f"Close {_res['status']}: {_res['reason']}")
+                            st.rerun()
+                except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
+                    st.caption(f"position render error: {_e}")
+
+            st.caption("Exits are POLL-based: the agent re-checks each cycle (not a resting stop). "
+                       "Timeliness depends on how often the cycle runs.")
 
 
 # =========================================================

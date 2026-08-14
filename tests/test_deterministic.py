@@ -567,6 +567,22 @@ def test_mcp_normalize_quotes_shape():
     assert out["AAPL"]["price"] == 305.31 and out["MSFT"] is None
 
 
+def test_llm_budget_ledger(tmp_path, monkeypatch):
+    import llm_budget as lb
+    monkeypatch.setattr(lb, "_LEDGER", str(tmp_path / "ledger.json"))
+    # unset → can_spend True (opt-in), remaining 0
+    assert lb.can_spend() is True
+    lb.set_balance(5.0, reserve=0.5)
+    assert lb.get_state()["remaining"] == 5.0 and lb.can_spend()
+    lb.record_cost(4.0)
+    assert lb.get_state()["remaining"] == 1.0 and lb.can_spend()
+    lb.record_cost(0.6)                       # remaining 0.4 ≤ reserve 0.5
+    assert lb.get_state()["remaining"] == 0.4 and lb.can_spend() is False
+    # cost math: 1M in @ $3 + 1M out @ $15 = $18; cache read billed 0.1×
+    assert lb.cost_of("claude-sonnet-4-6", 1_000_000, 1_000_000) == 18.0
+    assert lb.cost_of("claude-sonnet-4-6", 1_000_000, 0, cache_read_tokens=1_000_000) == 3.3
+
+
 def test_options_strategies_select_and_size():
     from analysis.options_strategies import (
         select_strategy, size_contracts, catalyst_momentum, short_dte_momentum)

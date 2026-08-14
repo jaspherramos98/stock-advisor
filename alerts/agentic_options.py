@@ -204,8 +204,24 @@ def run_options_agent(verbose: bool = True) -> dict:
     bp = mcp.fetch_buying_power(acct) or 0.0
     if verbose:
         print(f"== Autonomous options agent ==  DRY_RUN={config.DRY_RUN} | agentic BP=${bp:.2f}\n-- exits --")
+    # Exits always run (token-free, capital-protecting).
     exits = _run_exits(mcp, acct, bp, verbose)
     bp = mcp.fetch_buying_power(acct) or bp  # refresh after any closes
+
+    # Entries depend on fresh Argus signals (which cost tokens). Halt NEW entries when the LLM
+    # credit ledger is at/under its reserve, so the user has leeway to top up (per request:
+    # stop on token balance, not just buying power). Exits above still ran.
+    try:
+        from llm_budget import can_spend, get_state
+        if not can_spend():
+            st = get_state()
+            if verbose:
+                print(f"-- entries SKIPPED: LLM credit ${st['remaining']:.2f} ≤ reserve ${st['reserve']:.2f} --")
+            return {"entries": [], "exits": exits,
+                    "entries_halted": f"LLM credit ${st['remaining']:.2f} ≤ reserve ${st['reserve']:.2f}"}
+    except Exception as e:  # noqa: BLE001 — ledger must never block exits/reads
+        print(f"agentic_options: credit-ledger check failed — {e}")
+
     if verbose:
         print("-- entries --")
     entries = _run_entries(mcp, acct, bp, verbose)

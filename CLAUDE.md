@@ -103,6 +103,10 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
                               flags USE_MCP/DRY_RUN + ROBINHOOD_MCP_URL (R25) — single source of truth
+llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
+                              console balance, record_cost decrements per call, can_spend() halts new
+                              agent entries + chat when remaining ≤ reserve (default $0.50). Persists to
+                              credit_ledger.json (gitignored). Wired into _log_chat_usage + agentic_options.
 chat_budget.py                Chat token budget: history window + max_tokens + the system-prompt
                               char floor that keeps prompt caching alive (R23). Separate module so
                               it's testable without importing app.py (which boots Streamlit)
@@ -524,6 +528,14 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    - Then the original Finnhub ticker watchlist editor per asset type.
    Owned tickers are excluded from ENTRY alerts by design (you're already in).
 5. **History** — Google Sheets export history with charts
+6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
+   Status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit left);
+   **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
+   (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
+   **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`
+   only around the call, never process-wide; **open option positions** with live P&L + the agent's
+   exit decision (hold/close + reason) and a per-position **Close now** override. Exits are poll-based
+   (re-checked each cycle, not a resting stop).
 
 ## Known Issues / Constraints
 - `robin_stocks` is unofficial — if Robinhood changes their app it may break; only edit `ingestion/robinhood.py`
