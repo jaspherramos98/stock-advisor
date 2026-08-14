@@ -629,6 +629,16 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
+### R26. Agentic control tab (PARKED — future feature)
+A dashboard tab to control the agentic account directly: account view (buying power/positions/open
+orders), a deterministic order ticket (ticker/side/type/$ or shares/price → review_equity_order →
+confirm → place, DRY_RUN-aware), and a "🛡️ Protect positions" button (runs
+`alerts.agentic_stops.sync_protective_stops`). Design A / confirm-first — NOT a free-text prompt agent
+(that's Design B: ~20x tokens + LLM order-misfire risk). Optional later layer: NL → drafts an order
+ticket the user confirms (LLM suggests, never auto-executes). Stocks first; options deferred (R5).
+Parked 2026-08-14 — revisit after the pilot proves the stop flow with a real agentic position.
+
+
 ### R25b. Robinhood MCP — authenticated, reads wired + proven; dashboard swap + exits pending
 **DONE (2026-08-14):** funded a dedicated Agentic account + authenticated via `scripts/mcp_login.py`
 (DCR + PKCE + refresh token → 429 dead). All gates resolved (see CLAUDE.md R25): native stop orders
