@@ -2026,8 +2026,13 @@ if True:
             _agbp = _amcp.fetch_buying_power(_acct) if _acct else None
             _led = _lb.get_state()
 
+            # The scheduler decides live-vs-paper by the ARM FILE, not config.DRY_RUN (which is a
+            # static default the scheduler overrides at runtime). So show the armed state — that's
+            # what actually governs whether the agent trades real money.
+            _arm_path = os.path.join(os.path.dirname(_HALT_FLAG), "agent_live.arm")
+            _armed = os.path.exists(_arm_path)
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Mode", "🔴 LIVE-capable" if not _cfg.DRY_RUN else "🟢 DRY_RUN")
+            m1.metric("Agent mode", "🔴 ARMED — LIVE" if _armed else "🟢 PAPER (unarmed)")
             m2.metric("Kill switch", "⛔ HALTED" if _halted else "▶ active")
             m3.metric("Agentic buying power", f"\\${_agbp:,.2f}" if _agbp is not None else "—")
             m4.metric("LLM credit left", f"\\${_led['remaining']:,.2f}"
