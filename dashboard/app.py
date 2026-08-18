@@ -2134,32 +2134,62 @@ if True:
                 _bars = _agent_candles(_csym, _civ, _days)
                 if _bars:
                     _df = pd.DataFrame(_bars)
-                    _df["t"] = pd.to_datetime(_df["begins_at"])
+                    # Candle times come back UTC; show them in the user's Pacific time so they line
+                    # up with the paper timestamps (opened_at/closed_at are naive local).
+                    _df["t"] = (pd.to_datetime(_df["begins_at"], utc=True)
+                                .dt.tz_convert("America/Los_Angeles").dt.tz_localize(None))
                     for _c in ("open_price", "high_price", "low_price", "close_price"):
                         _df[_c] = _df[_c].astype(float)
                     figc = go.Figure(data=[go.Candlestick(
                         x=_df["t"], open=_df["open_price"], high=_df["high_price"],
                         low=_df["low_price"], close=_df["close_price"], name=_csym)])
-                    # Overlay this ticker's paper entries/exits as time markers. Use add_shape +
-                    # add_annotation (NOT add_vline — it does Timestamp arithmetic that pandas 3.0
-                    # rejects). Pass the raw ISO string so plotly parses it on the datetime axis.
-                    def _marker(_ts, _color, _dash, _label, _yanchor):
-                        figc.add_shape(type="line", xref="x", yref="paper", x0=_ts, x1=_ts,
-                                       y0=0, y1=1, line=dict(color=_color, dash=_dash, width=1))
-                        figc.add_annotation(x=_ts, yref="paper", y=1, text=_label, showarrow=False,
-                                            font=dict(color=_color, size=10), yanchor=_yanchor)
+
+                    # WHERE the bot bought/sold: a ▲ (buy) / ▼ (sell) placed on the underlying's
+                    # price at that moment. The bot trades the option; the marker sits on the
+                    # underlying candle so you can see the entry/exit point on the chart.
+                    def _price_at(_ts):
+                        try:
+                            _tt = pd.to_datetime(_ts)
+                        except Exception:  # noqa: BLE001
+                            return None
+                        _prior = _df[_df["t"] <= _tt]
+                        return float(_prior.iloc[-1]["close_price"]) if len(_prior) else None
+
+                    _bx, _by, _bl = [], [], []
                     for p in _book.get("open", []):
                         if p["ticker"] == _csym and p.get("opened_at"):
-                            _marker(p["opened_at"], "#26a69a", "dash",
-                                    f"BUY {p['strike']:g}{p['right'][0].upper()}", "bottom")
+                            _y = _price_at(p["opened_at"])
+                            if _y is not None:
+                                _bx.append(pd.to_datetime(p["opened_at"])); _by.append(_y)
+                                _bl.append(f"BUY {p['qty']}× {p['strike']:g}{p['right'][0].upper()} "
+                                           f"{p.get('expiration','')} @ ${p['entry_price']:.2f} ({p.get('strategy','')})")
+                    _sx, _sy, _sl = [], [], []
                     for c in _book.get("closed", []):
                         if c["ticker"] == _csym and c.get("closed_at"):
-                            _marker(c["closed_at"], "#ef5350", "dot", f"SELL {c['pnl']:+.0f}", "top")
-                    figc.update_layout(height=420, margin=dict(l=0, r=0, t=10, b=0),
-                                       xaxis_rangeslider_visible=False, showlegend=False)
+                            _y = _price_at(c["closed_at"])
+                            if _y is not None:
+                                _sx.append(pd.to_datetime(c["closed_at"])); _sy.append(_y)
+                                _sl.append(f"SELL {c['strike']:g}{c['right'][0].upper()} · "
+                                           f"{c['pnl']:+.2f} ({c['pnl_pct']:+.0f}%) · {c.get('reason','')}")
+                    if _bx:
+                        figc.add_trace(go.Scatter(
+                            x=_bx, y=_by, mode="markers", name="BUY", text=_bl,
+                            marker=dict(symbol="triangle-up", color="#26a69a", size=15,
+                                        line=dict(color="white", width=1.5)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+                    if _sx:
+                        figc.add_trace(go.Scatter(
+                            x=_sx, y=_sy, mode="markers", name="SELL", text=_sl,
+                            marker=dict(symbol="triangle-down", color="#ef5350", size=15,
+                                        line=dict(color="white", width=1.5)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+                    figc.update_layout(height=440, margin=dict(l=0, r=0, t=10, b=0),
+                                       xaxis_rangeslider_visible=False, showlegend=True,
+                                       legend=dict(orientation="h", y=1.02, x=0))
                     st.plotly_chart(figc, use_container_width=True)
-                    st.caption(f"{_csym} · {_civ} · dashed teal = paper BUY, dotted red = paper SELL. "
-                               "Click Refresh for the latest (60s cache).")
+                    st.caption(f"{_csym} · {_civ} · times PT · ▲ teal = bot BUY, ▼ red = bot SELL "
+                               "(hover for contract + P&L). The marker sits on the underlying price at "
+                               "trade time. Refresh for latest (60s cache).")
                 else:
                     st.caption(f"No candles for {_csym} ({_civ}).")
             except Exception as _e:  # noqa: BLE001
