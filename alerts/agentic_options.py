@@ -60,6 +60,11 @@ def _regime() -> dict:
 # enough to clear catalyst_momentum (≥70) but below the short_dte/pre-earnings bars (75-80).
 CHAT_BUY_CONVICTION = 72
 
+# When True, after pipeline + chat signals, scan a preset of affordable cheap-underlying names
+# for a technical lean (ingestion.affordable_scout) so the agent isn't idle when every pipeline
+# idea is too expensive for the pilot. Ranked LAST → only fills leftover budget.
+SCOUT_AFFORDABLE = True
+
 
 def _signals() -> list[dict]:
     """Directional entry signals for the agent, deduped by ticker:
@@ -88,6 +93,18 @@ def _signals() -> list[dict]:
                             "conviction": CHAT_BUY_CONVICTION, "source": "chat"})
     except Exception as e:  # noqa: BLE001 — chat merge is additive; never break pipeline signals
         print(f"agentic_options: chat-suggestion merge failed — {e}")
+
+    # 3. Affordable-universe scout (last resort so the pilot isn't idle on unaffordable pipelines).
+    if SCOUT_AFFORDABLE:
+        try:
+            from ingestion.affordable_scout import scout_signals
+            for s in scout_signals():
+                t = (s.get("ticker") or "").upper()
+                if t and t not in seen:
+                    seen.add(t)
+                    out.append(s)
+        except Exception as e:  # noqa: BLE001
+            print(f"agentic_options: affordable scout failed — {e}")
     return out
 
 

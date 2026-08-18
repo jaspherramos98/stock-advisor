@@ -92,6 +92,9 @@ def enrich(signal: dict) -> dict:
     if not ticker:
         return dict(signal)
     enriched = dict(signal)
-    enriched["rsi"] = latest_rsi(ticker)
-    enriched.update(earnings_context(ticker))
+    # Preserve values the caller already has (e.g. the scout's RSI) to avoid a re-fetch.
+    if enriched.get("rsi") is None:
+        enriched["rsi"] = latest_rsi(ticker)
+    if "days_to_earnings" not in enriched:
+        enriched.update(earnings_context(ticker))
     return enriched

@@ -606,6 +606,15 @@ def test_options_strategies_select_and_size():
     assert size_contracts(1.0, 10.0, 18.0) == 0      # unaffordable
 
 
+def test_affordable_scout_lean():
+    from ingestion.affordable_scout import _lean_from_rsi
+    assert _lean_from_rsi(30) == ("buy", 65)      # oversold → mean_reversion buy
+    assert _lean_from_rsi(72) == ("short", 65)    # overbought → mean_reversion short
+    assert _lean_from_rsi(58) == ("buy", 70)      # momentum → catalyst_momentum
+    assert _lean_from_rsi(45) is None             # chop → skip
+    assert _lean_from_rsi(None) is None
+
+
 def test_paper_book_flow(tmp_path, monkeypatch):
     from storage import paper_book as pb
     monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))

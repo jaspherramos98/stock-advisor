@@ -141,6 +141,11 @@ storage/paper_book.py         Paper-trading book (Phase 2) — virtual cash acco
                               against live option prices (zero money): open/close positions, realized +
                               unrealized P&L, summarize(). Persisted paper_book.json (gitignored). Pure
                               P&L helpers unit-tested. Agent 'paper' mode = run_paper_agent().
+ingestion/affordable_scout.py Affordable-universe scout (Phase 2) — when every pipeline idea is too
+                              expensive for the pilot, scans a preset of liquid CHEAP underlyings and
+                              emits technical buy/short signals from RSI (source='scout', ranked LAST so
+                              it only fills leftover budget). Deterministic, no tokens; _lean_from_rsi
+                              unit-tested. Toggle agentic_options.SCOUT_AFFORDABLE.
 ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_equity_technical_indicators)
                               + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
                               per ticker, so the technical/earnings strategies have their inputs. Pure
