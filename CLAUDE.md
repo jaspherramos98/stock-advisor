@@ -187,10 +187,7 @@ budget.json                   DEPRECATED — no longer read/written. Budget is n
 ### Pipeline Flow
 1. `main.py` runs parallel ingestion via `ThreadPoolExecutor` (max_workers=5)
 2. `validation/scorer.py` scores each item by source weight
-3. Deduplicated stories sent to Claude — **per-class quotas (R28)**: `_deduplicate_by_asset_type` gives
-   each ENABLED class `STORIES_PER_CLASS` (12) stories (so ETF/crypto aren't crowded out); the WATCH
-   FLOOR asks for ~`RECS_PER_CLASS` (10) recs PER enabled class; `max_tokens=8000` for the larger output.
-   (`MAX_STORIES`=15 still governs the plain single-class `_deduplicate`.) Plus per-ticker TECHNICAL INDICATORS
+3. Top 15 deduplicated stories (`MAX_STORIES`, analysis/claude_analyst.py) sent to Claude, plus per-ticker TECHNICAL INDICATORS
    (RSI/MACD/SMA50-200/52w/volume from ~1y of prices) and FUNDAMENTALS (valuation,
    growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
@@ -517,9 +514,8 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   run_checks.bat CRLF.
 
 ## Dashboard Tabs
-1. **Today's Recommendations** — **per-class tables (R28)**: one allocation table per enabled asset
-   class (📈 Stocks / 📊 ETFs / 🪙 Crypto), split by `asset_type` via `_render_alloc_table`, each with
-   HR gold highlighting + stock detail expanders,
+1. **Today's Recommendations** — single allocation table (`_render_alloc_table`) with HR gold
+   highlighting, stock detail expanders,
    add to positions. **Table layout (R14):** 12 columns sized in explicit pixels so the whole table
    fits a normal desktop window with NO horizontal scroll; `row_height=70` (double) lets Buy/Sell
    wrap to 2 lines; `height` is set from the row count so every row shows without an inner scrollbar.

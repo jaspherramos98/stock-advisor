@@ -15,12 +15,6 @@ load_dotenv()
 # asset-type slot split in _deduplicate_by_asset_type scales off this.
 MAX_STORIES = 15
 
-# Per-class coverage (R28): when multiple asset classes are enabled, feed the analyst
-# STORIES_PER_CLASS stories from EACH so ETF/crypto news isn't crowded out by stocks, and
-# ask for ~RECS_PER_CLASS recommendations per enabled class (separate tables in the UI).
-STORIES_PER_CLASS = 12   # stories per enabled class sent to Claude (room to pick ~10 recs)
-RECS_PER_CLASS = 10      # target recommendations per enabled class (watch floor, per class)
-
 
 def _deduplicate(items: list[dict], max_stories: int = MAX_STORIES) -> list[dict]:
     """Removes near-duplicate stories and returns up to max_stories items."""
@@ -54,15 +48,30 @@ def _deduplicate_by_asset_type(
     Deduplicates while reserving slots for each enabled asset type.
     Prevents high-scoring stock news from crowding out ETF/crypto news.
 
-    Per-class quota (R28): each ENABLED class gets STORIES_PER_CLASS stories (uniform), so
-    ETF/crypto coverage doesn't get crowded out by high-scoring stock news. Disabled classes
-    get 0. This drives the per-class recommendation tables.
+    Slot allocation out of MAX_STORIES (25):
+    - Stocks only:              25 stock slots
+    - Stocks + ETFs:            17 stock, 8 ETF
+    - Stocks + Crypto:          17 stock, 8 crypto
+    - Stocks + ETFs + Crypto:   13 stock, 6 ETF, 6 crypto
     """
-    slots = {
-        "stocks": STORIES_PER_CLASS if include_stocks else 0,
-        "etfs":   STORIES_PER_CLASS if include_etfs   else 0,
-        "crypto": STORIES_PER_CLASS if include_crypto  else 0,
-    }
+    enabled = sum([include_stocks, include_etfs, include_crypto])
+
+    if enabled == 1:
+        slots = {
+            "stocks": MAX_STORIES if include_stocks else 0,
+            "etfs":   MAX_STORIES if include_etfs   else 0,
+            "crypto": MAX_STORIES if include_crypto  else 0,
+        }
+    elif enabled == 2:
+        major = 17
+        minor = 8
+        slots = {
+            "stocks": major if include_stocks else 0,
+            "etfs":   (minor if include_etfs else 0) if include_stocks else major,
+            "crypto": (minor if include_crypto else 0) if include_stocks else major,
+        }
+    else:
+        slots = {"stocks": 13, "etfs": 6, "crypto": 6}
 
     def get_asset_type(item: dict) -> str:
         source_type = item.get("source_type", "")
@@ -705,11 +714,6 @@ def run_analysis(
 
     asset_scope = " and ".join(asset_instructions) if asset_instructions else "US stocks"
 
-    # Per-class watch floor (R28): name the enabled classes so the floor is stated per class.
-    _cls = [n for n, f in (("stocks", include_stocks), ("ETFs", include_etfs),
-                           ("crypto", include_crypto)) if f]
-    classes_str = ", ".join(_cls) if _cls else "stocks"
-
     system_prompt = f"""You are a sharp, disciplined investment banker running a
 personal trading desk for a single client. Your mandate is to GROW THE CLIENT'S
 CAPITAL — but you keep this job by NOT losing money, and the fastest way to lose
@@ -798,12 +802,10 @@ SIGNAL QUALITY — BE RUTHLESSLY SELECTIVE:
   Weak catalysts (use 'watch' or skip): analyst upgrades, general sector optimism, vague macro tailwinds.
 - Return 'watch' for sound theses with uncertain timing OR catalysts that already moved the price.
 - Skip (omit) anything with weak evidence, unverified sources, or no concrete detail to fact-check.
-WATCH FLOOR — ALWAYS SHOW YOUR WORK, PER ASSET CLASS (do not return a near-empty list):
-- Enabled asset classes this run: {classes_str}. Return at least {RECS_PER_CLASS} items PER ENABLED
-  CLASS (buys + shorts + watches) — e.g. ~{RECS_PER_CLASS} stocks AND ~{RECS_PER_CLASS} ETFs AND
-  ~{RECS_PER_CLASS} crypto when all three are on — each drawn from that class's strongest, most
-  relevant, NON-owned stories. Tag every item with the correct `asset_type` so they table separately.
-  The point is to show the user your read on the WHOLE day PER CLASS, not just trades. A 'watch' = "notable, but I'd wait for X before acting" — it commits NO capital, so
+WATCH FLOOR — ALWAYS SHOW YOUR WORK (do not return a near-empty list):
+- ALWAYS return at least 10 items total (buys + shorts + watches), drawn from the strongest, most
+  relevant, NON-owned stories you were given. The point is to show the user your read on the WHOLE day,
+  not just trades. A 'watch' = "notable, but I'd wait for X before acting" — it commits NO capital, so
   surfacing it is low-risk and informative. A blank/near-blank result is NOT acceptable on a normal news
   day; it just leaves the user blind.
 - BUYS stay strict and few: only genuinely actionable, un-priced-in, fact-based catalysts qualify
@@ -912,9 +914,8 @@ Each object in the array must have exactly these fields:
   "highly_recommended": boolean
 }}
 
-Per the WATCH FLOOR, return at least {RECS_PER_CLASS} items PER ENABLED CLASS ({classes_str}) —
-buys + shorts + watches — on a normal news day. Only return an empty array if there is genuinely no
-relevant, fact-based market news at all — which is very rare."""
+Per the WATCH FLOOR, return at least 10 items (buys + shorts + watches) on a normal news day. Only
+return an empty array if there is genuinely no relevant, fact-based market news at all — which is very rare."""
 
     user_prompt = f"""Here are today's validated news items. Analyze them and return
 your recommendations as a JSON array.
@@ -926,7 +927,7 @@ NEWS ITEMS:
     try:
         message = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=8000,   # per-class output (up to ~30 recs) needs more room than a single list
+            max_tokens=4000,
             messages=[{"role": "user", "content": user_prompt}],
             system=system_prompt,
         )

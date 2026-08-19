@@ -812,18 +812,7 @@ if True:
                 a.setdefault("conviction", None)
                 a.setdefault("entry_trigger", "")
 
-            # Per-class tables (R28): one table per asset class so each checkbox gets its own
-            # ~10 ideas instead of all classes sharing one crowded list.
-            _cls_labels = [("stock", "📈 Stocks"), ("etf", "📊 ETFs"), ("crypto", "🪙 Crypto")]
-            _grouped = {k: [a for a in allocations if (a.get("asset_type") or "stock") == k]
-                        for k, _ in _cls_labels}
-            if any(_grouped[k] for k, _ in _cls_labels):
-                for _k, _lbl in _cls_labels:
-                    if _grouped[_k]:
-                        st.markdown(f"#### {_lbl} — {len(_grouped[_k])}")
-                        _render_alloc_table(_grouped[_k])
-            else:
-                _render_alloc_table(allocations)   # no asset_type on any rec → single table
+            _render_alloc_table(allocations)   # single combined table (reverted R28 per-class split)
             # NOTE: escape every '$' as '\$' — Streamlit renders paired '$...$' as LaTeX,
             # which silently ate the dollar signs and mangled this caption.
             st.caption(
