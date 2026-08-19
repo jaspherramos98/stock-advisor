@@ -1592,6 +1592,26 @@ if True:
             styled_closed = closed_df.style.map(color_pnl, subset=["P&L %"])
             st.dataframe(styled_closed, use_container_width=True, hide_index=True)
 
+            # --- Remove an individual closed trade from history ---
+            with st.expander("🗑 Remove a closed trade from history"):
+                st.caption("Permanently deletes the record so it no longer feeds the scorecard. "
+                           "Does NOT touch Robinhood — history only.")
+                _del_opts = {}
+                for _i, _p in enumerate(closed_positions):
+                    _cd = (datetime.fromisoformat(_p["closed_at"]).strftime("%Y-%m-%d")
+                           if _p.get("closed_at") else "—")
+                    _pnl = f"{_p['pnl_pct']:+.1f}%" if _p.get("pnl_pct") is not None else "—"
+                    _del_opts[f"{_i+1}. {_p['ticker']} · closed {_cd} · {_pnl}"] = _p.get("opened_at")
+                _del_sel = st.selectbox("Closed trade", list(_del_opts.keys()), key="del_closed_sel")
+                _del_confirm = st.checkbox("Confirm — this can't be undone", key="del_closed_confirm")
+                if st.button("🗑 Remove from history", disabled=not _del_confirm, key="del_closed_btn"):
+                    from storage.positions import delete_position
+                    if delete_position(_del_opts.get(_del_sel)):
+                        st.success(f"Removed: {_del_sel}")
+                        st.rerun()
+                    else:
+                        st.error("Could not remove (record not found).")
+
     # =========================================================
     # TAB 4 — Watch List Editor
     # =========================================================

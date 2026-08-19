@@ -841,3 +841,16 @@ def test_mcp_order_args_native_stop():
     args = _order_args(intent, "AGENTIC123")
     assert args["type"] == "stop_market" and args["stop_price"] == "97.50"
     assert args["account_number"] == "AGENTIC123" and args["ref_id"] == "x1"
+
+
+def test_delete_position(monkeypatch):
+    from storage import positions as sp
+    store = [{"ticker": "F", "opened_at": "t1", "status": "closed"},
+             {"ticker": "AAPL", "opened_at": "t2", "status": "closed"}]
+    saved = {}
+    monkeypatch.setattr(sp, "load_positions", lambda: [dict(p) for p in store])
+    monkeypatch.setattr(sp, "save_positions", lambda ps: saved.update(ps=ps))
+    assert sp.delete_position("t1") is True
+    assert [p["ticker"] for p in saved["ps"]] == ["AAPL"]      # only the matching record removed
+    assert sp.delete_position("missing") is False              # no match → no-op
+    assert sp.delete_position("") is False                     # empty guard
