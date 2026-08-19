@@ -2173,23 +2173,63 @@ if True:
                                            f"{c['pnl']:+.2f} ({c['pnl_pct']:+.0f}%) · {c.get('reason','')}")
                     if _bx:
                         figc.add_trace(go.Scatter(
-                            x=_bx, y=_by, mode="markers", name="BUY", text=_bl,
+                            x=_bx, y=_by, mode="markers", name="BUY (paper)", text=_bl,
                             marker=dict(symbol="triangle-up", color="#26a69a", size=15,
                                         line=dict(color="white", width=1.5)),
                             hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
                     if _sx:
                         figc.add_trace(go.Scatter(
-                            x=_sx, y=_sy, mode="markers", name="SELL", text=_sl,
+                            x=_sx, y=_sy, mode="markers", name="SELL (paper)", text=_sl,
                             marker=dict(symbol="triangle-down", color="#ef5350", size=15,
                                         line=dict(color="white", width=1.5)),
                             hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+
+                    # REAL (LIVE) trades from the agentic account — gold, so they stand apart from
+                    # the paper markers. Buys from open positions, sells from filled close orders.
+                    _lbx, _lby, _lbl2 = [], [], []
+                    _lsx, _lsy, _lsl2 = [], [], []
+                    if _acct:
+                        try:
+                            _rp = _amcp._data(_amcp._unwrap_tool_result(_amcpauth.call_tool(
+                                "get_option_positions", {"account_number": _acct, "nonzero": True})))
+                            for _r in (_rp.get("positions") or []):
+                                if (_r.get("chain_symbol") or "").upper() == _csym and _r.get("opened_at"):
+                                    _t = pd.to_datetime(_r["opened_at"], utc=True).tz_convert("America/Los_Angeles").tz_localize(None)
+                                    _y = _price_at(_t)
+                                    if _y is not None:
+                                        _lbx.append(_t); _lby.append(_y)
+                                        _lbl2.append(f"LIVE BUY {_r.get('type','')} ×{int(float(_r.get('quantity',0)))} @ ${float(_r.get('average_price',0))/100:.2f}")
+                            _ro = _amcp._data(_amcp._unwrap_tool_result(_amcpauth.call_tool(
+                                "get_option_orders", {"account_number": _acct})))
+                            for _o in (_ro.get("orders") or []):
+                                _legs = _o.get("legs") or []
+                                _is_close = any((l.get("position_effect") == "close") for l in _legs)
+                                if ((_o.get("chain_symbol") or "").upper() == _csym and _o.get("state") == "filled"
+                                        and _is_close and (_o.get("updated_at") or _o.get("created_at"))):
+                                    _t = pd.to_datetime(_o.get("updated_at") or _o.get("created_at"), utc=True).tz_convert("America/Los_Angeles").tz_localize(None)
+                                    _y = _price_at(_t)
+                                    if _y is not None:
+                                        _lsx.append(_t); _lsy.append(_y); _lsl2.append("LIVE SELL")
+                        except Exception:  # noqa: BLE001 — real markers are best-effort
+                            pass
+                    if _lbx:
+                        figc.add_trace(go.Scatter(
+                            x=_lbx, y=_lby, mode="markers", name="BUY (LIVE)", text=_lbl2,
+                            marker=dict(symbol="star", color="#FFD700", size=17, line=dict(color="black", width=1)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+                    if _lsx:
+                        figc.add_trace(go.Scatter(
+                            x=_lsx, y=_lsy, mode="markers", name="SELL (LIVE)", text=_lsl2,
+                            marker=dict(symbol="x", color="#FFD700", size=15, line=dict(color="black", width=1)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+
                     figc.update_layout(height=440, margin=dict(l=0, r=0, t=10, b=0),
                                        xaxis_rangeslider_visible=False, showlegend=True,
                                        legend=dict(orientation="h", y=1.02, x=0))
                     st.plotly_chart(figc, use_container_width=True)
-                    st.caption(f"{_csym} · {_civ} · times PT · ▲ teal = bot BUY, ▼ red = bot SELL "
-                               "(hover for contract + P&L). The marker sits on the underlying price at "
-                               "trade time. Refresh for latest (60s cache).")
+                    st.caption(f"{_csym} · {_civ} · times PT · ▲ teal/red = PAPER buy/sell · "
+                               "★/✖ gold = **REAL (LIVE)** buy/sell. Hover for detail. Marker sits on "
+                               "the underlying price at trade time. Refresh for latest (60s cache).")
                 else:
                     st.caption(f"No candles for {_csym} ({_civ}).")
             except Exception as _e:  # noqa: BLE001
