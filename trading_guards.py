@@ -124,10 +124,15 @@ def check_option_order(intent: OptionOrderIntent, state: GuardState, buying_powe
         return GuardResult(False, "duplicate client_id — already placed")
     if state.orders_today >= MAX_ORDERS_PER_DAY:
         return GuardResult(False, f"daily order cap {MAX_ORDERS_PER_DAY} reached (runaway guard)")
-    if intent.right not in ("call", "put") or intent.side not in ("buy", "sell"):
-        return GuardResult(False, "malformed option intent (right/side)")
+    if intent.side not in ("buy", "sell"):
+        return GuardResult(False, "malformed option intent (side)")
     if intent.position_effect not in ("open", "close"):
         return GuardResult(False, "position_effect must be open|close")
+    # `right` (call/put) only matters for OPENING new positions. A CLOSE sells what's held by
+    # option_id, and Robinhood's get_option_positions reports `type` as long/short (direction),
+    # not call/put — so don't demand a valid right to close (that was blocking real exits).
+    if intent.position_effect == "open" and intent.right not in ("call", "put"):
+        return GuardResult(False, "malformed option intent (right)")
     if intent.quantity < 1:
         return GuardResult(False, "quantity must be >= 1 contract")
     if intent.order_type in ("limit", "stop_limit") and (intent.price is None or intent.price <= 0):

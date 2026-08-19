@@ -750,6 +750,11 @@ def test_check_option_order():
                             position_effect="open")
     assert not check_option_order(bad, st, 25.0).allowed
     assert ok.premium == 10.0
+    # A CLOSE must be allowed even when `right` isn't call/put — real get_option_positions
+    # reports type as long/short, and closing sells by option_id (right irrelevant to the order).
+    close = OptionOrderIntent(underlying="F", option_id="z", right="long", side="sell",
+                              position_effect="close", quantity=1)
+    assert check_option_order(close, st, buying_power=0.0).allowed
 
 
 def test_option_args_shape():
