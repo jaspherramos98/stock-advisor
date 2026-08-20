@@ -17,9 +17,22 @@ in options_data.select_contract still decides what the account can actually buy.
 """
 from __future__ import annotations
 
-# Liquid, low-priced underlyings where cheap (sub-$25-ish) contracts commonly exist.
-AFFORDABLE_UNIVERSE = ["F", "NIO", "SNAP", "SOFI", "PLUG", "RIVN", "T", "WBD",
-                       "SIRI", "MARA", "RIOT", "CCL", "AAL", "LCID", "NOK", "BAC"]
+# Liquid, optionable, VOLATILE underlyings, ordered cheapest-first so the affordability filter
+# (and the tightest option spreads) get priority on a small account. The scout scans in order and
+# stops once it has max_names qualifying signals, so the front of the list matters most.
+AFFORDABLE_UNIVERSE = [
+    # cheap + liquid (sub-$25 stocks, cheapest contracts, tightest spreads)
+    "F", "SOFI", "NIO", "SNAP", "PLUG", "RIVN", "CCL", "AAL", "T", "WBD", "BAC", "NOK",
+    "SIRI", "LCID", "CHPT",
+    # high-beta biotech (catalyst swings — the MRNA-style pops; cheaper-option names first)
+    "NTLA", "BEAM", "SRPT", "CRSP", "MRNA", "BNTX",
+    # AI / quantum / space high-beta (big movers, cheap-ish contracts)
+    "SOUN", "BBAI", "IONQ", "RGTI", "ACHR", "LUNR", "RKLB",
+    # momentum / meme liquid
+    "AMC", "GME", "DKNG", "AFRM", "HOOD", "PLTR",
+    # crypto miners (track BTC beta)
+    "MARA", "RIOT", "CLSK",
+]
 
 
 def _lean_from_rsi(rsi: float | None) -> tuple[str, int] | None:
