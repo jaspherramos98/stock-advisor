@@ -677,11 +677,17 @@ with st.sidebar:
                     )
                     update_amount_invested(rp["ticker"], rp["amount_invested"])
                     synced += 1
-                st.success(f"Synced {synced} positions. Skipped {skipped} already in Argus.")
+                if synced:
+                    st.success(f"Synced {synced} new. Skipped {skipped} already tracked.")
+                else:
+                    st.info(f"Nothing new — all {skipped} equity/ETF position(s) already tracked.")
+                st.caption("⚠️ Crypto (DOGE, XRP, etc.) can't sync — the Robinhood Trading MCP has no "
+                           "crypto endpoint. Add coins manually below (Manage positions → add).")
                 if synced > 0:
                     st.rerun()
             else:
-                st.error("Could not fetch Robinhood positions. Check credentials in .env.")
+                st.info("No equity/ETF positions to sync (crypto isn't readable via the MCP — "
+                        "add coins manually below).")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:
