@@ -535,6 +535,37 @@ except Exception:
 if os.getenv("MOCK_MODE", "false").lower() == "true":
     st.warning("⚠️ MOCK MODE active — showing test data. No real Claude API calls. Set MOCK_MODE=false in .env for real analysis.")
 
+# --- Cached agentic reads (network-heavy; Streamlit reruns the whole script on every click, so
+# uncaching these made every checkbox/button wait on ~10-15 MCP round-trips). 30-60s TTL keeps
+# the Agent tab snappy; actions (run cycle / close) still use fresh data via the agent functions. ---
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_agentic_bp(acct):
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_buying_power(acct)
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_option_positions(acct):
+    from ingestion import robinhood_mcp as _m, mcp_auth as _a
+    d = _m._data(_m._unwrap_tool_result(_a.call_tool("get_option_positions", {"account_number": acct, "nonzero": True})))
+    return d.get("positions", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_option_quote(option_id):
+    from ingestion import options_data as _od
+    return _od.fetch_quote(option_id) or {}
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_agentic_equity(acct):
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_positions(acct)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _c_option_orders(acct):
+    from ingestion import robinhood_mcp as _m, mcp_auth as _a
+    d = _m._data(_m._unwrap_tool_result(_a.call_tool("get_option_orders", {"account_number": acct})))
+    return d.get("orders", []) if isinstance(d, dict) else []
+
+
 def _render_alloc_table(allocations):
     """Render ONE allocation table (called once per enabled asset class, R28). Builds the
     DataFrame, applies the direction/risk/HR styling, and renders st.dataframe with the tuned
@@ -828,6 +859,37 @@ if True:
                 "**Flags** — ⭐ highly recommended, ⚠ unverified source (treat with extra caution).  "
                 "Buy/Sell text is shortened here — full wording is in **Stock details** below."
             )
+
+            # Batch-add watch triggers: check several, add all at once. Inside st.form so the
+            # checkboxes DON'T each fire a full rerun (that one-by-one lag was the complaint).
+            _watch_recs = [a for a in allocations
+                           if a.get("direction") == "watch"
+                           and (a.get("entry_trigger") or "").lower() not in ("now", "n/a", "")]
+            if _watch_recs:
+                from storage.entry_watch import add_pinned, is_pinned
+                with st.expander(f"📋 Add multiple to watch list ({len(_watch_recs)} watches)"):
+                    st.caption("Check the triggers to watch, then add them all with one button "
+                               "(email when each 'buy when' level is hit).")
+                    with st.form("batch_watch_form"):
+                        _wchecks = {}
+                        for a in _watch_recs:
+                            _wt = a["ticker"]
+                            _pinned = is_pinned(_wt)
+                            _trg = " ".join(str(a.get("entry_trigger") or "").split())
+                            if len(_trg) > 70:
+                                _trg = _trg[:69] + "…"
+                            _wchecks[_wt] = st.checkbox(
+                                f"**{_wt}** — {_trg}" + ("  ✓ already watching" if _pinned else ""),
+                                key=f"bw_{_wt}", disabled=_pinned)
+                        if st.form_submit_button("👁 Add checked to watch list"):
+                            _n = 0
+                            for a in _watch_recs:
+                                if _wchecks.get(a["ticker"]) and not is_pinned(a["ticker"]):
+                                    add_pinned(a["ticker"], a["company_name"],
+                                               a["entry_trigger"], a.get("exit_condition", ""))
+                                    _n += 1
+                            st.success(f"Added {_n} to the watch list.")
+                            st.rerun()
 
             col_export, col_spacer = st.columns([1, 4])
             with col_export:
@@ -2038,7 +2100,7 @@ if True:
         if _agent_ok:
             _acct = _amcp.agentic_account_number() if _amcp.is_available() else None
             _halted = os.path.exists(_HALT_FLAG)
-            _agbp = _amcp.fetch_buying_power(_acct) if _acct else None
+            _agbp = _c_agentic_bp(_acct) if _acct else None
             _led = _lb.get_state()
 
             # The scheduler decides live-vs-paper by the ARM FILE, not config.DRY_RUN (which is a
@@ -2068,7 +2130,7 @@ if True:
                 _book = _pb.get_book()
                 _marks = {}
                 for _pp in _book.get("open", []):
-                    _q = _pod2.fetch_quote(_pp["option_id"]) or {}
+                    _q = _c_option_quote(_pp["option_id"])
                     _marks[_pp["option_id"]] = float(_q.get("mark_price") or _q.get("bid_price") or _pp["entry_price"])
                 _ps = _pb.summarize(_book, _marks)
 
@@ -2205,18 +2267,14 @@ if True:
                     _lsx, _lsy, _lsl2 = [], [], []
                     if _acct:
                         try:
-                            _rp = _amcp._data(_amcp._unwrap_tool_result(_amcpauth.call_tool(
-                                "get_option_positions", {"account_number": _acct, "nonzero": True})))
-                            for _r in (_rp.get("positions") or []):
+                            for _r in _c_option_positions(_acct):
                                 if (_r.get("chain_symbol") or "").upper() == _csym and _r.get("opened_at"):
                                     _t = pd.to_datetime(_r["opened_at"], utc=True).tz_convert("America/Los_Angeles").tz_localize(None)
                                     _y = _price_at(_t)
                                     if _y is not None:
                                         _lbx.append(_t); _lby.append(_y)
                                         _lbl2.append(f"LIVE BUY {_r.get('type','')} ×{int(float(_r.get('quantity',0)))} @ ${float(_r.get('average_price',0))/100:.2f}")
-                            _ro = _amcp._data(_amcp._unwrap_tool_result(_amcpauth.call_tool(
-                                "get_option_orders", {"account_number": _acct})))
-                            for _o in (_ro.get("orders") or []):
+                            for _o in _c_option_orders(_acct):
                                 _legs = _o.get("legs") or []
                                 _is_close = any((l.get("position_effect") == "close") for l in _legs)
                                 if ((_o.get("chain_symbol") or "").upper() == _csym and _o.get("state") == "filled"
@@ -2331,7 +2389,7 @@ if True:
             _eq = []
             if _acct:
                 try:
-                    _eq = _amcp.fetch_positions(_acct)   # agentic-account equity holdings
+                    _eq = _c_agentic_equity(_acct)   # agentic-account equity holdings
                 except Exception as _e:  # noqa: BLE001
                     st.caption(f"Could not read agentic equity positions: {_e}")
             if _eq:
@@ -2350,9 +2408,7 @@ if True:
             _positions = []
             if _acct:
                 try:
-                    _pdata = _amcp._data(_amcp._unwrap_tool_result(_amcpauth.call_tool(
-                        "get_option_positions", {"account_number": _acct, "nonzero": True})))
-                    _positions = _pdata.get("positions", []) if isinstance(_pdata, dict) else []
+                    _positions = _c_option_positions(_acct)
                 except Exception as _e:  # noqa: BLE001
                     st.caption(f"Could not read option positions: {_e}")
             if not _positions:
@@ -2366,7 +2422,7 @@ if True:
                     _entry = float(_p.get("average_open_price") or _p.get("average_price") or 0)
                     if _entry > 5:
                         _entry /= 100.0
-                    _q = _aod.fetch_quote(_oid) or {}
+                    _q = _c_option_quote(_oid)
                     _mark = float(_q.get("mark_price") or _q.get("bid_price") or 0)
                     _exp = _p.get("expiration_date") or _p.get("expiration")
                     _dte = _aod._dte(_exp) if _exp else None
