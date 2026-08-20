@@ -2426,7 +2426,9 @@ if True:
                     _mark = float(_q.get("mark_price") or _q.get("bid_price") or 0)
                     _exp = _p.get("expiration_date") or _p.get("expiration")
                     _dte = _aod._dte(_exp) if _exp else None
-                    _act, _why = option_exit_decision(_entry, _mark, _dte, DEFAULT_EXIT)
+                    from storage.peak_tracker import get_peak as _get_peak
+                    _act, _why = option_exit_decision(_entry, _mark, _dte, DEFAULT_EXIT,
+                                                      peak_mark=_get_peak(_oid))
                     _pnl = ((_mark - _entry) / _entry * 100) if _entry else 0.0
                     _sym = _p.get("chain_symbol") or _p.get("symbol") or "?"
                     _rt = (_p.get("type") or "call").lower()

@@ -711,6 +711,21 @@ def test_option_exit_decision():
     assert option_exit_decision(0.0, 0.10, 20, rule)[0] == "hold"     # no basis, DTE ok
 
 
+def test_option_exit_trailing():
+    from analysis.options_strategies import option_exit_decision
+    rule = {"profit_pct": 80, "stop_pct": 50, "close_dte": 2,
+            "trail_activate": 25, "trail_giveback": 20}
+    # entry 0.10, peaked 0.18 (+80%, armed), now 0.16 → gave back (0.18-0.16)/0.18=11% < 20 → hold
+    assert option_exit_decision(0.10, 0.16, 20, rule, peak_mark=0.18)[0] == "hold"
+    # now 0.14 → gave back (0.18-0.14)/0.18=22% ≥ 20 → CLOSE (locks ~+40% off the +80% peak)
+    act, why = option_exit_decision(0.10, 0.14, 20, rule, peak_mark=0.18)
+    assert act == "close" and "trail" in why
+    # peak only +15% (< trail_activate 25) → not armed → hold even on a pullback
+    assert option_exit_decision(0.10, 0.105, 20, rule, peak_mark=0.115)[0] == "hold"
+    # stop still wins over trailing
+    assert option_exit_decision(0.10, 0.04, 20, rule, peak_mark=0.18)[0] == "close"
+
+
 def test_options_data_pure_helpers():
     import datetime as _dt
     from ingestion.options_data import (

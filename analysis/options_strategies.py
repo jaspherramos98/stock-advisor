@@ -19,10 +19,14 @@ from __future__ import annotations
 
 import math
 
-# Universal fallback exit policy applied to any open option position the loop can't attribute to
-# a specific strategy (v1: we don't persist per-position strategy). Standard option management:
-# take profits, cut losses, and never hold into expiry decay.
-DEFAULT_EXIT = {"profit_pct": 60, "stop_pct": 50, "close_dte": 2}
+# Universal fallback exit policy. Standard option management: cut losses, lock gains with a
+# TRAILING take-profit (sell after a pullback from the peak — captures the rip instead of
+# waiting for a fixed target and round-tripping), a hard target as a backstop, and never hold
+# into expiry decay.
+#   trail_activate  — start trailing once the position has been up this % (arm the lock)
+#   trail_giveback  — once armed, sell if the mark falls this % BELOW its peak
+DEFAULT_EXIT = {"profit_pct": 80, "stop_pct": 50, "close_dte": 2,
+                "trail_activate": 25, "trail_giveback": 20}
 
 
 def _right(direction: str) -> str | None:
@@ -130,21 +134,38 @@ def size_contracts(alloc_pct: float, buying_power: float, cost_1x: float) -> int
 
 
 def option_exit_decision(entry_price: float, current_mark: float, dte: int | None,
-                         exit_rule: dict | None = None) -> tuple[str, str]:
-    """Decide ('hold'|'close', reason) for an open long option, per its exit rule.
-    entry_price/current_mark are per-contract prices (e.g. 0.18). Closes on profit target,
-    stop, or approaching expiry (decay/assignment guard)."""
+                         exit_rule: dict | None = None,
+                         peak_mark: float | None = None) -> tuple[str, str]:
+    """Decide ('hold'|'close', reason) for an open long option.
+    entry_price/current_mark/peak_mark are per-contract prices (e.g. 0.18). Order of checks:
+    hard stop → TRAILING take-profit (lock gains after a pullback from peak) → hard target
+    backstop → expiry. peak_mark is the high-water mark (from storage.peak_tracker); pass None
+    to disable trailing."""
     rule = exit_rule or DEFAULT_EXIT
     if not entry_price or entry_price <= 0:
-        # No cost basis → fall back to the time guard only.
         if dte is not None and dte <= rule["close_dte"]:
             return ("close", f"{dte} DTE ≤ {rule['close_dte']} (no basis)")
         return ("hold", "no cost basis")
+
     change_pct = (current_mark - entry_price) / entry_price * 100
-    if change_pct >= rule["profit_pct"]:
-        return ("close", f"+{change_pct:.0f}% ≥ target {rule['profit_pct']}%")
+    # 1) hard stop — protect first
     if change_pct <= -rule["stop_pct"]:
         return ("close", f"{change_pct:.0f}% ≤ stop -{rule['stop_pct']}%")
+
+    # 2) trailing take-profit — once we've been up trail_activate%, sell if the mark has fallen
+    #    trail_giveback% below its peak (captures the rip; don't wait for the fixed target).
+    ta, tg = rule.get("trail_activate"), rule.get("trail_giveback")
+    if peak_mark and ta is not None and tg is not None and peak_mark > entry_price:
+        peak_gain = (peak_mark - entry_price) / entry_price * 100
+        if peak_gain >= ta:
+            giveback = (peak_mark - current_mark) / peak_mark * 100
+            if giveback >= tg:
+                return ("close", f"trail: +{change_pct:.0f}% (locked, off peak +{peak_gain:.0f}%)")
+
+    # 3) hard target backstop
+    if change_pct >= rule["profit_pct"]:
+        return ("close", f"+{change_pct:.0f}% ≥ target {rule['profit_pct']}%")
+    # 4) expiry guard
     if dte is not None and dte <= rule["close_dte"]:
         return ("close", f"{dte} DTE ≤ {rule['close_dte']}")
     return ("hold", f"{change_pct:+.0f}%")

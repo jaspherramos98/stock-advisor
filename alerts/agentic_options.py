@@ -206,11 +206,14 @@ def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
             mark = float(quote.get("mark_price") or quote.get("bid_price") or 0)
             exp = p.get("expiration_date") or p.get("expiration")
             dte = od._dte(exp) if exp else None
-            action, reason = option_exit_decision(entry, mark, dte, DEFAULT_EXIT)
+            from storage import peak_tracker
+            peak = peak_tracker.update_peak(oid, mark)
+            action, reason = option_exit_decision(entry, mark, dte, DEFAULT_EXIT, peak_mark=peak)
             if verbose:
-                print(f"  {p.get('chain_symbol','?')} {oid[:8]}: entry {entry} mark {mark} dte {dte} → {action} ({reason})")
+                print(f"  {p.get('chain_symbol','?')} {oid[:8]}: entry {entry} mark {mark} peak {peak} dte {dte} → {action} ({reason})")
             if action != "close":
                 continue
+            peak_tracker.clear_peak(oid)
             right = (p.get("type") or "call").lower()
             intent = OptionOrderIntent(
                 underlying=(p.get("chain_symbol") or "?"), option_id=oid, right=right,
@@ -234,14 +237,17 @@ def _run_paper_exits(verbose: bool) -> list[dict]:
     results = []
     for p in pb.get_open():
         try:
+            from storage import peak_tracker
             q = od.fetch_quote(p["option_id"]) or {}
             mark = float(q.get("mark_price") or q.get("bid_price") or 0)
             dte = od._dte(p.get("expiration")) if p.get("expiration") else None
-            action, reason = option_exit_decision(p["entry_price"], mark, dte, DEFAULT_EXIT)
+            peak = peak_tracker.update_peak(p["option_id"], mark)
+            action, reason = option_exit_decision(p["entry_price"], mark, dte, DEFAULT_EXIT, peak_mark=peak)
             if verbose:
-                print(f"  [paper] {p['ticker']} entry {p['entry_price']} mark {mark} dte {dte} → {action} ({reason})")
+                print(f"  [paper] {p['ticker']} entry {p['entry_price']} mark {mark} peak {peak} dte {dte} → {action} ({reason})")
             if action == "close":
                 rec = pb.close_position(p["option_id"], exit_price=mark, reason=reason)
+                peak_tracker.clear_peak(p["option_id"])
                 if rec:
                     results.append({"close": p["ticker"], "pnl": rec["pnl"], "reason": reason})
         except Exception as e:  # noqa: BLE001
