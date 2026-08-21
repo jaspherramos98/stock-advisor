@@ -191,7 +191,10 @@ def _capture_chat_suggestions(reply_text: str):
     """
     import re
     try:
-        pattern = re.compile(r"^\s*([Bb]uy|[Ww]atch)\s*[—–\-:]+\s*\$?([A-Z]{1,6})\b[,\s]*(.*)$",
+        # Capture Buy / Short / Sell / Watch so a bearish chat call isn't lost or misread as a buy
+        # (that flipped a TLT short into a bought call). Direction is resolved downstream from the
+        # verb + text so "Buy — TLT (short)" still becomes a short.
+        pattern = re.compile(r"^\s*([Bb]uy|[Ss]hort|[Ss]ell|[Ww]atch)\s*[—–\-:]+\s*\$?([A-Z]{1,6})\b[,\s]*(.*)$",
                              re.MULTILINE)
         found = [
             {"ticker": m.group(2).upper(),

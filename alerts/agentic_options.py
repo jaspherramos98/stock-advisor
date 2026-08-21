@@ -66,6 +66,21 @@ CHAT_BUY_CONVICTION = 72
 SCOUT_AFFORDABLE = True
 
 
+def _chat_direction(sugg: dict) -> str | None:
+    """Resolve an entry direction from a chat suggestion's verb + text.
+      buy   → 'buy' (agent buys calls)      short → 'short' (agent buys puts)
+    A 'buy' whose text mentions short/bearish is treated as SHORT (fixes chat lines like
+    'Buy — TLT (short)' that flipped a bearish call into a bought call). 'sell'/'watch'/'hold'
+    are NOT new entries (sell = exit an existing long) → return None."""
+    action = (sugg.get("action") or "").lower()
+    text = (sugg.get("trigger_text") or "").lower()
+    if action == "short" or (action == "buy" and ("short" in text or "bearish" in text)):
+        return "short"
+    if action == "buy":
+        return "buy"
+    return None  # sell (exit) / watch / hold → not an agent entry
+
+
 def _signals() -> list[dict]:
     """Directional entry signals for the agent, deduped by ticker:
       1. buy/short recommendations from today's pipeline cache (real conviction), then
@@ -87,9 +102,10 @@ def _signals() -> list[dict]:
         from storage.entry_watch import get_chat_suggestions
         for s in get_chat_suggestions():
             t = (s.get("ticker") or "").upper()
-            if t and t not in seen and (s.get("action") or "").lower() == "buy":
+            direction = _chat_direction(s)
+            if t and t not in seen and direction:
                 seen.add(t)
-                out.append({"ticker": t, "direction": "buy",
+                out.append({"ticker": t, "direction": direction,
                             "conviction": CHAT_BUY_CONVICTION, "source": "chat"})
     except Exception as e:  # noqa: BLE001 — chat merge is additive; never break pipeline signals
         print(f"agentic_options: chat-suggestion merge failed — {e}")

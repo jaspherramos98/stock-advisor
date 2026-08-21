@@ -869,3 +869,14 @@ def test_delete_position(monkeypatch):
     assert [p["ticker"] for p in saved["ps"]] == ["AAPL"]      # only the matching record removed
     assert sp.delete_position("missing") is False              # no match → no-op
     assert sp.delete_position("") is False                     # empty guard
+
+
+def test_chat_direction_resolution():
+    from alerts.agentic_options import _chat_direction
+    assert _chat_direction({"action": "buy", "trigger_text": "buy above $50"}) == "buy"
+    assert _chat_direction({"action": "short", "trigger_text": "weak"}) == "short"
+    # the TLT bug: 'Buy — TLT (short)' → the text says short → treat as short (puts), not calls
+    assert _chat_direction({"action": "buy", "trigger_text": "(short), exit 3% gain"}) == "short"
+    assert _chat_direction({"action": "buy", "trigger_text": "bearish setup"}) == "short"
+    assert _chat_direction({"action": "watch", "trigger_text": "buy above $x"}) is None   # not an entry
+    assert _chat_direction({"action": "sell", "trigger_text": "take profit"}) is None      # exit, not short
