@@ -2,6 +2,32 @@
 
 ## Done
 
+### 34. Phase 2 — autonomous options agent, LIVE (R25→R27) ✅  (branch feat/robinhood-mcp-agentic)
+Built + running the whole agentic options pilot this session. Highlights (see CLAUDE.md for module map):
+- **MCP live (R25):** reads swapped to the official Trading MCP via `ingestion/account_reads.py`
+  (USE_MCP=True) → 429 gone; news skipped under MCP. Auth in `ingestion/mcp_auth.py` (DCR+PKCE+refresh).
+- **Options stack (R26):** `ingestion/options_data.py` (chain→contract, liquidity+affordability),
+  `analysis/options_strategies.py` (5 playbooks + trailing exit), `trading_guards.OptionOrderIntent`/
+  `check_option_order`, `robinhood_mcp.place_option_order` (review-first, is_error-honored, agentic-only).
+- **Agent + scheduler (R27):** `alerts/agentic_options.py` (`run_paper_agent`/`run_options_agent`),
+  `scripts/run_agent.py` + tasks "Argus Options Agent" (every 20 min) + "Argus Market Open" (6:30 AM PT:
+  launch+pipeline+arm). DRY→PAPER default, LIVE only when `agent_live.arm` exists; kill switch
+  `agentic_halt.flag`; LLM-credit halt (`llm_budget.py`).
+- **Signal breadth:** pipeline buys/shorts + chat suggestions (direction-correct via `_chat_direction` —
+  fixed the TLT short→call bug) + `ingestion/affordable_scout.py` (RSI screen over a broad cheap/liquid
+  universe so it isn't idle at low BP).
+- **Exits:** trailing take-profit (`storage/peak_tracker.py`) — stop −50% → trail (+25% arm / −20% giveback)
+  → +80% target → ≤2 DTE. Auto-sells each cycle (poll-based).
+- **UI (tab 🤖 Agent):** paper book + live candlestick (paper=teal/red, LIVE=gold markers), credit ledger,
+  kill switch, preview/LIVE run, agentic positions + Close-now. Cached MCP reads (30-60s) to fix click lag.
+- **Verified LIVE:** first real cycle F call bought $0.19 → auto-sold $0.34 (+79%). Agent funded to ~$100,
+  holds real TLT/AAL/SNAP calls, exits managing correctly.
+- **Also this session:** reverted R28 per-class recs (padded low-conviction) back to ≥10-total single list;
+  remove individual closed trades from scorecard (`storage.positions.delete_position`); batch watchlist-add
+  form; MRNA + biotech watchlist; crypto exit-strategy research (DOGE/XRP — MCP can't trade crypto).
+Remaining/next: tune trailing (`trail_activate`) if it gives back small rips; validate edge over more
+trades before trusting; the open TLT call is the pre-fix wrong-direction leftover (close manually if wanted).
+
 ### 33. Robinhood agentic execution — Path B scaffolding (R25) ✅
 Branch `feat/robinhood-mcp-agentic`. Groundwork for using Robinhood's official Trading MCP as the
 sanctioned execution path (ends the `robin_stocks` 429; auto-places exits so no 24/7 watch). Design A

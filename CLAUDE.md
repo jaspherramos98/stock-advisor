@@ -137,6 +137,10 @@ analysis/options_strategies.py Options strategy library (Phase 2) — 5 codified
                               pre_earnings_iv (lottery, -EV), post_earnings_momentum, short_dte_momentum,
                               mean_reversion (RSI), catalyst_momentum. applicable_plans (priority w/
                               fallback), size_contracts, option_exit_decision. Pure, unit-tested.
+storage/peak_tracker.py       Option high-water-mark tracker (Phase 2) — records each contract's peak
+                              mark (keyed by option_id, peaks.json gitignored) so option_exit_decision
+                              can TRAIL: sell after a pullback from the peak instead of only a fixed
+                              target. Shared by the paper + live exit paths. clear_peak on close.
 storage/paper_book.py         Paper-trading book (Phase 2) — virtual cash account the agent trades
                               against live option prices (zero money): open/close positions, realized +
                               unrealized P&L, summarize(). Persisted paper_book.json (gitignored). Pure
@@ -150,11 +154,15 @@ ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_eq
                               + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
                               per ticker, so the technical/earnings strategies have their inputs. Pure
                               parsers unit-tested; enrich() called in the agent's entry loop.
-alerts/agentic_options.py     Autonomous options agent (Phase 2) — ENTRIES (signals→strategy→
-                              options_data.select_contract→place_option_order) + EXITS (option positions→
-                              exit policy→close). DRY_RUN-safe, review-first, guarded, market-hours gated,
-                              kill-switch file `agentic_halt.flag`. AGENTIC account only. run via
-                              scripts/agentic_options.py. Position size uncapped (pilot).
+alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_signals`): pipeline buys/
+                              shorts + chat suggestions (`_chat_direction` maps buy→call, short/"(short)"
+                              text→put, sell/watch→ignored) + affordable_scout, deduped by ticker, priority
+                              pipeline>chat>scout. ENTRIES: signal→enrich(RSI/earnings)→first applicable
+                              strategy with a tradable/affordable contract→review→place_option_order.
+                              EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
+                              (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
+                              market-hours gated, kill switch `agentic_halt.flag`, LLM-credit halt on entries.
+                              AGENTIC account only. Position size uncapped (pilot).
 alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
                               stop_market per AGENTIC-account position (set-and-forget; Robinhood
                               auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first
@@ -171,6 +179,12 @@ scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — marke
 run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
                               it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs.
                               Manage: schtasks /Query|/Run|/Change|/Delete /TN "Argus Options Agent".
+market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
+                              run pipeline (fresh signals) → arm the agent (echo armed > agent_live.arm).
+                              run_market_open_silent.vbs runs it hidden; Windows task "Argus Market Open"
+                              (daily 06:30) calls it. Deleting the task = manual mornings.
+scripts/scan_affordable.py    Read-only screener — which tickers have a ~30-DTE OTM option within the
+                              agentic buying power (+ = affordable). Argv or auto (recs+chat+cheap preset).
 scripts/mcp_spike.py          Pre-auth probe (R25) — confirmed the server is OAuth-gated, DCR works
                               (custom client OK), refresh_token grant exists (429 dies). Places NO orders.
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
@@ -559,10 +573,20 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`
    only around the call, never process-wide; **agentic equity positions** + a **🔄 Sync positions**
    refresh; **open option positions** with live P&L + the agent's exit decision (hold/close + reason)
-   and a per-position **Close now** override. Exits are poll-based (re-checked each cycle, not a
-   resting stop). (Sidebar was decluttered — helper captions removed.)
+   and a per-position **Close now** override. **Exit policy (`option_exit_decision`, poll-based each
+   cycle, not a resting stop):** hard stop −50% → **trailing take-profit** (once up ≥`trail_activate`
+   25%, sell if it gives back `trail_giveback` 20% from the peak — `storage/peak_tracker`) → +80% hard
+   target → close ≤2 DTE. (Sidebar decluttered — helper captions removed.)
 
 ## Known Issues / Constraints
+- **MCP has NO crypto endpoint.** The Robinhood Trading MCP is equities/ETFs/options only — it can't read
+  or trade crypto (DOGE/XRP/BTC). Sync positions skips crypto; the options agent can't touch it. Track
+  crypto manually (My Positions → add). Only `ingestion/robinhood.py` (robin_stocks) sees crypto, and
+  that path is skipped under `USE_MCP`.
+- **Streamlit caches imported modules.** After editing a module (adding a function, etc.), a browser
+  refresh or "Rerun" is NOT enough — the running process holds the stale module (symptom: `ImportError:
+  cannot import name X`). FULLY restart the app (`argus_stop.bat` → relaunch). The scheduler is unaffected
+  (fresh `python` each cycle picks up new code immediately).
 - `robin_stocks` is unofficial — if Robinhood changes their app it may break; only edit `ingestion/robinhood.py`
 - **Robinhood auth / 429 loop:** the stored session (`~/.tokens/robinhood.pickle`) expires after
   `expiresIn` (set to 7 days in `_login`; Robinhood may cap it lower). Re-login on a
