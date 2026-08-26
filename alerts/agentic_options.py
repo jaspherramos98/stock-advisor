@@ -63,7 +63,10 @@ CHAT_BUY_CONVICTION = 72
 # When True, after pipeline + chat signals, scan a preset of affordable cheap-underlying names
 # for a technical lean (ingestion.affordable_scout) so the agent isn't idle when every pipeline
 # idea is too expensive for the pilot. Ranked LAST → only fills leftover budget.
-SCOUT_AFFORDABLE = True
+# OFF by default: RSI-extreme technical gambles have no proven edge and just churned premium/theta/
+# spread on the pilot. The agent now trades ONLY real catalyst signals (pipeline + chat); it stays
+# idle when nothing affordable qualifies — idle beats -EV noise. Flip True to re-enable the scout.
+SCOUT_AFFORDABLE = False
 
 
 def _chat_direction(sugg: dict) -> str | None:
@@ -137,13 +140,23 @@ def _held_underlyings(mcp, acct) -> set[str]:
         return set()
 
 
-def _run_entries(mcp, acct, buying_power, verbose) -> list[dict]:
+def _closed_underlyings(exits: list[dict], live: bool) -> set[str]:
+    """Underlyings actually closed this cycle → excluded from re-entry (anti-churn). Live closes
+    only count when the order was placed/dry_run; paper closes always execute."""
+    ok = (lambda r: r.get("status") in ("placed", "dry_run")) if live else (lambda r: True)
+    return {(r.get("close") or "").upper() for r in exits if r.get("close") and ok(r)}
+
+
+def _run_entries(mcp, acct, buying_power, verbose, exclude=None) -> list[dict]:
     from ingestion import options_data as od
     from ingestion import account_reads as ar
     from analysis.options_strategies import applicable_plans, size_contracts
 
     regime = _regime()
-    held = _held_underlyings(mcp, acct)
+    # `exclude` = underlyings we closed THIS cycle. Exits run before entries, so a just-sold
+    # position no longer shows as held — without this the same signal would re-buy it the same
+    # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
+    held = _held_underlyings(mcp, acct) | (exclude or set())
     state = GuardState(start_equity=buying_power)
     avail = buying_power
     results: list[dict] = []
@@ -271,7 +284,7 @@ def _run_paper_exits(verbose: bool) -> list[dict]:
     return results
 
 
-def _run_paper_entries(verbose: bool) -> list[dict]:
+def _run_paper_entries(verbose: bool, exclude=None) -> list[dict]:
     from storage import paper_book as pb
     from ingestion import options_data as od
     from ingestion import account_reads as ar
@@ -279,7 +292,7 @@ def _run_paper_entries(verbose: bool) -> list[dict]:
     from ingestion.signal_context import enrich
 
     regime = _regime()
-    held = pb.open_tickers()
+    held = pb.open_tickers() | (exclude or set())  # exclude = closed this cycle (anti-churn)
     results = []
     for sig in _signals():
         ticker = (sig.get("ticker") or "").upper()
@@ -336,7 +349,7 @@ def run_paper_agent(verbose: bool = True) -> dict:
     exits = _run_paper_exits(verbose)
     if verbose:
         print("-- paper entries --")
-    entries = _run_paper_entries(verbose)
+    entries = _run_paper_entries(verbose, exclude=_closed_underlyings(exits, live=False))
     return {"entries": entries, "exits": exits, "mode": "paper"}
 
 
@@ -378,5 +391,5 @@ def run_options_agent(verbose: bool = True) -> dict:
 
     if verbose:
         print("-- entries --")
-    entries = _run_entries(mcp, acct, bp, verbose)
+    entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits, live=True))
     return {"entries": entries, "exits": exits}

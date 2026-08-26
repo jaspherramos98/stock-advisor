@@ -92,7 +92,11 @@ alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a wat
 alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject/header adapt)
 alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
 storage/entry_watch.py        Persists PINNED watches + Argus chat's last buy/watch suggestions
-                              + per-day notify record (entry_watch.json, gitignored)
+                              + per-day notify record (entry_watch.json, gitignored). Pins auto-expire
+                              PIN_TTL_DAYS (7) after pinned_at (lazy prune on load) so a stale thesis
+                              can't keep an orphaned price level armed; renew_pins() resets the clock
+                              when a ticker reappears as a live watch in a fresh pipeline run
+                              (entry_checker calls it). pin_days_left/pin_age_days drive the UI countdown.
 argus.bat                     Launch Argus (reuses a running instance; opens one browser tab)
 argus_silent.vbs              Launch Argus with NO terminal window (background/always-on).
                               Shortcut it into shell:startup to auto-run at login.
@@ -148,8 +152,12 @@ storage/paper_book.py         Paper-trading book (Phase 2) — virtual cash acco
 ingestion/affordable_scout.py Affordable-universe scout (Phase 2) — when every pipeline idea is too
                               expensive for the pilot, scans a preset of liquid CHEAP underlyings and
                               emits technical buy/short signals from RSI (source='scout', ranked LAST so
-                              it only fills leftover budget). Deterministic, no tokens; _lean_from_rsi
-                              unit-tested. Toggle agentic_options.SCOUT_AFFORDABLE.
+                              it only fills leftover budget). ONLY statistical extremes fire (RSI ≤35 buy
+                              / ≥68 short → mean_reversion); the old mid-range momentum buy (52-67 → call)
+                              was REMOVED — no edge, it bled premium/theta/spread on noise. Deterministic,
+                              no tokens; _lean_from_rsi unit-tested. Toggle agentic_options.SCOUT_AFFORDABLE
+                              (default OFF — scout gambles have no edge; agent trades ONLY real catalyst
+                              signals and stays idle otherwise).
 ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_equity_technical_indicators)
                               + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
                               per ticker, so the technical/earnings strategies have their inputs. Pure
@@ -159,6 +167,10 @@ alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_sig
                               text→put, sell/watch→ignored) + affordable_scout, deduped by ticker, priority
                               pipeline>chat>scout. ENTRIES: signal→enrich(RSI/earnings)→first applicable
                               strategy with a tradable/affordable contract→review→place_option_order.
+                              An underlying CLOSED this cycle is excluded from re-entry (`_closed_underlyings`,
+                              unit-tested) — exits run before entries, so without this a live signal would
+                              sell then re-buy the same name in one cycle, paying the round-trip spread and
+                              undoing the exit (the churn bug).
                               EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
                               (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
                               market-hours gated, kill switch `agentic_halt.flag`, LLM-credit halt on entries.
@@ -500,7 +512,10 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   double-alerts:
   1. **Pinned watches** — the 👁 **Watch this trigger** button on a watch rec's expander copies its
      `entry_trigger` into `storage/entry_watch.py`. This is the ONLY source that survives a pipeline
-     rerun; the level is stored exactly as pinned and is NOT refreshed if the ticker reappears later.
+     rerun. The price LEVEL is stored exactly as pinned (never re-priced), but the pin auto-EXPIRES
+     `PIN_TTL_DAYS` (7) after `pinned_at` — a catalyst entry setup that hasn't fired in ~a week has a
+     dead thesis + stale level. `renew_pins()` resets that clock whenever the ticker reappears as a
+     live watch in a fresh pipeline run (so a still-valid thesis persists; a true orphan ages out).
   2. **Argus chat's last suggestion** — the `/chat` proxy parses `Buy —`/`Watch — TICKER` action
      lines via `_capture_chat_suggestions`; each capture replaces the prior set.
   3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`).
@@ -556,9 +571,11 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    - **📍 Open positions — exit alerts**: auto-included (no pinning needed), showing entry/live/P&L,
      computed stop price and exit condition. Read-only; managed under My Positions.
    - **📌 Pinned buy triggers — entry alerts**: each pinned watch with its parsed breakout/pullback
-     levels, live price, pin date and a ✕ remove button — the fix for orphaned pins (a pin whose
-     ticker left the recommendations previously had no removal UI). A pin whose trigger has NO `$`
-     price shows a warning that it can never fire. Chat-sourced suggestions are listed in an
+     levels, live price, pin date, an **expires-in-N-days** countdown (7-day TTL, auto-renews when the
+     ticker reappears in a fresh run) and a ✕ remove button — the fix for orphaned pins (a pin whose
+     ticker left the recommendations previously had no removal UI and would fire forever on a stale
+     level). A pin whose trigger has NO `$` price shows a warning that it can never fire. Chat-sourced
+     suggestions are listed in an
      expander with a clear button.
    - Then the original Finnhub ticker watchlist editor per asset type.
    Owned tickers are excluded from ENTRY alerts by design (you're already in).

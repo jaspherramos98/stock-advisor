@@ -5,15 +5,21 @@ large-caps whose options run $200-$1000/contract).
 
 Deterministic technical screen (NO LLM, no tokens): over a preset of liquid, LOW-PRICED
 underlyings (where sub-$25 options actually exist), derive a directional lean + a modest
-conviction from RSI so the EXISTING strategies act on them:
-  - RSI <= 35  → buy  (oversold bounce)   → mean_reversion
-  - RSI >= 68  → short (overbought fade)   → mean_reversion (put)
-  - 52..67     → buy  (constructive momo)  → catalyst_momentum (conviction 70)
-  - 35..52     → skip (chop)
+conviction from RSI so the EXISTING strategies act on them.
 
-These are TECHNICAL GAMBLES, not fundamental edges — appropriate only for the disposable pilot,
-and ranked BELOW real pipeline/chat signals (they fill leftover budget). The affordability filter
-in options_data.select_contract still decides what the account can actually buy.
+ONLY statistical extremes fire — those have a real (mean-reversion) basis:
+  - RSI <= 35  → buy   (oversold bounce)   → mean_reversion (call)
+  - RSI >= 68  → short (overbought fade)   → mean_reversion (put)
+  - 36..67     → skip  (no basis)
+
+The mid-range "momentum" buy (RSI 52-67 → call) was REMOVED: buying a call just because RSI sits
+mid-range is noise with no edge — the underlying rarely moves enough to clear the option's own
+premium + theta + spread, so those entries systematically bled the pilot. The scout has no news
+feed, so it cannot gate on a real catalyst; restricting to extremes is the honest equivalent.
+
+These are still TECHNICAL GAMBLES, not fundamental edges — appropriate only for the disposable
+pilot, ranked BELOW real pipeline/chat signals (they fill leftover budget). The affordability
+filter in options_data.select_contract still decides what the account can actually buy.
 """
 from __future__ import annotations
 
@@ -36,18 +42,16 @@ AFFORDABLE_UNIVERSE = [
 
 
 def _lean_from_rsi(rsi: float | None) -> tuple[str, int] | None:
-    """Map an RSI reading to (direction, conviction), or None to skip. Convictions are set so the
-    right strategy fires: 65 at an extreme (mean_reversion needs >=60 + the RSI extreme), 70 for
-    momentum (catalyst_momentum needs >=70)."""
+    """Map an RSI reading to (direction, conviction), or None to skip. Only statistical extremes
+    fire (mean_reversion needs conviction>=60 + the RSI extreme). The mid-range momentum buy was
+    removed — no edge, it just paid premium/theta/spread on noise."""
     if rsi is None:
         return None
     if rsi <= 35:
-        return ("buy", 65)
+        return ("buy", 65)     # oversold → mean_reversion call
     if rsi >= 68:
-        return ("short", 65)
-    if 52 <= rsi < 68:
-        return ("buy", 70)
-    return None
+        return ("short", 65)   # overbought → mean_reversion put
+    return None                # 36..67 → no basis, skip
 
 
 def scout_signals(max_names: int = 6) -> list[dict]:

@@ -1694,6 +1694,7 @@ if True:
         from storage.entry_watch import (
             get_pinned as _get_pinned, remove_pinned as _remove_pinned,
             get_chat_suggestions as _get_chat_sugg, set_chat_suggestions as _set_chat_sugg,
+            pin_days_left as _pin_days_left, PIN_TTL_DAYS as _PIN_TTL,
         )
         from alerts.entry_checker import _parse_triggers as _parse_trig
 
@@ -1750,7 +1751,10 @@ if True:
         else:
             st.caption(
                 f"{len(_pinned)} trigger(s) checked every 15 minutes during market hours. "
-                "These survive pipeline reruns — remove any you no longer want."
+                "These survive pipeline reruns — remove any you no longer want. "
+                f"A pin auto-expires {_PIN_TTL} days after it was pinned (its clock resets "
+                "whenever Argus surfaces the ticker again), so a stale thesis can't keep an "
+                "orphaned price level armed."
             )
             _live = {}
             try:
@@ -1782,8 +1786,17 @@ if True:
                             "once a recommendation gives a concrete price.",
                             icon="⚠️",
                         )
+                    _left = _pin_days_left(p)
+                    if _left is None:
+                        _exp = "expiry unknown"
+                    elif _left == 0:
+                        _exp = "⏳ expires today"
+                    elif _left == 1:
+                        _exp = "⏳ expires in 1 day"
+                    else:
+                        _exp = f"expires in {_left} days"
                     st.caption(
-                        f"Pinned {p.get('pinned_at', '?')} · "
+                        f"Pinned {p.get('pinned_at', '?')} · {_exp} · "
                         f"{_esc(p.get('trigger_text', ''))[:180]}"
                     )
                 with c_btn:

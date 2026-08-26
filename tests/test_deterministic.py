@@ -610,9 +610,24 @@ def test_affordable_scout_lean():
     from ingestion.affordable_scout import _lean_from_rsi
     assert _lean_from_rsi(30) == ("buy", 65)      # oversold → mean_reversion buy
     assert _lean_from_rsi(72) == ("short", 65)    # overbought → mean_reversion short
-    assert _lean_from_rsi(58) == ("buy", 70)      # momentum → catalyst_momentum
+    assert _lean_from_rsi(58) is None             # mid-range momentum removed (noise, no edge)
     assert _lean_from_rsi(45) is None             # chop → skip
     assert _lean_from_rsi(None) is None
+
+
+def test_closed_underlyings_anti_churn():
+    from alerts.agentic_options import _closed_underlyings
+    exits = [
+        {"close": "SNAP", "status": "placed"},
+        {"close": "T", "status": "error"},        # live: didn't actually close → allow re-entry
+        {"close": None, "status": "placed"},      # malformed → ignored
+        {"close": "aal", "status": "dry_run"},
+    ]
+    # Live: only placed/dry_run closes block re-entry.
+    assert _closed_underlyings(exits, live=True) == {"SNAP", "AAL"}
+    # Paper: every close executes, so all non-null tickers block re-entry.
+    paper = [{"close": "SNAP", "pnl": -3.0}, {"close": "TLT", "pnl": 1.0}]
+    assert _closed_underlyings(paper, live=False) == {"SNAP", "TLT"}
 
 
 def test_paper_book_flow(tmp_path, monkeypatch):
@@ -643,6 +658,38 @@ def test_paper_position_pnl():
     assert position_pnl(0.20, 0.30, 1) == (10.0, 50.0)
     assert position_pnl(0.20, 0.10, 2) == (-20.0, -50.0)
     assert position_pnl(0, 0.10, 1) == (0.0, 0.0)
+
+
+def test_pin_ttl_expiry_and_renew(tmp_path, monkeypatch):
+    from storage import entry_watch as ew
+    from datetime import date, timedelta
+    monkeypatch.setattr(ew, "ENTRY_WATCH_FILE", str(tmp_path / "entry_watch.json"))
+
+    def _pin(ticker, days_ago):
+        d = (date.today() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+        data = ew.load_entry_watch()
+        data.setdefault("pinned", []).append(
+            {"ticker": ticker, "company_name": ticker, "trigger_text": "breakout $10",
+             "exit_condition": "", "pinned_at": d})
+        ew.save_entry_watch(data)
+
+    _pin("FRESH", 2)                    # age 2 → 5 days left
+    _pin("EDGE", ew.PIN_TTL_DAYS)       # age == TTL → still alive (0 left)
+    _pin("STALE", ew.PIN_TTL_DAYS + 1)  # age > TTL → expired
+
+    # load prunes the expired one lazily
+    pins = {p["ticker"]: p for p in ew.get_pinned()}
+    assert set(pins) == {"FRESH", "EDGE"}
+    assert ew.pin_days_left(pins["FRESH"]) == ew.PIN_TTL_DAYS - 2
+    assert ew.pin_days_left(pins["EDGE"]) == 0
+
+    # renew resets the clock for a ticker that reappeared in fresh recs
+    assert ew.renew_pins(["edge"]) == 1               # case-insensitive
+    edge = next(p for p in ew.get_pinned() if p["ticker"] == "EDGE")
+    assert ew.pin_days_left(edge) == ew.PIN_TTL_DAYS  # back to full TTL
+    assert ew.renew_pins(["EDGE"]) == 0               # already today → no-op
+    # an unparseable / missing date is treated as expired (fail-safe)
+    assert ew._is_expired({"ticker": "X"})
 
 
 def test_agent_signals_merge_chat_buys(tmp_path, monkeypatch):

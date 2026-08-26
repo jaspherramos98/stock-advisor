@@ -2,6 +2,35 @@
 
 ## Done
 
+### 35. Agent bleed fixes — churn + scout noise ✅  (branch feat/robinhood-mcp-agentic)
+Diagnosed why the live agent was losing beyond its baseline -EV. Two real defects fixed:
+- **Churn (sell-then-rebuy):** exits run before entries, so a just-closed underlying no longer read
+  as "held" and the same signal re-bought it the SAME cycle (log 08-25 11:59: SNAP placed + SNAP
+  closed together) — paying the round-trip spread and undoing the exit. Fix: `_closed_underlyings`
+  (pure, unit-tested) excludes this-cycle closes from re-entry; threaded into `_run_entries` +
+  `_run_paper_entries` via a new `exclude` arg. Live counts only placed/dry_run closes; paper counts all.
+- **Scout noise:** removed the mid-range RSI momentum buy (52-67 → call) from `affordable_scout._lean_from_rsi`
+  — buying a call on a mid-range RSI is noise that can't clear premium+theta+spread. Scout now fires
+  ONLY on statistical extremes (≤35 buy / ≥68 short, mean-reversion basis). Test updated.
+- **Scout OFF by default:** `SCOUT_AFFORDABLE=False` — agent trades ONLY real catalyst signals
+  (pipeline + chat) and stays idle when nothing affordable qualifies. Idle beats -EV noise. Flip True
+  to re-enable.
+- NOTE: the core "agent loses" truth is unchanged — it's an aggressive -EV pilot by design. These fixes
+  stop it losing FASTER than baseline; they don't manufacture edge. 82 tests green.
+
+### 36. Pinned-watch TTL — expire stale entry triggers ✅  (branch feat/robinhood-mcp-agentic)
+A pinned "buy when" trigger used to live forever, so an orphaned price level kept firing after its
+catalyst/thesis was long gone (and the level itself was stale). Now (design B):
+- **7-day TTL** (`PIN_TTL_DAYS`) from `pinned_at`; expired pins are lazily pruned on `load_entry_watch`
+  (persists only when it actually drops one → normal load stays read-only). Missing/unparseable date =
+  treated as expired (fail-safe).
+- **Renew-on-reappear:** `renew_pins()` resets the clock when a pinned ticker resurfaces as a live watch
+  in a fresh pipeline run (`entry_checker` calls it before checking) — a still-valid thesis persists, a
+  true orphan ages out. So expiry means "no recent thesis", not merely "old".
+- **UI:** Watch List pins show an expires-in-N-days countdown (`pin_days_left`) + the TTL is explained in
+  the section caption. Unit-tested (`test_pin_ttl_expiry_and_renew`). 83 tests green.
+- Chat suggestions were already self-limiting (each set replaces the last); this is pinned-only.
+
 ### 34. Phase 2 — autonomous options agent, LIVE (R25→R27) ✅  (branch feat/robinhood-mcp-agentic)
 Built + running the whole agentic options pilot this session. Highlights (see CLAUDE.md for module map):
 - **MCP live (R25):** reads swapped to the official Trading MCP via `ingestion/account_reads.py`
