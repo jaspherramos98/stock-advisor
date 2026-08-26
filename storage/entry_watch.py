@@ -14,7 +14,7 @@ because chat replies are otherwise ephemeral.
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, date
 
 ENTRY_WATCH_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -23,9 +23,43 @@ ENTRY_WATCH_FILE = os.path.join(
 
 _EMPTY = {"chat_suggestions": [], "pinned": [], "notified": {}}
 
+# A pinned buy-trigger auto-expires this many days after it was pinned (or last renewed).
+# Rationale: a catalyst-driven entry setup plays out in days, not weeks — a trigger that hasn't
+# fired within ~a week almost always has a dead thesis AND a stale price level, so leaving it
+# armed just risks firing on a coincidence. Pins that REappear in a fresh pipeline run get their
+# clock reset (renew_pins) — expiry then means "no recent thesis", not merely "old".
+PIN_TTL_DAYS = 7
+
+
+def pin_age_days(pin: dict) -> int | None:
+    """Days since a pin was pinned/last renewed. None if the date is missing/unparseable."""
+    raw = (pin or {}).get("pinned_at")
+    if not raw:
+        return None
+    try:
+        d = datetime.strptime(raw, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return (date.today() - d).days
+
+
+def pin_days_left(pin: dict) -> int | None:
+    """Days until this pin auto-expires (0 = expires today). None if the date is unparseable."""
+    age = pin_age_days(pin)
+    return None if age is None else max(0, PIN_TTL_DAYS - age)
+
+
+def _is_expired(pin: dict) -> bool:
+    """A pin is expired once older than PIN_TTL_DAYS. An unparseable date is treated as expired
+    (fail-safe: a pin we can't age can't fire on a coincidence forever)."""
+    age = pin_age_days(pin)
+    return age is None or age > PIN_TTL_DAYS
+
 
 def load_entry_watch() -> dict:
-    """Loads the entry-watch file, returning a valid empty structure on any failure."""
+    """Loads the entry-watch file, returning a valid empty structure on any failure.
+    Self-healing: prunes expired pins (and their notify records) on load, persisting only if it
+    actually dropped something — so every consumer (checker + UI) sees a clean, current list."""
     if not os.path.exists(ENTRY_WATCH_FILE):
         return dict(_EMPTY)
     try:
@@ -36,10 +70,27 @@ def load_entry_watch() -> dict:
         data.setdefault("chat_suggestions", [])
         data.setdefault("pinned", [])
         data.setdefault("notified", {})
+        _prune_expired(data)
         return data
     except Exception as e:
         print(f"Entry watch load error: {e}")
         return dict(_EMPTY)
+
+
+def _prune_expired(data: dict) -> None:
+    """Drop expired pins from `data` in place; clear their notify records. Persists (one write)
+    only when at least one pin was removed, so a normal load stays read-only."""
+    pins = data.get("pinned", [])
+    kept = [p for p in pins if not _is_expired(p)]
+    if len(kept) == len(pins):
+        return
+    dropped = {p.get("ticker") for p in pins if _is_expired(p)}
+    data["pinned"] = kept
+    data["notified"] = {k: v for k, v in data.get("notified", {}).items()
+                        if not (k.endswith("|pinned") and k.rsplit("|", 1)[0] in dropped)}
+    for t in dropped:
+        print(f"Entry watch: pin {t} expired (>{PIN_TTL_DAYS}d, no recent thesis) — removed.")
+    save_entry_watch(data)
 
 
 def save_entry_watch(data: dict):
@@ -113,6 +164,25 @@ def add_pinned(ticker: str, company_name: str, trigger_text: str,
     })
     save_entry_watch(data)
     return True
+
+
+def renew_pins(tickers) -> int:
+    """Reset the TTL clock (pinned_at → today) for any pinned ticker in `tickers` — called when
+    those tickers reappear as live watches in a fresh pipeline run, so a still-valid thesis keeps
+    the pin alive. Orphaned pins (no longer surfaced) are left to age out. Returns count renewed."""
+    wanted = {(t or "").strip().upper() for t in (tickers or [])}
+    if not wanted:
+        return 0
+    data = load_entry_watch()
+    today = date.today().strftime("%Y-%m-%d")
+    n = 0
+    for p in data.get("pinned", []):
+        if p.get("ticker") in wanted and p.get("pinned_at") != today:
+            p["pinned_at"] = today
+            n += 1
+    if n:
+        save_entry_watch(data)
+    return n
 
 
 def remove_pinned(ticker: str) -> bool:

@@ -92,7 +92,11 @@ alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a wat
 alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject/header adapt)
 alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
 storage/entry_watch.py        Persists PINNED watches + Argus chat's last buy/watch suggestions
-                              + per-day notify record (entry_watch.json, gitignored)
+                              + per-day notify record (entry_watch.json, gitignored). Pins auto-expire
+                              PIN_TTL_DAYS (7) after pinned_at (lazy prune on load) so a stale thesis
+                              can't keep an orphaned price level armed; renew_pins() resets the clock
+                              when a ticker reappears as a live watch in a fresh pipeline run
+                              (entry_checker calls it). pin_days_left/pin_age_days drive the UI countdown.
 argus.bat                     Launch Argus (reuses a running instance; opens one browser tab)
 argus_silent.vbs              Launch Argus with NO terminal window (background/always-on).
                               Shortcut it into shell:startup to auto-run at login.
@@ -101,10 +105,100 @@ run_checks.bat                Run exit+entry alert checks once (UTF-8 env + venv
 run_checks_silent.vbs         Same, hidden — what the "Argus Alert Checks" scheduled task calls
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
-config.py                     Shared constants (CLAUDE_MODEL) — single source of truth
+config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
+                              flags USE_MCP/DRY_RUN + ROBINHOOD_MCP_URL (R25) — single source of truth
+llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
+                              console balance, record_cost decrements per call, can_spend() halts new
+                              agent entries + chat when remaining ≤ reserve (default $0.50). Persists to
+                              credit_ledger.json (gitignored). Wired into _log_chat_usage + agentic_options.
 chat_budget.py                Chat token budget: history window + max_tokens + the system-prompt
                               char floor that keeps prompt caching alive (R23). Separate module so
                               it's testable without importing app.py (which boots Streamlit)
+trading_guards.py             Broker-agnostic order-safety guardrails (R25) — OrderIntent/GuardState +
+                              check_order (idempotency, daily order cap, daily-loss kill switch,
+                              buying-power + single-name cap). Pure logic, network-free, unit-tested.
+ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — mirrors robinhood.py
+                              read shapes (fetch_positions/buying_power/quotes) + guarded, DRY_RUN-safe
+                              place_order. Trades ONLY the Agentic account. _call_tool delegates to
+                              mcp_auth (lazy import); _TOOL_* names + _order_args schema are placeholders
+                              to confirm from the live tool list. USE_MCP=False → never touched.
+ingestion/account_reads.py    Read dispatcher (R25) — buying_power/positions/quotes/is_available routed
+                              to the MCP (USE_MCP=True, no 429) or robin_stocks (False), NO cross-fallback
+                              (so MCP-on can't silently re-trigger the robin_stocks login). Dashboard +
+                              prices import from HERE. News stays on robin_stocks and is skipped when USE_MCP.
+ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mcp SDK OAuthClientProvider
+                              (DCR + PKCE + silent refresh) with file-backed token storage
+                              (~/.tokens/robinhood_mcp.json, NOT in repo) + localhost browser callback.
+                              login() = interactive (once); call_tool()/list_tools() = non-interactive,
+                              stored-token only (never pops a browser from a read). mcp SDK is an OPTIONAL
+                              dep (not in requirements.txt) → imported lazily so CI stays clean.
+ingestion/options_data.py     Option contract selection (R26/Phase 2) — chain→expiration(DTE window)→
+                              strike(OTM %)→quote→liquidity+affordability, via MCP option-data tools.
+                              Pure helpers (_dte/pick_expiration/pick_contract_by_moneyness/liquidity_ok/
+                              contract_cost) unit-tested; select_contract orchestrates live.
+analysis/options_strategies.py Options strategy library (Phase 2) — 5 codified playbooks mapping an
+                              (enriched) Argus signal+regime to an option PLAN (right/DTE/OTM%/alloc/exit):
+                              pre_earnings_iv (lottery, -EV), post_earnings_momentum, short_dte_momentum,
+                              mean_reversion (RSI), catalyst_momentum. applicable_plans (priority w/
+                              fallback), size_contracts, option_exit_decision. Pure, unit-tested.
+storage/peak_tracker.py       Option high-water-mark tracker (Phase 2) — records each contract's peak
+                              mark (keyed by option_id, peaks.json gitignored) so option_exit_decision
+                              can TRAIL: sell after a pullback from the peak instead of only a fixed
+                              target. Shared by the paper + live exit paths. clear_peak on close.
+storage/paper_book.py         Paper-trading book (Phase 2) — virtual cash account the agent trades
+                              against live option prices (zero money): open/close positions, realized +
+                              unrealized P&L, summarize(). Persisted paper_book.json (gitignored). Pure
+                              P&L helpers unit-tested. Agent 'paper' mode = run_paper_agent().
+ingestion/affordable_scout.py Affordable-universe scout (Phase 2) — when every pipeline idea is too
+                              expensive for the pilot, scans a preset of liquid CHEAP underlyings and
+                              emits technical buy/short signals from RSI (source='scout', ranked LAST so
+                              it only fills leftover budget). ONLY statistical extremes fire (RSI ≤35 buy
+                              / ≥68 short → mean_reversion); the old mid-range momentum buy (52-67 → call)
+                              was REMOVED — no edge, it bled premium/theta/spread on noise. Deterministic,
+                              no tokens; _lean_from_rsi unit-tested. Toggle agentic_options.SCOUT_AFFORDABLE
+                              (default OFF — scout gambles have no edge; agent trades ONLY real catalyst
+                              signals and stays idle otherwise).
+ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_equity_technical_indicators)
+                              + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
+                              per ticker, so the technical/earnings strategies have their inputs. Pure
+                              parsers unit-tested; enrich() called in the agent's entry loop.
+alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_signals`): pipeline buys/
+                              shorts + chat suggestions (`_chat_direction` maps buy→call, short/"(short)"
+                              text→put, sell/watch→ignored) + affordable_scout, deduped by ticker, priority
+                              pipeline>chat>scout. ENTRIES: signal→enrich(RSI/earnings)→first applicable
+                              strategy with a tradable/affordable contract→review→place_option_order.
+                              An underlying CLOSED this cycle is excluded from re-entry (`_closed_underlyings`,
+                              unit-tested) — exits run before entries, so without this a live signal would
+                              sell then re-buy the same name in one cycle, paying the round-trip spread and
+                              undoing the exit (the churn bug).
+                              EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
+                              (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
+                              market-hours gated, kill switch `agentic_halt.flag`, LLM-credit halt on entries.
+                              AGENTIC account only. Position size uncapped (pilot).
+alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
+                              stop_market per AGENTIC-account position (set-and-forget; Robinhood
+                              auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first
+                              via review_equity_order; DRY_RUN-safe + trading_guards. Whole-share only
+                              (fractional <1 sh skipped). Agentic account only — main book stays manual.
+scripts/agentic_stops.py      Run agentic_stops.sync_protective_stops() (DRY_RUN) — logs the stops it
+                              would place; flip config.DRY_RUN=False to place real resting stops.
+scripts/mcp_login.py          One-time interactive login (R25) — run after funding the Agentic account:
+                              browser auth, stores tokens, prints the tool list + schemas (answers gate #1
+                              order types + gate #4 read scope). Needs `pip install "mcp[cli]"` in venv.
+scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — market-hours gated; DRY unless
+                              ARM flag `agent_live.arm` exists (then LIVE); honors kill switch
+                              (`agentic_halt.flag`) + credit ledger; logs actions to agent_scheduler.log.
+run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
+                              it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs.
+                              Manage: schtasks /Query|/Run|/Change|/Delete /TN "Argus Options Agent".
+market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
+                              run pipeline (fresh signals) → arm the agent (echo armed > agent_live.arm).
+                              run_market_open_silent.vbs runs it hidden; Windows task "Argus Market Open"
+                              (daily 06:30) calls it. Deleting the task = manual mornings.
+scripts/scan_affordable.py    Read-only screener — which tickers have a ~30-DTE OTM option within the
+                              agentic buying power (+ = affordable). Argv or auto (recs+chat+cheap preset).
+scripts/mcp_spike.py          Pre-auth probe (R25) — confirmed the server is OAuth-gated, DCR works
+                              (custom client OK), refresh_token grant exists (429 dies). Places NO orders.
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
@@ -332,6 +426,42 @@ conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core
   includes watches by design and walks the user through them on weak days instead
   of dismissing; understands `short` ideas (bearish, stocks-only, invert P&L)
 
+### Robinhood agentic execution — Path B / Design A (R25, scaffolding only)
+Goal: kill two pains — (1) the `robin_stocks` 429/device-approval reset, and (2) exit-selling that
+needs 24/7 attention (the emailer only notifies, ~once/day). Path A (auto-orders via `robin_stocks`)
+was rejected: it's a ToS violation that escalates ban risk. Path B uses Robinhood's **official Trading
+MCP** (OAuth refresh tokens end the 429; sanctioned for agents). **Design A**: Argus computes the exact
+orders with its existing math (pyramid sizing + structure exits) and calls MCP `place_order` literally —
+**no LLM between analysis and execution** (keeps token cost ~current; the Claude-agent-per-trade design
+was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
+- **Isolation:** all MCP/OAuth lives in `ingestion/robinhood_mcp.py` (mirrors robinhood.py read shapes
+  so callers swap via the `config.USE_MCP` flag). All order safety lives in `trading_guards.py`.
+- **Account boundary:** the MCP trades/reads ONLY a dedicated, funded **Agentic account**, never the
+  main account (Robinhood-enforced). Main-account holdings do NOT migrate automatically.
+- **All gates resolved + reads proven live (2026-08-14):** authenticated via `scripts/mcp_login.py`
+  (DCR + PKCE, refresh-token → silent renewal → **429 dead**). The MCP exposes 54 tools.
+  - **Gate #1 order types = ✅** `place_equity_order.type` ∈ {market, limit, **stop_market, stop_limit**},
+    `time_in_force` gtc, `market_hours` regular/extended/all_day (stop_* are regular-hours only). Native
+    standing stops → set-and-forget exits, no polling. `review_equity_order` = pre-trade sim (confirm-first).
+  - **Gate #4 read scope = ✅** `get_accounts` returns ALL accounts incl. MAIN (agentic_allowed=false);
+    reads work on any account. **Orders only on the agentic account** (place_equity_order rejects
+    non-agentic). So auto-exit via stops only for positions HELD in the agentic account.
+  - **Reads wired to real tools + verified live:** `fetch_positions` (get_equity_positions, enriched with
+    get_equity_quotes for price/P&L), `fetch_buying_power` (get_portfolio), `fetch_quotes`
+    (get_equity_quotes). Default to the MAIN account; `agentic_account_number()` for order sizing.
+- **STATUS: reads LIVE via MCP (429 gone); execution wired but DRY_RUN.** On this branch `USE_MCP=True`
+  + `DRY_RUN=True`. The dashboard buying power / positions / quotes and the pipeline's quote source read
+  through `ingestion/account_reads.py` → the MCP (MAIN account), and robin_stocks news is skipped, so no
+  robin_stocks login fires → the 429 is gone from the read + pipeline paths. Verified live (main BP $150 +
+  6 positions). Account model: MAIN = the real book (manual); the AGENTIC account is a funded pilot.
+  robin_stocks stays only for the (now-skipped) news path; `git checkout main` or `USE_MCP=False` fully
+  reverts. **Next (not done):** route exits to `place_order` native `stop_market`/`stop_limit` GTC on the
+  AGENTIC account (DRY_RUN + confirm-first via `review_equity_order`) — auto-exit only covers agentic-held
+  positions; main holdings stay manual. (The SDK's benign `Session termination failed: 400` teardown
+  warning is silenced in `mcp_auth.py` by lowering that one logger to ERROR.)
+- **To revert to native Argus entirely:** `git checkout main` (this work is on branch
+  `feat/robinhood-mcp-agentic`).
+
 ## Claude Analysis JSON Schema
 Each recommendation must have:
 ```json
@@ -382,7 +512,10 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   double-alerts:
   1. **Pinned watches** — the 👁 **Watch this trigger** button on a watch rec's expander copies its
      `entry_trigger` into `storage/entry_watch.py`. This is the ONLY source that survives a pipeline
-     rerun; the level is stored exactly as pinned and is NOT refreshed if the ticker reappears later.
+     rerun. The price LEVEL is stored exactly as pinned (never re-priced), but the pin auto-EXPIRES
+     `PIN_TTL_DAYS` (7) after `pinned_at` — a catalyst entry setup that hasn't fired in ~a week has a
+     dead thesis + stale level. `renew_pins()` resets that clock whenever the ticker reappears as a
+     live watch in a fresh pipeline run (so a still-valid thesis persists; a true orphan ages out).
   2. **Argus chat's last suggestion** — the `/chat` proxy parses `Buy —`/`Watch — TICKER` action
      lines via `_capture_chat_suggestions`; each capture replaces the prior set.
   3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`).
@@ -410,7 +543,8 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   run_checks.bat CRLF.
 
 ## Dashboard Tabs
-1. **Today's Recommendations** — allocation table with HR gold highlighting, stock detail expanders,
+1. **Today's Recommendations** — single allocation table (`_render_alloc_table`) with HR gold
+   highlighting, stock detail expanders,
    add to positions. **Table layout (R14):** 12 columns sized in explicit pixels so the whole table
    fits a normal desktop window with NO horizontal scroll; `row_height=70` (double) lets Buy/Sell
    wrap to 2 lines; `height` is set from the row count so every row shows without an inner scrollbar.
@@ -437,15 +571,39 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    - **📍 Open positions — exit alerts**: auto-included (no pinning needed), showing entry/live/P&L,
      computed stop price and exit condition. Read-only; managed under My Positions.
    - **📌 Pinned buy triggers — entry alerts**: each pinned watch with its parsed breakout/pullback
-     levels, live price, pin date and a ✕ remove button — the fix for orphaned pins (a pin whose
-     ticker left the recommendations previously had no removal UI). A pin whose trigger has NO `$`
-     price shows a warning that it can never fire. Chat-sourced suggestions are listed in an
+     levels, live price, pin date, an **expires-in-N-days** countdown (7-day TTL, auto-renews when the
+     ticker reappears in a fresh run) and a ✕ remove button — the fix for orphaned pins (a pin whose
+     ticker left the recommendations previously had no removal UI and would fire forever on a stale
+     level). A pin whose trigger has NO `$` price shows a warning that it can never fire. Chat-sourced
+     suggestions are listed in an
      expander with a clear button.
    - Then the original Finnhub ticker watchlist editor per asset type.
    Owned tickers are excluded from ENTRY alerts by design (you're already in).
 5. **History** — Google Sheets export history with charts
+6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
+   **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
+   equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset buttons.
+   **🕯 Live chart**: plotly candlesticks (get_equity_historicals) per ticker/interval with paper BUY/SELL
+   markers + refresh. Then: status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit left);
+   **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
+   (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
+   **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`
+   only around the call, never process-wide; **agentic equity positions** + a **🔄 Sync positions**
+   refresh; **open option positions** with live P&L + the agent's exit decision (hold/close + reason)
+   and a per-position **Close now** override. **Exit policy (`option_exit_decision`, poll-based each
+   cycle, not a resting stop):** hard stop −50% → **trailing take-profit** (once up ≥`trail_activate`
+   25%, sell if it gives back `trail_giveback` 20% from the peak — `storage/peak_tracker`) → +80% hard
+   target → close ≤2 DTE. (Sidebar decluttered — helper captions removed.)
 
 ## Known Issues / Constraints
+- **MCP has NO crypto endpoint.** The Robinhood Trading MCP is equities/ETFs/options only — it can't read
+  or trade crypto (DOGE/XRP/BTC). Sync positions skips crypto; the options agent can't touch it. Track
+  crypto manually (My Positions → add). Only `ingestion/robinhood.py` (robin_stocks) sees crypto, and
+  that path is skipped under `USE_MCP`.
+- **Streamlit caches imported modules.** After editing a module (adding a function, etc.), a browser
+  refresh or "Rerun" is NOT enough — the running process holds the stale module (symptom: `ImportError:
+  cannot import name X`). FULLY restart the app (`argus_stop.bat` → relaunch). The scheduler is unaffected
+  (fresh `python` each cycle picks up new code immediately).
 - `robin_stocks` is unofficial — if Robinhood changes their app it may break; only edit `ingestion/robinhood.py`
 - **Robinhood auth / 429 loop:** the stored session (`~/.tokens/robinhood.pickle`) expires after
   `expiresIn` (set to 7 days in `_login`; Robinhood may cap it lower). Re-login on a

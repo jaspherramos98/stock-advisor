@@ -4,6 +4,12 @@ google_credentials.json
 
 # Local data files — personal and changes constantly
 pipeline_cache.json
+credit_ledger.json
+agentic_halt.flag
+agent_live.arm
+agent_scheduler.log
+paper_book.json
+peaks.json
 pipeline_cache_backup.json
 positions.json
 positions_backup_*.json

@@ -87,6 +87,10 @@ def _log_chat_usage(usage, sent_messages):
             f"cache_read={cache_read} cache_write={cache_write} "
             f"msgs_sent={sent_messages}"
         )
+        # Decrement the local credit ledger (Anthropic exposes no live balance API).
+        from llm_budget import cost_of, record_cost
+        record_cost(cost_of(CLAUDE_MODEL, usage.get("input_tokens", 0),
+                            usage.get("output_tokens", 0), cache_read))
     except Exception:
         pass
 
@@ -101,8 +105,8 @@ def _live_buying_power(force: bool = False):
     if not force and _BP_CACHE["value"] is not None and (now - _BP_CACHE["ts"]) < _BP_TTL_SECONDS:
         return _BP_CACHE["value"]
     try:
-        from ingestion.robinhood import fetch_buying_power, is_available
-        bp = fetch_buying_power() if is_available() else None
+        from ingestion.account_reads import buying_power, is_available
+        bp = buying_power() if is_available() else None
     except Exception:
         bp = None
     _BP_CACHE["value"], _BP_CACHE["ts"] = bp, now
@@ -157,6 +161,23 @@ def _suggested_exit(ticker: str, asset_type: str = "stock"):
         return None
 
 
+def _structure_exit_condition(ticker: str, asset_type: str = "stock"):
+    """R24 structure exit as a 'target X% gain, stop loss at Y%' string, or None when there's
+    no usable price structure. Blue-sky (no overhead resistance) → target a measured move of
+    2× the ATR stop so reward stays ≥ 2× risk. Used so SYNCED positions get a per-chart exit
+    instead of a flat 10/5 guess (same math as the My Positions 'Apply' button)."""
+    kl = _suggested_exit(ticker, asset_type)
+    if not kl:
+        return None
+    stp = kl.get("stop_pct_atr")
+    if stp is None:
+        return None
+    tgt = kl.get("target_pct_resist")
+    if tgt is None:
+        tgt = round(2 * stp, 1)
+    return f"target {tgt}% gain, stop loss at {stp}%"
+
+
 def _capture_chat_suggestions(reply_text: str):
     """
     Pulls Buy/Watch lines out of Argus's action-list reply and stores them as entry-watch
@@ -170,7 +191,10 @@ def _capture_chat_suggestions(reply_text: str):
     """
     import re
     try:
-        pattern = re.compile(r"^\s*([Bb]uy|[Ww]atch)\s*[—–\-:]+\s*\$?([A-Z]{1,6})\b[,\s]*(.*)$",
+        # Capture Buy / Short / Sell / Watch so a bearish chat call isn't lost or misread as a buy
+        # (that flipped a TLT short into a bought call). Direction is resolved downstream from the
+        # verb + text so "Buy — TLT (short)" still becomes a short.
+        pattern = re.compile(r"^\s*([Bb]uy|[Ss]hort|[Ss]ell|[Ww]atch)\s*[—–\-:]+\s*\$?([A-Z]{1,6})\b[,\s]*(.*)$",
                              re.MULTILINE)
         found = [
             {"ticker": m.group(2).upper(),
@@ -199,7 +223,7 @@ def _build_argus_context() -> str:
     # --- Live Robinhood buying power = THE budget (single source of truth) ---
     # There is no separate manual budget anymore; buying power IS the money to size to.
     try:
-        from ingestion.robinhood import is_available
+        from ingestion.account_reads import is_available
         if is_available():
             bp = _live_buying_power()
             if bp is not None:
@@ -502,7 +526,7 @@ try:
     with _hdr_l:
         st.markdown(f"**{_sess['badge']}**  ·  {_sess['stamp']}")
     with _hdr_r:
-        from ingestion.robinhood import is_available as _rh_avail
+        from ingestion.account_reads import is_available as _rh_avail
         if _rh_avail():
             _bp = _live_buying_power()
             if _bp is not None:
@@ -514,6 +538,115 @@ except Exception:
 if os.getenv("MOCK_MODE", "false").lower() == "true":
     st.warning("⚠️ MOCK MODE active — showing test data. No real Claude API calls. Set MOCK_MODE=false in .env for real analysis.")
 
+# --- Cached agentic reads (network-heavy; Streamlit reruns the whole script on every click, so
+# uncaching these made every checkbox/button wait on ~10-15 MCP round-trips). 30-60s TTL keeps
+# the Agent tab snappy; actions (run cycle / close) still use fresh data via the agent functions. ---
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_agentic_bp(acct):
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_buying_power(acct)
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_option_positions(acct):
+    from ingestion import robinhood_mcp as _m, mcp_auth as _a
+    d = _m._data(_m._unwrap_tool_result(_a.call_tool("get_option_positions", {"account_number": acct, "nonzero": True})))
+    return d.get("positions", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_option_quote(option_id):
+    from ingestion import options_data as _od
+    return _od.fetch_quote(option_id) or {}
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_agentic_equity(acct):
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_positions(acct)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _c_option_orders(acct):
+    from ingestion import robinhood_mcp as _m, mcp_auth as _a
+    d = _m._data(_m._unwrap_tool_result(_a.call_tool("get_option_orders", {"account_number": acct})))
+    return d.get("orders", []) if isinstance(d, dict) else []
+
+
+def _render_alloc_table(allocations):
+    """Render ONE allocation table (called once per enabled asset class, R28). Builds the
+    DataFrame, applies the direction/risk/HR styling, and renders st.dataframe with the tuned
+    column widths + 2-line row height so it fits without horizontal scroll."""
+    if not allocations:
+        return
+    df = pd.DataFrame(allocations)
+    df["flags"] = [
+        ("⭐" if a.get("highly_recommended") else "") + ("⚠" if a.get("flagged") else "")
+        for a in allocations
+    ]
+
+    def _short(text, limit=72):
+        t = " ".join(str(text or "").split())
+        return t if len(t) <= limit else t[:limit - 1].rstrip(" ,.;") + "…"
+
+    df["entry_trigger"] = df["entry_trigger"].map(_short)
+    df["exit_condition"] = df["exit_condition"].map(_short)
+    df = df[[
+        "ticker", "direction", "current_price", "change_pct",
+        "dollar_amount", "percentage", "risk_level", "conviction", "confidence_score",
+        "entry_trigger", "exit_condition", "flags",
+    ]].rename(columns={
+        "ticker": "Ticker", "direction": "Direction", "current_price": "Price",
+        "change_pct": "Today", "dollar_amount": "Amount ($)", "percentage": "Alloc %",
+        "risk_level": "Risk", "conviction": "Conviction", "confidence_score": "Confidence",
+        "entry_trigger": "Buy when", "exit_condition": "Sell when", "flags": "Flags",
+    })
+
+    def color_direction(val):
+        if val == "buy":   return "color: #2ecc71; font-weight: bold"
+        if val == "short": return "color: #e74c3c; font-weight: bold"
+        if val == "watch": return "color: #f39c12"
+        return "color: #e74c3c"
+
+    def color_risk(val):
+        if val == "low":    return "color: #2ecc71"
+        if val == "medium": return "color: #f39c12"
+        return "color: #e74c3c; font-weight: bold"
+
+    def color_change(val):
+        if val == "N/A":        return ""
+        if val.startswith("+"): return "color: #2ecc71"
+        if val.startswith("-"): return "color: #e74c3c"
+        return ""
+
+    def highlight_hr(row):
+        if "⭐" in str(row.get("Flags", "")):
+            return ["background-color: rgba(255, 215, 0, 0.08); border-left: 3px solid #FFD700"] * len(row)
+        return [""] * len(row)
+
+    styled_df = (
+        df.style
+        .apply(highlight_hr, axis=1)
+        .map(color_direction, subset=["Direction"])
+        .map(color_risk,      subset=["Risk"])
+        .map(color_change,    subset=["Today"])
+        .format({
+            "Amount ($)": "${:.2f}", "Alloc %": "{:.1f}%", "Confidence": "{:.2f}",
+            "Conviction": lambda v: f"{int(v)}" if pd.notna(v) else "—",
+        })
+    )
+    _narrow = {"Direction": 74, "Price": 74, "Today": 72, "Amount ($)": 84,
+               "Alloc %": 72, "Risk": 74, "Conviction": 84, "Confidence": 84}
+    _table_height = min(len(df) * 70 + 45, 800)
+    st.dataframe(
+        styled_df, use_container_width=True, hide_index=True,
+        row_height=70, height=_table_height,
+        column_config={
+            "Ticker":    st.column_config.TextColumn("Ticker", width=64, pinned=True),
+            "Flags":     st.column_config.TextColumn("Flags", width=48),
+            "Buy when":  st.column_config.TextColumn("Buy when",  width=215),
+            "Sell when": st.column_config.TextColumn("Sell when", width=215),
+            **{c: st.column_config.Column(c, width=w) for c, w in _narrow.items()},
+        },
+    )
+
+
 # --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
@@ -522,12 +655,8 @@ with st.sidebar:
     budget = _effective_budget()
     if budget > 0:
         st.metric("Budget = live buying power", f"\\${budget:,.2f}")
-        st.caption(f"Allocations size to your real Robinhood cash. Dollar allocation runs at "
-                   f"\\${MIN_ALLOCATION_BUDGET:,.0f}+; below that, ideas still show with \\$0.")
     else:
         st.metric("Budget = live buying power", "—")
-        st.caption("Connect Robinhood (credentials in .env) to size positions. "
-                   "Ideas still show with \\$0 until buying power is available.")
 
     st.divider()
 
@@ -542,12 +671,9 @@ with st.sidebar:
     st.divider()
 
     run_button = st.button("🔄 Run pipeline", use_container_width=True, type="primary")
-    st.caption("Fetches fresh news, scores it, and runs Claude analysis. Takes ~30 seconds. "
-               "💸 Each run costs Claude tokens — news rarely shifts intraday, so **once a day is "
-               "usually enough**; re-running the same day mostly re-spends for the same read.")
 
     # Robinhood sync
-    from ingestion.robinhood import is_available as rh_available, fetch_positions as rh_fetch, fetch_buying_power as rh_buying_power
+    from ingestion.account_reads import is_available as rh_available, positions as rh_fetch, buying_power as rh_buying_power
     if rh_available():
         st.divider()
         st.subheader("Robinhood")
@@ -571,23 +697,31 @@ with st.sidebar:
                     if rp["ticker"] in existing_tickers:
                         skipped += 1
                         continue
+                    _crypto = bool(TICKER_TO_COINGECKO_ID.get(rp["ticker"], ""))
+                    exit_cond = (_structure_exit_condition(rp["ticker"], "crypto" if _crypto else "stock")
+                                 or "target 10% gain, stop loss at 5%")
                     add_position(
                         ticker=          rp["ticker"],
                         company_name=    rp["company_name"],
                         reference_price= rp["avg_cost"],
-                        exit_condition=  "target 10% gain, stop loss at 5%",
+                        exit_condition=  exit_cond,
                         direction=       "buy",
                         confidence=      0.0,
                         source_title=    "Robinhood sync",
                     )
                     update_amount_invested(rp["ticker"], rp["amount_invested"])
                     synced += 1
-                st.success(f"Synced {synced} positions. Skipped {skipped} already in Argus.")
+                if synced:
+                    st.success(f"Synced {synced} new. Skipped {skipped} already tracked.")
+                else:
+                    st.info(f"Nothing new — all {skipped} equity/ETF position(s) already tracked.")
+                st.caption("⚠️ Crypto (DOGE, XRP, etc.) can't sync — the Robinhood Trading MCP has no "
+                           "crypto endpoint. Add coins manually below (Manage positions → add).")
                 if synced > 0:
                     st.rerun()
             else:
-                st.error("Could not fetch Robinhood positions. Check credentials in .env.")
-        st.caption("Read-only — imports positions, does not trade. Synced positions get a default 10% gain / 5% stop exit you can edit under My Positions → Manage positions.")
+                st.info("No equity/ETF positions to sync (crypto isn't readable via the MCP — "
+                        "add coins manually below).")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:
@@ -671,7 +805,7 @@ if True:
                 st.session_state.welcome_dismissed = True
                 st.rerun()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History", "🤖 Agent"])
 
     # =========================================================
     # TAB 1 — Today's Recommendations
@@ -718,106 +852,7 @@ if True:
                 a.setdefault("conviction", None)
                 a.setdefault("entry_trigger", "")
 
-            df = pd.DataFrame(allocations)
-            # Merge the two flag columns into one narrow badge column, and drop Company
-            # (it's in the expander title right below) — both changes buy horizontal room
-            # so the table fits without scrolling right.
-            df["flags"] = [
-                ("⭐" if a.get("highly_recommended") else "") + ("⚠" if a.get("flagged") else "")
-                for a in allocations
-            ]
-
-            # The analyst writes long prose triggers (100-180 chars). Truncate for the
-            # table so each cell fits the 2-line row height without forcing a horizontal
-            # scroll; the FULL text is shown in the "Stock details" expander below.
-            def _short(text, limit=72):
-                t = " ".join(str(text or "").split())
-                return t if len(t) <= limit else t[:limit - 1].rstrip(" ,.;") + "…"
-
-            df["entry_trigger"] = df["entry_trigger"].map(_short)
-            df["exit_condition"] = df["exit_condition"].map(_short)
-            df = df[[
-                "ticker", "direction",
-                "current_price", "change_pct",
-                "dollar_amount", "percentage",
-                "risk_level", "conviction", "confidence_score",
-                "entry_trigger", "exit_condition", "flags"
-            ]].rename(columns={
-                "ticker":             "Ticker",
-                "direction":          "Direction",
-                "current_price":      "Price",
-                "change_pct":         "Today",
-                "dollar_amount":      "Amount ($)",
-                "percentage":         "Alloc %",
-                "risk_level":         "Risk",
-                "conviction":         "Conviction",
-                "confidence_score":   "Confidence",
-                "entry_trigger":      "Buy when",
-                "exit_condition":     "Sell when",
-                "flags":              "Flags",
-            })
-
-            def color_direction(val):
-                if val == "buy":   return "color: #2ecc71; font-weight: bold"
-                if val == "short": return "color: #e74c3c; font-weight: bold"
-                if val == "watch": return "color: #f39c12"
-                return "color: #e74c3c"
-
-            def color_risk(val):
-                if val == "low":    return "color: #2ecc71"
-                if val == "medium": return "color: #f39c12"
-                return "color: #e74c3c; font-weight: bold"
-
-            def color_change(val):
-                if val == "N/A":        return ""
-                if val.startswith("+"): return "color: #2ecc71"
-                if val.startswith("-"): return "color: #e74c3c"
-                return ""
-
-            def highlight_hr(row):
-                if "⭐" in str(row.get("Flags", "")):
-                    return ["background-color: rgba(255, 215, 0, 0.08); border-left: 3px solid #FFD700"] * len(row)
-                return [""] * len(row)
-
-            styled_df = (
-                df.style
-                .apply(highlight_hr, axis=1)
-                .map(color_direction, subset=["Direction"])
-                .map(color_risk,      subset=["Risk"])
-                .map(color_change,    subset=["Today"])
-                .format({
-                    "Amount ($)": "${:.2f}",
-                    "Alloc %":    "{:.1f}%",
-                    "Confidence": "{:.2f}",
-                    "Conviction": lambda v: f"{int(v)}" if pd.notna(v) else "—",
-                })
-            )
-
-            # Fixed narrow widths on the numeric columns leave the rest of the width for
-            # the two long text columns, so nothing needs horizontal scrolling. Double
-            # row height lets "Buy when"/"Sell when" wrap onto a second line.
-            # Widths are tuned so all 12 columns sum to roughly the content area of a
-            # normal desktop window — no horizontal scrolling — leaving the remainder to
-            # the two text columns, which wrap onto the 2-line row height.
-            _narrow = {"Direction": 74, "Price": 74, "Today": 72, "Amount ($)": 84,
-                       "Alloc %": 72, "Risk": 74, "Conviction": 84, "Confidence": 84}
-            # Size the table to show every row at once (no inner vertical scrollbar),
-            # capped so a long list still can't push the rest of the page off-screen.
-            _table_height = min(len(df) * 70 + 45, 800)
-            st.dataframe(
-                styled_df,
-                use_container_width=True,
-                hide_index=True,
-                row_height=70,
-                height=_table_height,
-                column_config={
-                    "Ticker":    st.column_config.TextColumn("Ticker", width=64, pinned=True),
-                    "Flags":     st.column_config.TextColumn("Flags", width=48),
-                    "Buy when":  st.column_config.TextColumn("Buy when",  width=215),
-                    "Sell when": st.column_config.TextColumn("Sell when", width=215),
-                    **{c: st.column_config.Column(c, width=w) for c, w in _narrow.items()},
-                },
-            )
+            _render_alloc_table(allocations)   # single combined table (reverted R28 per-class split)
             # NOTE: escape every '$' as '\$' — Streamlit renders paired '$...$' as LaTeX,
             # which silently ate the dollar signs and mangled this caption.
             st.caption(
@@ -827,6 +862,37 @@ if True:
                 "**Flags** — ⭐ highly recommended, ⚠ unverified source (treat with extra caution).  "
                 "Buy/Sell text is shortened here — full wording is in **Stock details** below."
             )
+
+            # Batch-add watch triggers: check several, add all at once. Inside st.form so the
+            # checkboxes DON'T each fire a full rerun (that one-by-one lag was the complaint).
+            _watch_recs = [a for a in allocations
+                           if a.get("direction") == "watch"
+                           and (a.get("entry_trigger") or "").lower() not in ("now", "n/a", "")]
+            if _watch_recs:
+                from storage.entry_watch import add_pinned, is_pinned
+                with st.expander(f"📋 Add multiple to watch list ({len(_watch_recs)} watches)"):
+                    st.caption("Check the triggers to watch, then add them all with one button "
+                               "(email when each 'buy when' level is hit).")
+                    with st.form("batch_watch_form"):
+                        _wchecks = {}
+                        for a in _watch_recs:
+                            _wt = a["ticker"]
+                            _pinned = is_pinned(_wt)
+                            _trg = " ".join(str(a.get("entry_trigger") or "").split())
+                            if len(_trg) > 70:
+                                _trg = _trg[:69] + "…"
+                            _wchecks[_wt] = st.checkbox(
+                                f"**{_wt}** — {_trg}" + ("  ✓ already watching" if _pinned else ""),
+                                key=f"bw_{_wt}", disabled=_pinned)
+                        if st.form_submit_button("👁 Add checked to watch list"):
+                            _n = 0
+                            for a in _watch_recs:
+                                if _wchecks.get(a["ticker"]) and not is_pinned(a["ticker"]):
+                                    add_pinned(a["ticker"], a["company_name"],
+                                               a["entry_trigger"], a.get("exit_condition", ""))
+                                    _n += 1
+                            st.success(f"Added {_n} to the watch list.")
+                            st.rerun()
 
             col_export, col_spacer = st.columns([1, 4])
             with col_export:
@@ -1597,6 +1663,26 @@ if True:
             styled_closed = closed_df.style.map(color_pnl, subset=["P&L %"])
             st.dataframe(styled_closed, use_container_width=True, hide_index=True)
 
+            # --- Remove an individual closed trade from history ---
+            with st.expander("🗑 Remove a closed trade from history"):
+                st.caption("Permanently deletes the record so it no longer feeds the scorecard. "
+                           "Does NOT touch Robinhood — history only.")
+                _del_opts = {}
+                for _i, _p in enumerate(closed_positions):
+                    _cd = (datetime.fromisoformat(_p["closed_at"]).strftime("%Y-%m-%d")
+                           if _p.get("closed_at") else "—")
+                    _pnl = f"{_p['pnl_pct']:+.1f}%" if _p.get("pnl_pct") is not None else "—"
+                    _del_opts[f"{_i+1}. {_p['ticker']} · closed {_cd} · {_pnl}"] = _p.get("opened_at")
+                _del_sel = st.selectbox("Closed trade", list(_del_opts.keys()), key="del_closed_sel")
+                _del_confirm = st.checkbox("Confirm — this can't be undone", key="del_closed_confirm")
+                if st.button("🗑 Remove from history", disabled=not _del_confirm, key="del_closed_btn"):
+                    from storage.positions import delete_position
+                    if delete_position(_del_opts.get(_del_sel)):
+                        st.success(f"Removed: {_del_sel}")
+                        st.rerun()
+                    else:
+                        st.error("Could not remove (record not found).")
+
     # =========================================================
     # TAB 4 — Watch List Editor
     # =========================================================
@@ -1608,6 +1694,7 @@ if True:
         from storage.entry_watch import (
             get_pinned as _get_pinned, remove_pinned as _remove_pinned,
             get_chat_suggestions as _get_chat_sugg, set_chat_suggestions as _set_chat_sugg,
+            pin_days_left as _pin_days_left, PIN_TTL_DAYS as _PIN_TTL,
         )
         from alerts.entry_checker import _parse_triggers as _parse_trig
 
@@ -1664,7 +1751,10 @@ if True:
         else:
             st.caption(
                 f"{len(_pinned)} trigger(s) checked every 15 minutes during market hours. "
-                "These survive pipeline reruns — remove any you no longer want."
+                "These survive pipeline reruns — remove any you no longer want. "
+                f"A pin auto-expires {_PIN_TTL} days after it was pinned (its clock resets "
+                "whenever Argus surfaces the ticker again), so a stale thesis can't keep an "
+                "orphaned price level armed."
             )
             _live = {}
             try:
@@ -1696,8 +1786,17 @@ if True:
                             "once a recommendation gives a concrete price.",
                             icon="⚠️",
                         )
+                    _left = _pin_days_left(p)
+                    if _left is None:
+                        _exp = "expiry unknown"
+                    elif _left == 0:
+                        _exp = "⏳ expires today"
+                    elif _left == 1:
+                        _exp = "⏳ expires in 1 day"
+                    else:
+                        _exp = f"expires in {_left} days"
                     st.caption(
-                        f"Pinned {p.get('pinned_at', '?')} · "
+                        f"Pinned {p.get('pinned_at', '?')} · {_exp} · "
                         f"{_esc(p.get('trigger_text', ''))[:180]}"
                     )
                 with c_btn:
@@ -1991,6 +2090,394 @@ if True:
                 use_container_width=True,
                 hide_index=True,
             )
+
+
+    with tab6:
+        st.subheader("🤖 Agentic options agent")
+        st.caption("Autonomous options trader on the **isolated Agentic pilot** account only "
+                   "(never your main book). Observe what it holds and would do, override any "
+                   "decision, and control run mode + the kill switch. Position size is uncapped "
+                   "by design — this is a disposable-capital experiment, high-variance / likely -EV.")
+
+        import config as _cfg
+        import llm_budget as _lb
+        try:
+            from ingestion import robinhood_mcp as _amcp
+            from ingestion import options_data as _aod
+            from alerts.agentic_options import run_options_agent, _HALT_FLAG, _run_exits
+            from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
+            from trading_guards import OptionOrderIntent, GuardState
+            from ingestion import mcp_auth as _amcpauth
+            _agent_ok = True
+        except Exception as _e:  # noqa: BLE001
+            st.error(f"Agent modules unavailable: {_e}")
+            _agent_ok = False
+
+        if _agent_ok:
+            _acct = _amcp.agentic_account_number() if _amcp.is_available() else None
+            _halted = os.path.exists(_HALT_FLAG)
+            _agbp = _c_agentic_bp(_acct) if _acct else None
+            _led = _lb.get_state()
+
+            # The scheduler decides live-vs-paper by the ARM FILE, not config.DRY_RUN (which is a
+            # static default the scheduler overrides at runtime). So show the armed state — that's
+            # what actually governs whether the agent trades real money.
+            _arm_path = os.path.join(os.path.dirname(_HALT_FLAG), "agent_live.arm")
+            _armed = os.path.exists(_arm_path)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Agent mode", "🔴 ARMED — LIVE" if _armed else "🟢 PAPER (unarmed)")
+            m2.metric("Kill switch", "⛔ HALTED" if _halted else "▶ active")
+            m3.metric("Agentic buying power", f"\\${_agbp:,.2f}" if _agbp is not None else "—")
+            m4.metric("LLM credit left", f"\\${_led['remaining']:,.2f}"
+                      if _led["balance"] > 0 else "not set")
+
+            if not _acct:
+                st.warning("Agentic account not connected (USE_MCP off or not logged in). "
+                           "Run scripts/mcp_login.py.")
+
+            # --- Paper trading (simulation) ---
+            st.markdown("### 📊 Paper trading — simulated, zero money at risk")
+            st.caption("The agent trades a VIRTUAL account against live option prices so you can "
+                       "judge the strategies before arming real money. The scheduler runs this every "
+                       "cycle while unarmed.")
+            try:
+                from storage import paper_book as _pb
+                from ingestion import options_data as _pod2
+                _book = _pb.get_book()
+                _marks = {}
+                for _pp in _book.get("open", []):
+                    _q = _c_option_quote(_pp["option_id"])
+                    _marks[_pp["option_id"]] = float(_q.get("mark_price") or _q.get("bid_price") or _pp["entry_price"])
+                _ps = _pb.summarize(_book, _marks)
+
+                pm1, pm2, pm3, pm4 = st.columns(4)
+                pm1.metric("Paper equity", f"\\${_ps['equity']:,.2f}",
+                           f"{_ps['total_pnl']:+.2f} ({_ps['total_pnl_pct']:+.1f}%)")
+                pm2.metric("Cash", f"\\${_ps['cash']:,.2f}")
+                pm3.metric("Realized P&L", f"\\${_ps['realized']:,.2f}")
+                pm4.metric("Win rate", f"{_ps['win_rate']:.0f}%" if _ps['win_rate'] is not None
+                           else "—", f"{_ps['n_closed']} closed")
+
+                _pc1, _pc2, _pc3 = st.columns([1, 1, 1])
+                with _pc1:
+                    if st.button("▶ Run paper cycle now", use_container_width=True, key="paper_run"):
+                        from alerts.agentic_options import run_paper_agent
+                        st.session_state["paper_result"] = run_paper_agent(verbose=False)
+                        st.rerun()
+                with _pc2:
+                    _pstart = st.number_input("Reset with $", min_value=1.0, value=float(_book.get("start", 25.0)),
+                                              step=25.0, key="paper_reset_amt")
+                with _pc3:
+                    st.write("")
+                    if st.button("↺ Reset paper book", use_container_width=True, key="paper_reset"):
+                        _pb.reset(_pstart)
+                        st.rerun()
+                if st.session_state.get("paper_result"):
+                    st.caption(f"Last paper cycle: {st.session_state['paper_result']}")
+
+                if _book.get("open"):
+                    st.markdown("**Open (paper)**")
+                    st.dataframe(pd.DataFrame([{
+                        "Ticker": p["ticker"], "Contract": f"{p['strike']:g}{p['right'][0].upper()} {p['expiration']}",
+                        "Strategy": p["strategy"], "Qty": p["qty"], "Entry": f"${p['entry_price']:.2f}",
+                        "Mark": f"${_marks.get(p['option_id'], p['entry_price']):.2f}",
+                        "Unreal $": f"{_pb.position_pnl(p['entry_price'], _marks.get(p['option_id'], p['entry_price']), p['qty'])[0]:+.2f}",
+                        "Unreal %": f"{_pb.position_pnl(p['entry_price'], _marks.get(p['option_id'], p['entry_price']), p['qty'])[1]:+.0f}%",
+                    } for p in _book["open"]]), use_container_width=True, hide_index=True)
+                if _book.get("closed"):
+                    st.markdown("**Closed (paper)**")
+                    st.dataframe(pd.DataFrame([{
+                        "Ticker": c["ticker"], "Contract": f"{c['strike']:g}{c['right'][0].upper()}",
+                        "Entry→Exit": f"${c['entry_price']:.2f}→${c['exit_price']:.2f}",
+                        "P&L $": f"{c['pnl']:+.2f}", "P&L %": f"{c['pnl_pct']:+.0f}%", "Why": c["reason"],
+                    } for c in reversed(_book["closed"][-20:])]), use_container_width=True, hide_index=True)
+                if not _book.get("open") and not _book.get("closed"):
+                    st.caption("No paper trades yet — run a cycle (needs an affordable buy signal, e.g. F/NIO/SNAP).")
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Paper book unavailable: {_e}")
+
+            # --- Live candlestick chart ---
+            st.markdown("### 🕯 Live chart")
+            try:
+                import datetime as _cdt
+                _open_ticks = sorted({p["ticker"] for p in _book.get("open", [])}) if "_book" in dir() else []
+                _chart_ticks = _open_ticks + [t for t in ("F", "NIO", "SNAP", "SPY") if t not in _open_ticks]
+                _csel1, _csel2, _csel3 = st.columns([2, 1, 1])
+                with _csel1:
+                    _csym = st.selectbox("Ticker", _chart_ticks, key="agent_chart_sym")
+                with _csel2:
+                    _civ = st.selectbox("Interval", ["5minute", "10minute", "hour", "day"], key="agent_chart_iv")
+                with _csel3:
+                    st.write("")
+                    _refresh = st.button("🔄 Refresh", use_container_width=True, key="agent_chart_refresh")
+
+                _days = 2 if _civ in ("5minute", "10minute") else (10 if _civ == "hour" else 120)
+
+                @st.cache_data(ttl=60, show_spinner=False)
+                def _agent_candles(sym, interval, days):
+                    from ingestion import robinhood_mcp as _cm
+                    start = (_cdt.datetime.now(_cdt.timezone.utc) - _cdt.timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+                    d = _cm._data(_cm._call_tool("get_equity_historicals",
+                                                 {"symbols": [sym], "start_time": start, "interval": interval}))
+                    res = (d.get("results") or []) if isinstance(d, dict) else []
+                    return res[0].get("bars", []) if res else []
+
+                if _refresh:
+                    _agent_candles.clear()
+                _bars = _agent_candles(_csym, _civ, _days)
+                if _bars:
+                    _df = pd.DataFrame(_bars)
+                    # Candle times come back UTC; show them in the user's Pacific time so they line
+                    # up with the paper timestamps (opened_at/closed_at are naive local).
+                    _df["t"] = (pd.to_datetime(_df["begins_at"], utc=True)
+                                .dt.tz_convert("America/Los_Angeles").dt.tz_localize(None))
+                    for _c in ("open_price", "high_price", "low_price", "close_price"):
+                        _df[_c] = _df[_c].astype(float)
+                    figc = go.Figure(data=[go.Candlestick(
+                        x=_df["t"], open=_df["open_price"], high=_df["high_price"],
+                        low=_df["low_price"], close=_df["close_price"], name=_csym)])
+
+                    # WHERE the bot bought/sold: a ▲ (buy) / ▼ (sell) placed on the underlying's
+                    # price at that moment. The bot trades the option; the marker sits on the
+                    # underlying candle so you can see the entry/exit point on the chart.
+                    def _price_at(_ts):
+                        try:
+                            _tt = pd.to_datetime(_ts)
+                        except Exception:  # noqa: BLE001
+                            return None
+                        _prior = _df[_df["t"] <= _tt]
+                        return float(_prior.iloc[-1]["close_price"]) if len(_prior) else None
+
+                    _bx, _by, _bl = [], [], []
+                    for p in _book.get("open", []):
+                        if p["ticker"] == _csym and p.get("opened_at"):
+                            _y = _price_at(p["opened_at"])
+                            if _y is not None:
+                                _bx.append(pd.to_datetime(p["opened_at"])); _by.append(_y)
+                                _bl.append(f"BUY {p['qty']}× {p['strike']:g}{p['right'][0].upper()} "
+                                           f"{p.get('expiration','')} @ ${p['entry_price']:.2f} ({p.get('strategy','')})")
+                    _sx, _sy, _sl = [], [], []
+                    for c in _book.get("closed", []):
+                        if c["ticker"] == _csym and c.get("closed_at"):
+                            _y = _price_at(c["closed_at"])
+                            if _y is not None:
+                                _sx.append(pd.to_datetime(c["closed_at"])); _sy.append(_y)
+                                _sl.append(f"SELL {c['strike']:g}{c['right'][0].upper()} · "
+                                           f"{c['pnl']:+.2f} ({c['pnl_pct']:+.0f}%) · {c.get('reason','')}")
+                    if _bx:
+                        figc.add_trace(go.Scatter(
+                            x=_bx, y=_by, mode="markers", name="BUY (paper)", text=_bl,
+                            marker=dict(symbol="triangle-up", color="#26a69a", size=15,
+                                        line=dict(color="white", width=1.5)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+                    if _sx:
+                        figc.add_trace(go.Scatter(
+                            x=_sx, y=_sy, mode="markers", name="SELL (paper)", text=_sl,
+                            marker=dict(symbol="triangle-down", color="#ef5350", size=15,
+                                        line=dict(color="white", width=1.5)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+
+                    # REAL (LIVE) trades from the agentic account — gold, so they stand apart from
+                    # the paper markers. Buys from open positions, sells from filled close orders.
+                    _lbx, _lby, _lbl2 = [], [], []
+                    _lsx, _lsy, _lsl2 = [], [], []
+                    if _acct:
+                        try:
+                            for _r in _c_option_positions(_acct):
+                                if (_r.get("chain_symbol") or "").upper() == _csym and _r.get("opened_at"):
+                                    _t = pd.to_datetime(_r["opened_at"], utc=True).tz_convert("America/Los_Angeles").tz_localize(None)
+                                    _y = _price_at(_t)
+                                    if _y is not None:
+                                        _lbx.append(_t); _lby.append(_y)
+                                        _lbl2.append(f"LIVE BUY {_r.get('type','')} ×{int(float(_r.get('quantity',0)))} @ ${float(_r.get('average_price',0))/100:.2f}")
+                            for _o in _c_option_orders(_acct):
+                                _legs = _o.get("legs") or []
+                                _is_close = any((l.get("position_effect") == "close") for l in _legs)
+                                if ((_o.get("chain_symbol") or "").upper() == _csym and _o.get("state") == "filled"
+                                        and _is_close and (_o.get("updated_at") or _o.get("created_at"))):
+                                    _t = pd.to_datetime(_o.get("updated_at") or _o.get("created_at"), utc=True).tz_convert("America/Los_Angeles").tz_localize(None)
+                                    _y = _price_at(_t)
+                                    if _y is not None:
+                                        _lsx.append(_t); _lsy.append(_y); _lsl2.append("LIVE SELL")
+                        except Exception:  # noqa: BLE001 — real markers are best-effort
+                            pass
+                    if _lbx:
+                        figc.add_trace(go.Scatter(
+                            x=_lbx, y=_lby, mode="markers", name="BUY (LIVE)", text=_lbl2,
+                            marker=dict(symbol="star", color="#FFD700", size=17, line=dict(color="black", width=1)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+                    if _lsx:
+                        figc.add_trace(go.Scatter(
+                            x=_lsx, y=_lsy, mode="markers", name="SELL (LIVE)", text=_lsl2,
+                            marker=dict(symbol="x", color="#FFD700", size=15, line=dict(color="black", width=1)),
+                            hovertemplate="%{text}<br>%{x|%b %d %H:%M} PT<extra></extra>"))
+
+                    figc.update_layout(height=440, margin=dict(l=0, r=0, t=10, b=0),
+                                       xaxis_rangeslider_visible=False, showlegend=True,
+                                       legend=dict(orientation="h", y=1.02, x=0))
+                    st.plotly_chart(figc, use_container_width=True)
+                    st.caption(f"{_csym} · {_civ} · times PT · ▲ teal/red = PAPER buy/sell · "
+                               "★/✖ gold = **REAL (LIVE)** buy/sell. Hover for detail. Marker sits on "
+                               "the underlying price at trade time. Refresh for latest (60s cache).")
+                else:
+                    st.caption(f"No candles for {_csym} ({_civ}).")
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Chart unavailable: {_e}")
+
+            # --- LLM credit ledger (token budget halt) ---
+            st.markdown("### 💳 LLM credit — token-budget halt")
+            st.caption("Anthropic has no live-balance API, so this is a local ledger: set your "
+                       "current console balance; Argus subtracts each Claude call's cost and "
+                       "**halts new agent entries + chat when the remainder hits the reserve** "
+                       "(default \\$0.50), leaving leeway to top up.")
+            lc1, lc2, lc3 = st.columns([2, 1, 1])
+            with lc1:
+                _newbal = st.number_input("Set balance from console ($)", min_value=0.0,
+                                          value=float(_led["balance"]), step=1.0, key="agent_setbal")
+            with lc2:
+                _newres = st.number_input("Reserve ($)", min_value=0.0,
+                                          value=float(_led["reserve"]), step=0.25, key="agent_setres")
+            with lc3:
+                st.write("")
+                if st.button("💾 Update ledger", use_container_width=True):
+                    _lb.set_balance(_newbal, _newres)
+                    st.rerun()
+            if _led["balance"] > 0:
+                st.caption(f"Spent since set: \\${_led['spent']:.4f} · remaining "
+                           f"\\${_led['remaining']:.2f} · reserve \\${_led['reserve']:.2f}")
+                if _led["remaining"] <= _led["reserve"]:
+                    st.error("⛔ Credit at/under reserve — new agent entries + chat are halted. "
+                             "Top up, then update the balance above.")
+
+            # --- controls ---
+            st.markdown("### 🎛 Controls")
+            k1, k2 = st.columns(2)
+            with k1:
+                if _halted:
+                    if st.button("▶ Remove kill switch (resume)", use_container_width=True):
+                        try:
+                            os.remove(_HALT_FLAG)
+                        except OSError:
+                            pass
+                        st.rerun()
+                else:
+                    if st.button("⛔ HALT agent (kill switch)", use_container_width=True, type="primary"):
+                        with open(_HALT_FLAG, "w", encoding="utf-8") as _f:
+                            _f.write("halted from dashboard\n")
+                        st.rerun()
+            with k2:
+                if st.button("🔮 Preview cycle (dry run — places nothing)", use_container_width=True,
+                             disabled=not _acct):
+                    _old = _cfg.DRY_RUN
+                    _cfg.DRY_RUN = True
+                    try:
+                        st.session_state["agent_preview"] = run_options_agent(verbose=False)
+                    finally:
+                        _cfg.DRY_RUN = _old
+                    st.rerun()
+
+            # LIVE run — explicit, guarded, scoped (never flips DRY_RUN process-wide).
+            with st.expander("🔴 Run a LIVE cycle (places REAL option orders)"):
+                st.warning("This places real orders on the agentic account with real money. "
+                           "Uncapped size. Only runs during market hours.")
+                _confirm = st.checkbox("I understand — trade real money now", key="agent_live_confirm")
+                if st.button("Execute LIVE cycle", disabled=not (_confirm and _acct and not _halted)):
+                    _old = _cfg.DRY_RUN
+                    _cfg.DRY_RUN = False
+                    try:
+                        st.session_state["agent_live_result"] = run_options_agent(verbose=False)
+                    finally:
+                        _cfg.DRY_RUN = _old
+                    st.rerun()
+
+            if st.session_state.get("agent_preview"):
+                st.markdown("#### 🔮 Preview result (dry run)")
+                st.json(st.session_state["agent_preview"])
+            if st.session_state.get("agent_live_result"):
+                st.markdown("#### 🔴 Last LIVE cycle result")
+                st.json(st.session_state["agent_live_result"])
+
+            # --- agentic equity positions + sync/refresh ---
+            st.markdown("### 📈 Agentic positions")
+            if st.button("🔄 Sync positions", use_container_width=True, disabled=not _acct,
+                         key="agent_sync_positions"):
+                st.rerun()
+            _eq = []
+            if _acct:
+                try:
+                    _eq = _c_agentic_equity(_acct)   # agentic-account equity holdings
+                except Exception as _e:  # noqa: BLE001
+                    st.caption(f"Could not read agentic equity positions: {_e}")
+            if _eq:
+                st.dataframe(
+                    pd.DataFrame([{
+                        "Ticker": p["ticker"], "Shares": p["shares"],
+                        "Avg cost": f"${p['avg_cost']:.2f}", "Price": f"${p['current_price']:.2f}",
+                        "Equity": f"${p['equity']:.2f}", "P&L %": f"{p['pnl_pct']:+.1f}%",
+                    } for p in _eq]),
+                    use_container_width=True, hide_index=True)
+            else:
+                st.caption("No agentic equity positions.")
+
+            # --- observe open option positions + per-position override ---
+            st.markdown("### 📂 Open option positions (agentic) — override exits")
+            _positions = []
+            if _acct:
+                try:
+                    _positions = _c_option_positions(_acct)
+                except Exception as _e:  # noqa: BLE001
+                    st.caption(f"Could not read option positions: {_e}")
+            if not _positions:
+                st.caption("No open option positions on the agentic account.")
+            for _p in _positions:
+                try:
+                    _oid = _p.get("option_id") or _p.get("option") or _p.get("id")
+                    _qty = int(float(_p.get("quantity") or 0))
+                    if not _oid or _qty < 1:
+                        continue
+                    _entry = float(_p.get("average_open_price") or _p.get("average_price") or 0)
+                    if _entry > 5:
+                        _entry /= 100.0
+                    _q = _c_option_quote(_oid)
+                    _mark = float(_q.get("mark_price") or _q.get("bid_price") or 0)
+                    _exp = _p.get("expiration_date") or _p.get("expiration")
+                    _dte = _aod._dte(_exp) if _exp else None
+                    from storage.peak_tracker import get_peak as _get_peak
+                    _act, _why = option_exit_decision(_entry, _mark, _dte, DEFAULT_EXIT,
+                                                      peak_mark=_get_peak(_oid))
+                    _pnl = ((_mark - _entry) / _entry * 100) if _entry else 0.0
+                    _sym = _p.get("chain_symbol") or _p.get("symbol") or "?"
+                    _rt = (_p.get("type") or "call").lower()
+                    cc1, cc2 = st.columns([4, 1])
+                    with cc1:
+                        st.markdown(
+                            f"**{_sym} {_rt.upper()}** ×{_qty} · exp {_exp} (DTE {_dte}) · "
+                            f"entry \\${_entry:.2f} → mark \\${_mark:.2f} "
+                            f"(**{_pnl:+.0f}%**) · agent: **{_act}** ({_why})")
+                    with cc2:
+                        if st.button("Close now", key=f"agent_close_{_oid}", use_container_width=True):
+                            _intent = OptionOrderIntent(
+                                underlying=_sym, option_id=_oid, right=_rt, side="sell",
+                                position_effect="close", quantity=_qty,
+                                price=round(float(_q.get("bid_price") or _mark), 2),
+                                direction="credit", expiration=_exp,
+                                reason="manual override close (dashboard)",
+                                client_id=f"uiclose-{_oid}")
+                            _old = _cfg.DRY_RUN
+                            _cfg.DRY_RUN = False   # a manual override click IS the confirmation
+                            try:
+                                _res = _amcp.place_option_order(
+                                    _intent, GuardState(start_equity=_agbp or 0),
+                                    buying_power=_agbp or 0, account_number=_acct)
+                            finally:
+                                _cfg.DRY_RUN = _old
+                            st.success(f"Close {_res['status']}: {_res['reason']}")
+                            st.rerun()
+                except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
+                    st.caption(f"position render error: {_e}")
+
+            st.caption("Exits are POLL-based: the agent re-checks each cycle (not a resting stop). "
+                       "Timeliness depends on how often the cycle runs.")
 
 
 # =========================================================

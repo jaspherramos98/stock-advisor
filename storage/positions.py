@@ -143,6 +143,21 @@ def get_closed_positions() -> list[dict]:
     return sorted(closed, key=lambda x: x.get("closed_at", ""), reverse=True)
 
 
+def delete_position(opened_at: str) -> bool:
+    """Permanently remove ONE position record by its unique opened_at timestamp (used to prune
+    an individual closed trade from history so it no longer feeds the scorecard). Returns True
+    if a record was removed. Unlike close_position, this actually deletes the record."""
+    if not opened_at:
+        return False
+    positions = load_positions()
+    remaining = [p for p in positions if p.get("opened_at") != opened_at]
+    if len(remaining) == len(positions):
+        return False
+    save_positions(remaining)
+    print(f"Positions: deleted record opened_at={opened_at}")
+    return True
+
+
 def update_manual_price(ticker: str, price: float):
     """
     Lets the user override the reference price for a position.

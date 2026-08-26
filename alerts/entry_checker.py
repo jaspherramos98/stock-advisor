@@ -28,7 +28,7 @@ import re
 from ingestion.prices import fetch_prices
 from market_hours import market_session
 from storage.entry_watch import (
-    get_chat_suggestions, get_pinned, was_notified_today, mark_notified,
+    get_chat_suggestions, get_pinned, was_notified_today, mark_notified, renew_pins,
 )
 
 CACHE_FILE = os.path.join(
@@ -164,10 +164,15 @@ def run_entry_checks() -> list[dict]:
     for the ones that fired. Alert shape matches exit_checker so notifier/run_checks
     can handle both.
     """
+    rec_candidates = _candidates_from_recommendations()
+    # Renew-on-reappear (TTL side B): a pinned watch that Argus surfaced again today has a live
+    # thesis → reset its expiry clock. Orphaned pins (gone from recs) age out on their own.
+    renew_pins(c["ticker"] for c in rec_candidates)
+
     candidates = _dedupe_by_ticker(
         _candidates_from_pinned()
         + _candidates_from_chat()
-        + _candidates_from_recommendations()
+        + rec_candidates
     )
     if not candidates:
         print("Entry checker: no pending entry triggers.")
