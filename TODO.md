@@ -684,6 +684,14 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
+### MCP token: persist absolute expiry so refresh works across restarts (no re-login every ~3 days)
+The `mcp` SDK doesn't reliably refresh the stored token after a process restart — it re-auths (browser)
+instead of using the valid refresh_token, because the token is saved with `expires_in` (relative) and no
+issued-at. Currently worked around by manual `scripts/mcp_login.py` re-login + a read-never-pops-browser
+guard (see Known Issues). Fix options: store an absolute `expires_at` in `_FileTokenStorage.set_tokens`
+and/or proactively call the refresh_token grant when the access token is near/after expiry, so silent
+renewal actually happens. Until done, the 429-fix premise (persistent silent refresh) is only partial.
+
 ### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)
 Agentic account approved for option_level_2 (2026-08-14). Built + verified in DRY_RUN:
 - `ingestion/options_data.py` (contract selection), `trading_guards.OptionOrderIntent`/

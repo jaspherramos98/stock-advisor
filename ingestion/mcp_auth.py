@@ -169,20 +169,58 @@ def _client_metadata() -> OAuthClientMetadata:
     )
 
 
+async def _no_browser_redirect(authorization_url: str) -> None:
+    """Non-interactive redirect handler: refuse to open a browser. The SDK only reaches here
+    when a FULL re-auth (authorization_code grant) is needed — i.e. the stored token is gone or
+    its refresh failed. From a read/order that must be a hard error, never a surprise OAuth
+    window (which, fired by concurrent Streamlit reruns, races into 'State parameter mismatch')."""
+    raise NotAuthenticated(
+        "Robinhood MCP needs re-authentication (token expired and silent refresh failed) — "
+        "run `python scripts/mcp_login.py` once. Reads/orders will not open a browser."
+    )
+
+
+async def _no_browser_callback() -> AuthorizationCodeResult:
+    raise NotAuthenticated("re-authentication required — run `python scripts/mcp_login.py`")
+
+
 def _provider(interactive: bool) -> OAuthClientProvider:
-    """Build the SDK OAuth provider. For non-interactive calls we still pass the handlers
-    (the SDK requires them) but has_session() gating upstream ensures they're never invoked
-    without a stored token to refresh."""
+    """Build the SDK OAuth provider. Only login() (interactive=True) may open a browser; every
+    read/order path passes handlers that RAISE instead, so the 'auth is never a side effect of a
+    read' design rule is actually enforced — not merely relied on via has_session()."""
     return OAuthClientProvider(
         server_url=config.ROBINHOOD_MCP_URL,
         client_metadata=_client_metadata(),
         storage=_FileTokenStorage(),
-        redirect_handler=_redirect_handler,
-        callback_handler=_callback_handler,
+        redirect_handler=_redirect_handler if interactive else _no_browser_redirect,
+        callback_handler=_callback_handler if interactive else _no_browser_callback,
     )
 
 
 # --- session + calls ------------------------------------------------------------------
+
+def _unwrap(exc: BaseException) -> BaseException:
+    """The SDK runs the auth flow inside an anyio TaskGroup, so our NotAuthenticated surfaces
+    wrapped in an ExceptionGroup. Dig it back out so callers can catch NotAuthenticated (and log
+    the 'run mcp_login' hint) instead of an opaque 'unhandled errors in a TaskGroup'."""
+    if isinstance(exc, BaseExceptionGroup):
+        for sub in exc.exceptions:
+            found = _unwrap(sub)
+            if isinstance(found, NotAuthenticated):
+                return found
+    return exc
+
+
+def _run_sync(interactive: bool, fn):
+    """asyncio.run(_with_session(...)) with ExceptionGroup unwrapping for NotAuthenticated."""
+    try:
+        return asyncio.run(_with_session(interactive, fn))
+    except BaseException as e:  # noqa: BLE001 — re-raised below
+        unwrapped = _unwrap(e)
+        if isinstance(unwrapped, NotAuthenticated):
+            raise unwrapped from None
+        raise
+
 
 async def _with_session(interactive: bool, fn):
     provider = _provider(interactive)
@@ -204,7 +242,7 @@ def login() -> list:
     async def _run(session):
         result = await session.list_tools()
         return getattr(result, "tools", result)
-    return asyncio.run(_with_session(interactive=True, fn=_run))
+    return _run_sync(interactive=True, fn=_run)
 
 
 def call_tool(name: str, arguments: dict | None = None):
@@ -216,7 +254,7 @@ def call_tool(name: str, arguments: dict | None = None):
 
     async def _run(session):
         return await session.call_tool(name, arguments=arguments or {})
-    return asyncio.run(_with_session(interactive=False, fn=_run))
+    return _run_sync(interactive=False, fn=_run)
 
 
 def list_tools() -> list:
@@ -228,4 +266,4 @@ def list_tools() -> list:
     async def _run(session):
         result = await session.list_tools()
         return getattr(result, "tools", result)
-    return asyncio.run(_with_session(interactive=False, fn=_run))
+    return _run_sync(interactive=False, fn=_run)

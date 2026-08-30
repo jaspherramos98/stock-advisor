@@ -596,6 +596,19 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    target → close ≤2 DTE. (Sidebar decluttered — helper captions removed.)
 
 ## Known Issues / Constraints
+- **MCP OAuth token needs periodic manual re-login (~every few days).** The stored token
+  (`~/.tokens/robinhood_mcp.json`) holds a valid `refresh_token`, but the `mcp` SDK's
+  OAuthClientProvider does NOT reliably use it across a PROCESS RESTART: the token is persisted with
+  `expires_in` (relative) but no absolute issued-at, so on reload the SDK can't tell the access token
+  is merely stale-but-refreshable and jumps straight to a full authorization_code grant instead of a
+  refresh. Symptom: after ~3 days the dashboard buying power stops reading and the log shows
+  `_perform_authorization_code_grant`. **Recovery: `python scripts/mcp_login.py` (one browser approve)**,
+  then relaunch. `ingestion/mcp_auth.py` now enforces the "auth is never a side effect of a read" rule
+  for real — non-interactive calls (`call_tool`/`list_tools`) pass redirect/callback handlers that RAISE
+  `NotAuthenticated` (unwrapped from the SDK's ExceptionGroup by `_run_sync`) instead of opening a
+  browser. Before this fix a stale-token read popped the OAuth browser, and concurrent Streamlit reruns
+  raced multiple flows into `State parameter mismatch`. TODO: persist absolute expiry / force a refresh
+  so re-login isn't needed every few days (the 429-fix premise depends on it).
 - **MCP has NO crypto endpoint.** The Robinhood Trading MCP is equities/ETFs/options only — it can't read
   or trade crypto (DOGE/XRP/BTC). Sync positions skips crypto; the options agent can't touch it. Track
   crypto manually (My Positions → add). Only `ingestion/robinhood.py` (robin_stocks) sees crypto, and
