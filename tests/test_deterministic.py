@@ -673,14 +673,14 @@ def test_pin_ttl_expiry_and_renew(tmp_path, monkeypatch):
              "exit_condition": "", "pinned_at": d})
         ew.save_entry_watch(data)
 
-    _pin("FRESH", 2)                    # age 2 → 5 days left
+    _pin("FRESH", 0)                    # pinned today → full TTL left
     _pin("EDGE", ew.PIN_TTL_DAYS)       # age == TTL → still alive (0 left)
     _pin("STALE", ew.PIN_TTL_DAYS + 1)  # age > TTL → expired
 
     # load prunes the expired one lazily
     pins = {p["ticker"]: p for p in ew.get_pinned()}
     assert set(pins) == {"FRESH", "EDGE"}
-    assert ew.pin_days_left(pins["FRESH"]) == ew.PIN_TTL_DAYS - 2
+    assert ew.pin_days_left(pins["FRESH"]) == ew.PIN_TTL_DAYS
     assert ew.pin_days_left(pins["EDGE"]) == 0
 
     # renew resets the clock for a ticker that reappeared in fresh recs
@@ -690,6 +690,44 @@ def test_pin_ttl_expiry_and_renew(tmp_path, monkeypatch):
     assert ew.renew_pins(["EDGE"]) == 0               # already today → no-op
     # an unparseable / missing date is treated as expired (fail-safe)
     assert ew._is_expired({"ticker": "X"})
+
+
+def test_catalyst_staleness_gate():
+    from alerts.entry_checker import _catalyst_is_stale, CATALYST_MAX_AGE_DAYS
+    from datetime import date, timedelta
+    today = date.today()
+    fresh = (today - timedelta(days=CATALYST_MAX_AGE_DAYS)).strftime("%Y-%m-%d")
+    stale = (today - timedelta(days=CATALYST_MAX_AGE_DAYS + 1)).strftime("%Y-%m-%d")
+    assert _catalyst_is_stale(stale) is True
+    assert _catalyst_is_stale(fresh) is False          # exactly at the boundary = kept
+    assert _catalyst_is_stale(today.strftime("%Y-%m-%d")) is False
+    # fail-open: no date / null / garbage is NOT stale (technical watches + back-compat recs)
+    assert _catalyst_is_stale(None) is False
+    assert _catalyst_is_stale("") is False
+    assert _catalyst_is_stale("not-a-date") is False
+
+
+def test_recommendation_entry_scope_and_staleness(tmp_path, monkeypatch):
+    import json as _json
+    from alerts import entry_checker as ec
+    from datetime import date, timedelta
+    monkeypatch.setattr(ec, "CACHE_FILE", str(tmp_path / "pipeline_cache.json"))
+    # Watchlist has only WATCHED; UNTRACKED is not curated.
+    monkeypatch.setattr(ec, "_watchlist_tickers", lambda: {"WATCHED", "OLDNEWS"})
+    today = date.today().strftime("%Y-%m-%d")
+    old = (date.today() - timedelta(days=ec.CATALYST_MAX_AGE_DAYS + 2)).strftime("%Y-%m-%d")
+    (tmp_path / "pipeline_cache.json").write_text(_json.dumps({"recommendations": [
+        {"ticker": "WATCHED",  "direction": "watch", "entry_trigger": "breaks above $10",
+         "catalyst_date": today},
+        {"ticker": "UNTRACKED", "direction": "watch", "entry_trigger": "breaks above $5",
+         "catalyst_date": today},                                   # dropped: not on watchlist
+        {"ticker": "OLDNEWS",  "direction": "watch", "entry_trigger": "breaks above $7",
+         "catalyst_date": old},                                     # dropped: stale catalyst
+        {"ticker": "WATCHED",  "direction": "buy",   "entry_trigger": "now",
+         "catalyst_date": today},                                   # dropped: 'now' has no trigger
+    ]}))
+    got = {c["ticker"] for c in ec._candidates_from_recommendations()}
+    assert got == {"WATCHED"}
 
 
 def test_agent_signals_merge_chat_buys(tmp_path, monkeypatch):

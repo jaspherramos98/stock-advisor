@@ -402,6 +402,7 @@ def _build_prompt(
         lines.append("=== END OPEN POSITIONS ===\n")
 
     # News items
+    from validation.scorer import _parse_published
     for i, item in enumerate(items, 1):
         ticker_hint = f" [ticker: ${item['ticker']}]" if item.get("ticker") else ""
         flag_hint   = " ⚠ unverified source" if item.get("flagged") else ""
@@ -410,8 +411,13 @@ def _build_prompt(
         source      = item.get("source") or "Unknown"
         title       = item.get("title") or "No title"
         score       = item.get("confidence_score", 0)
+        # Normalize the published date to YYYY-MM-DD so the analyst can echo it into
+        # catalyst_date (the entry checker uses it to drop triggers built on stale news).
+        _dt = _parse_published(item.get("published", ""))
+        date_str = _dt.strftime("%Y-%m-%d") if _dt else "unknown"
         lines.append(
             f"{i}. [{score} confidence{flag_hint}{signal_hint}]{ticker_hint}\n"
+            f"   Date    : {date_str}\n"
             f"   Title   : {title}\n"
             f"   Summary : {summary[:200]}\n"
             f"   Source  : {source}"
@@ -911,6 +917,9 @@ Each object in the array must have exactly these fields:
   "conviction":         number 0-100 (YOUR edge/quality score — see CREDIBILITY vs CONVICTION above),
   "flagged":            boolean,
   "source_title":       string (the news headline this is based on),
+  "catalyst_date":      string "YYYY-MM-DD" — the Date of the news item this rec is based on
+                        (copy it from that item's "Date" line). Use null ONLY for a purely
+                        technical/price watch with no news catalyst. Do NOT invent a date.
   "highly_recommended": boolean
 }}
 
