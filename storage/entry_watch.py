@@ -23,12 +23,14 @@ ENTRY_WATCH_FILE = os.path.join(
 
 _EMPTY = {"chat_suggestions": [], "pinned": [], "notified": {}}
 
-# A pinned buy-trigger auto-expires this many days after it was pinned (or last renewed).
-# Rationale: a catalyst-driven entry setup plays out in days, not weeks — a trigger that hasn't
-# fired within ~a week almost always has a dead thesis AND a stale price level, so leaving it
-# armed just risks firing on a coincidence. Pins that REappear in a fresh pipeline run get their
-# clock reset (renew_pins) — expiry then means "no recent thesis", not merely "old".
-PIN_TTL_DAYS = 7
+# A pinned buy-trigger auto-expires this many days after it was pinned (or last renewed), and is
+# removed (auto-unpinned) on the next load — see _prune_expired. Rationale: a catalyst-driven entry
+# setup plays out fast; a trigger that hasn't fired quickly almost always has a dead thesis AND a
+# stale price level, so leaving it armed just risks firing on a coincidence. Pins that REappear as a
+# live watch in a fresh pipeline run get their clock reset (renew_pins), so a still-valid thesis
+# persists — expiry means "no recent thesis", not merely "old". Set to 1: a pin lives through the
+# next calendar day unless re-surfaced, then auto-unpins.
+PIN_TTL_DAYS = 1
 
 
 def pin_age_days(pin: dict) -> int | None:

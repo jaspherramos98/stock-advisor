@@ -2,6 +2,26 @@
 
 ## Done
 
+### 37. Entry-alert scoping + freshness + 1-day pin TTL ✅
+User: entry emails fired for tickers they didn't want, and buy triggers kept firing on old news.
+Diagnosis: the recommendations source was ungated (fired for EVERY watch rec, ignoring the curated
+watchlist) and had no catalyst-age check; pins lived 7 days. (IWM/PLTR turned out to BE in the etfs
+watchlist + IWM was batch-pinned that morning — the alerts were legitimate, but the gates were still
+missing.) Fixes:
+- **Watchlist scope** (`entry_checker._candidates_from_recommendations` + `_watchlist_tickers`): a
+  recommendation entry trigger only fires if its ticker is in the Finnhub watchlist. Pinned + chat
+  sources bypass (explicit opt-ins). Watchlist read failure fails-open on pinned/chat.
+- **Catalyst freshness** (`_catalyst_is_stale`, `CATALYST_MAX_AGE_DAYS=3`): added `catalyst_date` to the
+  analyst JSON schema + prompt (copied from each news item's new `Date` line, itself from
+  `scorer._parse_published`); entry_checker drops a rec trigger whose catalyst is older than 3 days.
+  Missing/null/unparseable = fail-open (technical watches + pre-change cached recs still work).
+- **Pin TTL 1 day** (`entry_watch.PIN_TTL_DAYS` 7→1): a pin auto-unpins the day after it's pinned unless
+  re-surfaced in a fresh run (`renew_pins` resets the clock). Lazy prune on load does the auto-unpin.
+- Tests: `_catalyst_is_stale` boundary + fail-open, watchlist+staleness scope on the rec source, pin TTL
+  updated to be TTL-relative. 85 green. Docs: CLAUDE.md schema + entry-alert sources + pin TTL + Watch tab.
+- NOTE: this only gates the RECOMMENDATIONS source. Existing pins (e.g. the 8 batch-added) still fire
+  until they expire (now ~1 day) or are unpinned in the Watch List tab.
+
 ### 35. Agent bleed fixes — churn + scout noise ✅  (branch feat/robinhood-mcp-agentic)
 Diagnosed why the live agent was losing beyond its baseline -EV. Two real defects fixed:
 - **Churn (sell-then-rebuy):** exits run before entries, so a just-closed underlying no longer read

@@ -93,7 +93,7 @@ alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject
 alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
 storage/entry_watch.py        Persists PINNED watches + Argus chat's last buy/watch suggestions
                               + per-day notify record (entry_watch.json, gitignored). Pins auto-expire
-                              PIN_TTL_DAYS (7) after pinned_at (lazy prune on load) so a stale thesis
+                              PIN_TTL_DAYS (1) after pinned_at (lazy prune on load = auto-unpin) so a stale thesis
                               can't keep an orphaned price level armed; renew_pins() resets the clock
                               when a ticker reappears as a live watch in a fresh pipeline run
                               (entry_checker calls it). pin_days_left/pin_age_days drive the UI countdown.
@@ -478,6 +478,7 @@ Each recommendation must have:
   "conviction": "number 0-100 (analyst's edge score — drives sizing + HR; R2)",
   "flagged": "boolean",
   "source_title": "string",
+  "catalyst_date": "string YYYY-MM-DD | null — date of the news item this rec is based on (copied from the item's Date line; null for a purely technical watch). entry_checker drops a recommendation entry trigger whose catalyst is older than CATALYST_MAX_AGE_DAYS (3).",
   "highly_recommended": "boolean"
 }
 ```
@@ -513,14 +514,20 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   1. **Pinned watches** — the 👁 **Watch this trigger** button on a watch rec's expander copies its
      `entry_trigger` into `storage/entry_watch.py`. This is the ONLY source that survives a pipeline
      rerun. The price LEVEL is stored exactly as pinned (never re-priced), but the pin auto-EXPIRES
-     `PIN_TTL_DAYS` (7) after `pinned_at` — a catalyst entry setup that hasn't fired in ~a week has a
+     `PIN_TTL_DAYS` (1) after `pinned_at` — a catalyst entry setup that hasn't fired within a day has a
      dead thesis + stale level. `renew_pins()` resets that clock whenever the ticker reappears as a
      live watch in a fresh pipeline run (so a still-valid thesis persists; a true orphan ages out).
   2. **Argus chat's last suggestion** — the `/chat` proxy parses `Buy —`/`Watch — TICKER` action
      lines via `_capture_chat_suggestions`; each capture replaces the prior set.
   3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`).
      **Ephemeral:** `save_cache()` overwrites the cache each run, so an unpinned watch silently
-     disappears on the next pipeline run — that's exactly what pinning solves.
+     disappears on the next pipeline run — that's exactly what pinning solves. **Two gates (only this
+     source is gated — pinned/chat are explicit opt-ins that always fire):** (a) **watchlist scope** —
+     a rec only alerts if its ticker is in the curated Finnhub watchlist (`_watchlist_tickers`), so the
+     user isn't emailed about picks they don't track; (b) **catalyst freshness** — a rec is dropped when
+     its `catalyst_date` is older than `CATALYST_MAX_AGE_DAYS` (3), so a stale-news "buy when" can't fire
+     on a coincidence (`_catalyst_is_stale`; missing/null/unparseable date = fail-open, keeps technical
+     watches + back-compat recs).
   `_parse_triggers` extracts EVERY price + direction from a trigger string — a two-sided trigger
   ("pulls back to $314.91 ... or breaks above $328.04") yields both a `below` and an `above`
   condition, either of which fires. Owned tickers are skipped; one alert per ticker/source per day;
@@ -571,7 +578,7 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    - **📍 Open positions — exit alerts**: auto-included (no pinning needed), showing entry/live/P&L,
      computed stop price and exit condition. Read-only; managed under My Positions.
    - **📌 Pinned buy triggers — entry alerts**: each pinned watch with its parsed breakout/pullback
-     levels, live price, pin date, an **expires-in-N-days** countdown (7-day TTL, auto-renews when the
+     levels, live price, pin date, an **expires-in-N-days** countdown (1-day TTL, auto-renews when the
      ticker reappears in a fresh run) and a ✕ remove button — the fix for orphaned pins (a pin whose
      ticker left the recommendations previously had no removal UI and would fire forever on a stale
      level). A pin whose trigger has NO `$` price shows a warning that it can never fire. Chat-sourced

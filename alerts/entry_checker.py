@@ -24,6 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import re
+from datetime import datetime, date
 
 from ingestion.prices import fetch_prices
 from market_hours import market_session
@@ -84,8 +85,40 @@ def _is_hit(direction: str, trigger_price: float, current_price: float) -> bool:
     return current_price <= trigger_price
 
 
+# A recommendation-sourced entry trigger built on a catalyst older than this is dropped — the
+# news that justified the "buy when" is stale, so the level is a coincidence not a thesis. Only
+# recommendations are gated (they carry catalyst_date); pinned/chat watches are user-chosen.
+CATALYST_MAX_AGE_DAYS = 3
+
+
+def _watchlist_tickers() -> set[str]:
+    """Flat set of every ticker the user curates (stocks + etfs + crypto). Recommendation-sourced
+    entry alerts are scoped to this — the user should only be emailed about picks they track."""
+    try:
+        from storage.watchlist import load_watchlist
+        wl = load_watchlist()
+        return {t.strip().upper() for lst in wl.values() for t in (lst or []) if t}
+    except Exception as e:  # noqa: BLE001 — a watchlist read failure must not lose pinned/chat alerts
+        print(f"Entry checker: watchlist read failed — {e}")
+        return set()
+
+
+def _catalyst_is_stale(catalyst_date: str | None) -> bool:
+    """True if a rec's catalyst is older than CATALYST_MAX_AGE_DAYS. A missing/unparseable/null
+    date is NOT treated as stale (fail-open): purely technical watches legitimately have no date,
+    and back-compat recs from before this field existed must still work."""
+    if not catalyst_date:
+        return False
+    try:
+        d = datetime.strptime(str(catalyst_date)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return False
+    return (date.today() - d).days > CATALYST_MAX_AGE_DAYS
+
+
 def _candidates_from_recommendations() -> list[dict]:
-    """Watch recs (with a real entry_trigger) out of today's pipeline cache."""
+    """Watch recs (with a real entry_trigger) out of today's pipeline cache, scoped to the user's
+    watchlist and dropped if their catalyst news is stale."""
     if not os.path.exists(CACHE_FILE):
         return []
     try:
@@ -96,12 +129,20 @@ def _candidates_from_recommendations() -> list[dict]:
         print(f"Entry checker: could not read pipeline cache — {e}")
         return []
 
+    watchlist = _watchlist_tickers()
     out = []
     for r in recs:
         ticker = (r.get("ticker") or "").strip().upper()
         trigger = (r.get("entry_trigger") or "").strip()
         # 'buy'/'short' recs say "now" — nothing to wait for. Only watches have a trigger.
         if not ticker or not trigger or trigger.lower() in ("now", "n/a", ""):
+            continue
+        # Scope to the watchlist: a rec the user doesn't track shouldn't email them (pinned/chat
+        # sources bypass this — those are explicit opt-ins).
+        if ticker not in watchlist:
+            continue
+        # Drop triggers whose catalyst news has gone stale.
+        if _catalyst_is_stale(r.get("catalyst_date")):
             continue
         out.append({
             "ticker":       ticker,
