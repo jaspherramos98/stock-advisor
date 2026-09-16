@@ -21,6 +21,11 @@ missing.) Fixes:
   updated to be TTL-relative. 85 green. Docs: CLAUDE.md schema + entry-alert sources + pin TTL + Watch tab.
 - NOTE: this only gates the RECOMMENDATIONS source. Existing pins (e.g. the 8 batch-added) still fire
   until they expire (now ~1 day) or are unpinned in the Watch List tab.
+- **Clear-all pins button** (`clear_all_pinned` + Watch List two-step-confirm button) to wipe every pin
+  at once instead of ✕ each. While adding it, found + fixed a REAL bug: `load_entry_watch` returned
+  `dict(_EMPTY)` — a SHALLOW copy sharing the module-level constant's mutable `pinned`/`notified` lists,
+  so when the file didn't exist yet, callers mutated the shared constant and state leaked across calls.
+  Now `_empty()` returns a fresh structure each time. Unit-tested (`test_clear_all_pinned`). 86 green.
 
 ### 35. Agent bleed fixes — churn + scout noise ✅  (branch feat/robinhood-mcp-agentic)
 Diagnosed why the live agent was losing beyond its baseline -EV. Two real defects fixed:

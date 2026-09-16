@@ -21,7 +21,11 @@ ENTRY_WATCH_FILE = os.path.join(
     "entry_watch.json"
 )
 
-_EMPTY = {"chat_suggestions": [], "pinned": [], "notified": {}}
+def _empty() -> dict:
+    """A FRESH empty structure every call. Never share one literal — the nested lists/dict are
+    mutable, and handing out references to a module-level constant leaks state across calls (and
+    into the constant) whenever the file doesn't exist yet."""
+    return {"chat_suggestions": [], "pinned": [], "notified": {}}
 
 # A pinned buy-trigger auto-expires this many days after it was pinned (or last renewed), and is
 # removed (auto-unpinned) on the next load — see _prune_expired. Rationale: a catalyst-driven entry
@@ -63,12 +67,12 @@ def load_entry_watch() -> dict:
     Self-healing: prunes expired pins (and their notify records) on load, persisting only if it
     actually dropped something — so every consumer (checker + UI) sees a clean, current list."""
     if not os.path.exists(ENTRY_WATCH_FILE):
-        return dict(_EMPTY)
+        return _empty()
     try:
         with open(ENTRY_WATCH_FILE, "r") as f:
             data = json.load(f)
         if not isinstance(data, dict):
-            return dict(_EMPTY)
+            return _empty()
         data.setdefault("chat_suggestions", [])
         data.setdefault("pinned", [])
         data.setdefault("notified", {})
@@ -76,7 +80,7 @@ def load_entry_watch() -> dict:
         return data
     except Exception as e:
         print(f"Entry watch load error: {e}")
-        return dict(_EMPTY)
+        return _empty()
 
 
 def _prune_expired(data: dict) -> None:
@@ -183,6 +187,19 @@ def renew_pins(tickers) -> int:
             p["pinned_at"] = today
             n += 1
     if n:
+        save_entry_watch(data)
+    return n
+
+
+def clear_all_pinned() -> int:
+    """Remove ALL pinned watches at once (and their notify records) — the Watch List 'clear all'
+    action. Returns how many were removed."""
+    data = load_entry_watch()
+    n = len(data.get("pinned", []))
+    if n:
+        data["pinned"] = []
+        data["notified"] = {k: v for k, v in data.get("notified", {}).items()
+                            if not k.endswith("|pinned")}
         save_entry_watch(data)
     return n
 
