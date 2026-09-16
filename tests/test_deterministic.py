@@ -692,6 +692,19 @@ def test_pin_ttl_expiry_and_renew(tmp_path, monkeypatch):
     assert ew._is_expired({"ticker": "X"})
 
 
+def test_clear_all_pinned(tmp_path, monkeypatch):
+    from storage import entry_watch as ew
+    monkeypatch.setattr(ew, "ENTRY_WATCH_FILE", str(tmp_path / "entry_watch.json"))
+    assert ew.add_pinned("AAA", "AAA Co", "breaks above $10")
+    assert ew.add_pinned("BBB", "BBB Co", "breaks above $20")
+    ew.mark_notified("AAA", "pinned")
+    assert ew.clear_all_pinned() == 2
+    assert ew.get_pinned() == []
+    # its pinned notify record is gone too, so a re-pin can alert again
+    assert not ew.was_notified_today("AAA", "pinned")
+    assert ew.clear_all_pinned() == 0          # idempotent on an empty list
+
+
 def test_catalyst_staleness_gate():
     from alerts.entry_checker import _catalyst_is_stale, CATALYST_MAX_AGE_DAYS
     from datetime import date, timedelta

@@ -579,7 +579,8 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
      computed stop price and exit condition. Read-only; managed under My Positions.
    - **📌 Pinned buy triggers — entry alerts**: each pinned watch with its parsed breakout/pullback
      levels, live price, pin date, an **expires-in-N-days** countdown (1-day TTL, auto-renews when the
-     ticker reappears in a fresh run) and a ✕ remove button — the fix for orphaned pins (a pin whose
+     ticker reappears in a fresh run), a ✕ per-pin remove button, and a **🗑 Clear all pins** button
+     (two-step confirm → `clear_all_pinned`) — the fix for orphaned pins (a pin whose
      ticker left the recommendations previously had no removal UI and would fire forever on a stale
      level). A pin whose trigger has NO `$` price shows a warning that it can never fire. Chat-sourced
      suggestions are listed in an

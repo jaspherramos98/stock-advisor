@@ -1695,6 +1695,7 @@ if True:
             get_pinned as _get_pinned, remove_pinned as _remove_pinned,
             get_chat_suggestions as _get_chat_sugg, set_chat_suggestions as _set_chat_sugg,
             pin_days_left as _pin_days_left, PIN_TTL_DAYS as _PIN_TTL,
+            clear_all_pinned as _clear_all_pinned,
         )
         from alerts.entry_checker import _parse_triggers as _parse_trig
 
@@ -1752,10 +1753,26 @@ if True:
             st.caption(
                 f"{len(_pinned)} trigger(s) checked every 15 minutes during market hours. "
                 "These survive pipeline reruns — remove any you no longer want. "
-                f"A pin auto-expires {_PIN_TTL} days after it was pinned (its clock resets "
+                f"A pin auto-expires {_PIN_TTL} day(s) after it was pinned (its clock resets "
                 "whenever Argus surfaces the ticker again), so a stale thesis can't keep an "
                 "orphaned price level armed."
             )
+            # Clear-all: two-step so a whole watch list isn't wiped by a stray click.
+            if not st.session_state.get("_confirm_clear_pins"):
+                if st.button(f"🗑 Clear all {len(_pinned)} pins", key="clear_pins_btn"):
+                    st.session_state["_confirm_clear_pins"] = True
+                    st.rerun()
+            else:
+                st.warning(f"Remove all {len(_pinned)} pinned triggers? This can't be undone.")
+                _cc1, _cc2 = st.columns(2)
+                if _cc1.button("✅ Yes, clear all", key="clear_pins_yes"):
+                    _n = _clear_all_pinned()
+                    st.session_state["_confirm_clear_pins"] = False
+                    st.success(f"Cleared {_n} pinned trigger(s).")
+                    st.rerun()
+                if _cc2.button("Cancel", key="clear_pins_no"):
+                    st.session_state["_confirm_clear_pins"] = False
+                    st.rerun()
             _live = {}
             try:
                 from ingestion.prices import fetch_prices as _fp2
