@@ -129,8 +129,16 @@ ingestion/account_reads.py    Read dispatcher (R25) — buying_power/positions/q
 ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mcp SDK OAuthClientProvider
                               (DCR + PKCE + silent refresh) with file-backed token storage
                               (~/.tokens/robinhood_mcp.json, NOT in repo) + localhost browser callback.
-                              login() = interactive (once); call_tool()/list_tools() = non-interactive,
-                              stored-token only (never pops a browser from a read). mcp SDK is an OPTIONAL
+                              login() = interactive (once); call_tool()/list_tools() = non-interactive:
+                              their provider passes redirect/callback handlers that RAISE
+                              NotAuthenticated (unwrapped from the SDK ExceptionGroup by _run_sync/_unwrap)
+                              instead of opening a browser — a read/order NEVER pops OAuth (concurrent
+                              Streamlit reruns used to race browser flows into 'State parameter mismatch').
+                              `_RefreshingProvider` fixes silent refresh ACROSS RESTARTS: the SDK's
+                              _initialize restores the token but not token_expiry_time, so is_token_valid()
+                              wrongly passed an expired token and never refreshed (full re-auth every few
+                              days); we persist an absolute `expires_at` (_FileTokenStorage) and restore it
+                              on init so an expired token takes the refresh path. mcp SDK is an OPTIONAL
                               dep (not in requirements.txt) → imported lazily so CI stays clean.
 ingestion/options_data.py     Option contract selection (R26/Phase 2) — chain→expiration(DTE window)→
                               strike(OTM %)→quote→liquidity+affordability, via MCP option-data tools.
@@ -604,6 +612,20 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
    target → close ≤2 DTE. (Sidebar decluttered — helper captions removed.)
 
 ## Known Issues / Constraints
+- **MCP OAuth: silent refresh works across restarts (fixed); re-login only when the REFRESH token itself
+  expires.** Root cause: the `mcp` SDK's `_initialize` restored the stored token but not
+  `token_expiry_time`, so `is_token_valid()` short-circuited True for an expired access token and never
+  took the refresh branch → a full authorization_code (browser) grant every few days, and concurrent
+  Streamlit reruns raced those flows into `State parameter mismatch`. Fixed in `ingestion/mcp_auth.py`:
+  (1) `_FileTokenStorage` persists an absolute `expires_at`, and `_RefreshingProvider._initialize`
+  restores it (unknown → treat as expired) so an expired access token takes the refresh path and silently
+  renews from the refresh token; the SDK persists the rotated token. (2) Non-interactive calls
+  (`call_tool`/`list_tools`) pass handlers that RAISE `NotAuthenticated` (unwrapped from the SDK's anyio
+  ExceptionGroup by `_run_sync`/`_unwrap`) instead of opening a browser — so even when a full re-auth IS
+  needed, a read fails clean, never a surprise OAuth popup/race. **Recovery when the refresh token finally
+  expires** (symptom: log shows `_perform_authorization_code_grant` then a clean `NotAuthenticated`;
+  buying power stops reading): `python scripts/mcp_login.py` (one browser approve), then relaunch — now
+  rare (refresh-token lifetime), not every ~3 days.
 - **MCP has NO crypto endpoint.** The Robinhood Trading MCP is equities/ETFs/options only — it can't read
   or trade crypto (DOGE/XRP/BTC). Sync positions skips crypto; the options agent can't touch it. Track
   crypto manually (My Positions → add). Only `ingestion/robinhood.py` (robin_stocks) sees crypto, and

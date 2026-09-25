@@ -28,6 +28,7 @@ import asyncio
 import http.server
 import logging
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -97,7 +98,22 @@ class _FileTokenStorage(TokenStorage):
     async def set_tokens(self, tokens: OAuthToken) -> None:
         data = self._read()
         data["tokens"] = tokens.model_dump(exclude_none=True)
+        # Persist an ABSOLUTE expiry alongside the token. The SDK only stores the relative
+        # `expires_in`, and its _initialize restores the token but NOT token_expiry_time — so on a
+        # process restart is_token_valid() treats the (possibly expired) access token as valid and
+        # never refreshes → a full browser re-auth every few days. We stamp expires_at here and
+        # restore it in _RefreshingProvider._initialize so an expired token takes the refresh path.
+        exp_in = getattr(tokens, "expires_in", None)
+        data["expires_at"] = (time.time() + float(exp_in)) if exp_in else None
         self._write(data)
+
+    def read_expires_at(self) -> float | None:
+        """Absolute unix expiry of the stored access token (None if unknown)."""
+        v = self._read().get("expires_at")
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         raw = self._read().get("client_info")
@@ -169,20 +185,78 @@ def _client_metadata() -> OAuthClientMetadata:
     )
 
 
+async def _no_browser_redirect(authorization_url: str) -> None:
+    """Non-interactive redirect handler: refuse to open a browser. The SDK only reaches here when a
+    FULL re-auth (authorization_code grant) is needed — the stored token is gone or its refresh
+    failed. From a read/order that must be a hard error, never a surprise OAuth window (which,
+    fired by concurrent Streamlit reruns, races into 'State parameter mismatch')."""
+    raise NotAuthenticated(
+        "Robinhood MCP needs re-authentication (token expired and silent refresh failed) — "
+        "run `python scripts/mcp_login.py` once. Reads/orders will not open a browser."
+    )
+
+
+async def _no_browser_callback() -> AuthorizationCodeResult:
+    raise NotAuthenticated("re-authentication required — run `python scripts/mcp_login.py`")
+
+
+class _RefreshingProvider(OAuthClientProvider):
+    """OAuthClientProvider that actually uses the refresh token across process restarts.
+
+    The SDK's _initialize restores current_tokens from storage but leaves token_expiry_time None,
+    so is_token_valid() short-circuits True for a reloaded-but-expired access token and the refresh
+    branch never runs — every few days you get a full browser re-auth instead of a silent refresh.
+    We restore the absolute expiry _FileTokenStorage persisted, so an expired token trips the
+    refresh path (unknown expiry → treat as expired = prefer a refresh over trusting a stale token).
+    """
+
+    async def _initialize(self) -> None:  # type: ignore[override]
+        await super()._initialize()
+        toks = self.context.current_tokens
+        if toks and getattr(toks, "access_token", None):
+            storage = self.context.storage
+            exp = storage.read_expires_at() if hasattr(storage, "read_expires_at") else None
+            self.context.token_expiry_time = exp if exp is not None else 0.0
+
+
 def _provider(interactive: bool) -> OAuthClientProvider:
-    """Build the SDK OAuth provider. For non-interactive calls we still pass the handlers
-    (the SDK requires them) but has_session() gating upstream ensures they're never invoked
-    without a stored token to refresh."""
-    return OAuthClientProvider(
+    """Build the OAuth provider. Only login() (interactive=True) may open a browser; every
+    read/order path passes handlers that RAISE instead, so 'auth is never a side effect of a read'
+    is actually enforced — not merely relied on via has_session(). `_RefreshingProvider` makes the
+    stored refresh token work across restarts (no re-login every few days)."""
+    return _RefreshingProvider(
         server_url=config.ROBINHOOD_MCP_URL,
         client_metadata=_client_metadata(),
         storage=_FileTokenStorage(),
-        redirect_handler=_redirect_handler,
-        callback_handler=_callback_handler,
+        redirect_handler=_redirect_handler if interactive else _no_browser_redirect,
+        callback_handler=_callback_handler if interactive else _no_browser_callback,
     )
 
 
 # --- session + calls ------------------------------------------------------------------
+
+def _unwrap(exc: BaseException) -> BaseException:
+    """The SDK runs the auth flow inside an anyio TaskGroup, so our NotAuthenticated surfaces wrapped
+    in an ExceptionGroup. Dig it back out so callers can catch NotAuthenticated (and log the
+    'run mcp_login' hint) instead of an opaque 'unhandled errors in a TaskGroup'."""
+    if isinstance(exc, BaseExceptionGroup):
+        for sub in exc.exceptions:
+            found = _unwrap(sub)
+            if isinstance(found, NotAuthenticated):
+                return found
+    return exc
+
+
+def _run_sync(interactive: bool, fn):
+    """asyncio.run(_with_session(...)) with ExceptionGroup unwrapping for NotAuthenticated."""
+    try:
+        return asyncio.run(_with_session(interactive, fn))
+    except BaseException as e:  # noqa: BLE001 — re-raised below
+        unwrapped = _unwrap(e)
+        if isinstance(unwrapped, NotAuthenticated):
+            raise unwrapped from None
+        raise
+
 
 async def _with_session(interactive: bool, fn):
     provider = _provider(interactive)
@@ -204,7 +278,7 @@ def login() -> list:
     async def _run(session):
         result = await session.list_tools()
         return getattr(result, "tools", result)
-    return asyncio.run(_with_session(interactive=True, fn=_run))
+    return _run_sync(interactive=True, fn=_run)
 
 
 def call_tool(name: str, arguments: dict | None = None):
@@ -216,7 +290,7 @@ def call_tool(name: str, arguments: dict | None = None):
 
     async def _run(session):
         return await session.call_tool(name, arguments=arguments or {})
-    return asyncio.run(_with_session(interactive=False, fn=_run))
+    return _run_sync(interactive=False, fn=_run)
 
 
 def list_tools() -> list:
@@ -228,4 +302,4 @@ def list_tools() -> list:
     async def _run(session):
         result = await session.list_tools()
         return getattr(result, "tools", result)
-    return asyncio.run(_with_session(interactive=False, fn=_run))
+    return _run_sync(interactive=False, fn=_run)
