@@ -2,6 +2,25 @@
 
 ## Done
 
+### 38. MCP OAuth: silent refresh across restarts + reads never pop a browser ✅
+Recurring pain: every ~3 days the MCP demanded a full browser re-login and concurrent Streamlit reruns
+raced the OAuth flows into `State parameter mismatch`, killing buying-power reads. Root cause found in the
+`mcp` SDK: `_initialize` restores the stored token but NOT `token_expiry_time`, so `is_token_valid()`
+short-circuits True for an expired access token and the refresh branch never runs — it uses the dead
+token, 401s, then does a full authorization_code (browser) grant. Fixed in `ingestion/mcp_auth.py`
+(no SDK patch):
+- `_RefreshingProvider(OAuthClientProvider)` overrides `_initialize` to restore an absolute expiry so an
+  expired access token takes the REFRESH path (silent renewal from the refresh token; SDK persists the
+  rotated token). `_FileTokenStorage.set_tokens` now stamps `expires_at`; `read_expires_at()` reads it
+  (unknown → treat as expired = prefer refresh over a stale token).
+- Non-interactive `call_tool`/`list_tools` pass redirect/callback handlers that RAISE `NotAuthenticated`
+  (never open a browser); `_run_sync`/`_unwrap` surface it out of the SDK's anyio ExceptionGroup so reads
+  degrade clean instead of an opaque TaskGroup error + no browser race.
+- NOTE: these fixes were written earlier this session but LOST in PR #13's squash (main's mcp_auth had
+  neither) — re-applied here as one clean auth PR. Re-login is now needed only when the refresh token
+  itself expires (rare), not every few days. mcp_auth is import-gated out of CI (mcp SDK not installed);
+  verified locally. Docs: CLAUDE.md Key Files + Known Issues.
+
 ### 37. Entry-alert scoping + freshness + 1-day pin TTL ✅
 User: entry emails fired for tickers they didn't want, and buy triggers kept firing on old news.
 Diagnosis: the recommendations source was ungated (fired for EVERY watch rec, ignoring the curated
