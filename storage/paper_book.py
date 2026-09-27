@@ -54,10 +54,6 @@ def cash() -> float:
     return round(_load()["cash"], 2)
 
 
-def open_option_ids() -> set:
-    return {p.get("option_id") for p in _load()["open"]}
-
-
 def open_tickers() -> set:
     return {(p.get("ticker") or "").upper() for p in _load()["open"]}
 
@@ -110,10 +106,6 @@ def close_position(option_id: str, exit_price: float, reason: str = "") -> dict 
 
 def get_open() -> list[dict]:
     return _load()["open"]
-
-
-def get_closed() -> list[dict]:
-    return _load()["closed"]
 
 
 # --- pure P&L helpers (unit-tested) ---------------------------------------------------

@@ -173,7 +173,7 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
     for intent in intents:
         # Confirm-first: preview the exact stop before (maybe) placing it.
         try:
-            preview = mcp._unwrap_tool_result(mcp_auth.call_tool("review_equity_order", {
+            preview = mcp._unwrap_tool_result(mcp_auth.call_tool(mcp._TOOL_REVIEW_ORDER, {
                 "account_number": acct, "symbol": intent.ticker, "side": "sell",
                 "type": "stop_market", "quantity": str(intent.quantity),
                 "stop_price": f"{intent.stop_price:.2f}",

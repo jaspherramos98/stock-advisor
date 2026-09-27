@@ -177,11 +177,6 @@ def market_status_line(now: datetime = None) -> str:
     return market_session(now)["line"]
 
 
-def is_market_open(now: datetime = None) -> bool:
-    """True only during the live regular (or half-day) session."""
-    return market_session(now)["is_open"]
-
-
 if __name__ == "__main__":
     import datetime as _dt
     s = market_session()

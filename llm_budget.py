@@ -69,14 +69,6 @@ def set_balance(amount: float, reserve: float | None = None) -> dict:
     return get_state()
 
 
-def set_reserve(reserve: float) -> dict:
-    with _LOCK:
-        d = _read()
-        d["reserve"] = round(float(reserve), 4)
-        _write(d)
-    return get_state()
-
-
 def cost_of(model: str, input_tokens: int, output_tokens: int,
             cache_read_tokens: int = 0) -> float:
     """USD cost of one call. Cache reads bill at ~0.1× input (Anthropic prompt-cache read rate)."""

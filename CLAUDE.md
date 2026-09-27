@@ -88,7 +88,8 @@ storage/
 alerts/snooze.py              Alert snooze/dismiss logic
 alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-aware (tags actionable_now)
 alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a watch trigger price is hit;
-                              sources = today's recommendations + Argus chat's last suggestion
+                              sources = pinned watches + Argus chat's last suggestion + today's
+                              recommendations (recs gated to the watchlist + fresh catalyst_date)
 alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject/header adapt)
 alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
 storage/entry_watch.py        Persists PINNED watches + Argus chat's last buy/watch suggestions
@@ -119,9 +120,10 @@ trading_guards.py             Broker-agnostic order-safety guardrails (R25) — 
                               buying-power + single-name cap). Pure logic, network-free, unit-tested.
 ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — mirrors robinhood.py
                               read shapes (fetch_positions/buying_power/quotes) + guarded, DRY_RUN-safe
-                              place_order. Trades ONLY the Agentic account. _call_tool delegates to
-                              mcp_auth (lazy import); _TOOL_* names + _order_args schema are placeholders
-                              to confirm from the live tool list. USE_MCP=False → never touched.
+                              place_order + place_option_order (review-first). Trades ONLY the Agentic
+                              account. _call_tool delegates to mcp_auth (lazy import); _TOOL_* constants
+                              are the verified live tool names (use them — don't hardcode tool strings).
+                              USE_MCP=False → never touched.
 ingestion/account_reads.py    Read dispatcher (R25) — buying_power/positions/quotes/is_available routed
                               to the MCP (USE_MCP=True, no 429) or robin_stocks (False), NO cross-fallback
                               (so MCP-on can't silently re-trigger the robin_stocks login). Dashboard +
@@ -188,11 +190,12 @@ alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — pl
                               auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first
                               via review_equity_order; DRY_RUN-safe + trading_guards. Whole-share only
                               (fractional <1 sh skipped). Agentic account only — main book stays manual.
+                              KEPT for the planned stock side of the agent; not scheduled/called today.
 scripts/agentic_stops.py      Run agentic_stops.sync_protective_stops() (DRY_RUN) — logs the stops it
                               would place; flip config.DRY_RUN=False to place real resting stops.
-scripts/mcp_login.py          One-time interactive login (R25) — run after funding the Agentic account:
-                              browser auth, stores tokens, prints the tool list + schemas (answers gate #1
-                              order types + gate #4 read scope). Needs `pip install "mcp[cli]"` in venv.
+scripts/mcp_login.py          Interactive MCP login (R25) — browser auth, stores tokens, prints the tool
+                              list + schemas. Run once, and again only when the refresh token expires
+                              (reads raise a clean NotAuthenticated). Needs `pip install "mcp[cli]"`.
 scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — market-hours gated; DRY unless
                               ARM flag `agent_live.arm` exists (then LIVE); honors kill switch
                               (`agentic_halt.flag`) + credit ledger; logs actions to agent_scheduler.log.
@@ -205,15 +208,10 @@ market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: 
                               (daily 06:30) calls it. Deleting the task = manual mornings.
 scripts/scan_affordable.py    Read-only screener — which tickers have a ~30-DTE OTM option within the
                               agentic buying power (+ = affordable). Argv or auto (recs+chat+cheap preset).
-scripts/mcp_spike.py          Pre-auth probe (R25) — confirmed the server is OAuth-gated, DCR works
-                              (custom client OK), refresh_token grant exists (429 dies). Places NO orders.
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
 main.py                       Pipeline orchestrator
 pipeline_cache.json           Today's recommendations cache
-budget.json                   DEPRECATED — no longer read/written. Budget is now live Robinhood
-                              buying power (dashboard `_effective_budget`); the manual budget
-                              number_input + save_budget/load_budget were removed (R9).
 ```
 
 ## Architecture
@@ -434,7 +432,7 @@ conviction sizes WITHIN the pool. Most of the money sits in the medium-risk core
   includes watches by design and walks the user through them on weak days instead
   of dismissing; understands `short` ideas (bearish, stocks-only, invert P&L)
 
-### Robinhood agentic execution — Path B / Design A (R25, scaffolding only)
+### Robinhood agentic execution — Path B / Design A (R25, live on main)
 Goal: kill two pains — (1) the `robin_stocks` 429/device-approval reset, and (2) exit-selling that
 needs 24/7 attention (the emailer only notifies, ~once/day). Path A (auto-orders via `robin_stocks`)
 was rejected: it's a ToS violation that escalates ban risk. Path B uses Robinhood's **official Trading
@@ -457,18 +455,19 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   - **Reads wired to real tools + verified live:** `fetch_positions` (get_equity_positions, enriched with
     get_equity_quotes for price/P&L), `fetch_buying_power` (get_portfolio), `fetch_quotes`
     (get_equity_quotes). Default to the MAIN account; `agentic_account_number()` for order sizing.
-- **STATUS: reads LIVE via MCP (429 gone); execution wired but DRY_RUN.** On this branch `USE_MCP=True`
-  + `DRY_RUN=True`. The dashboard buying power / positions / quotes and the pipeline's quote source read
-  through `ingestion/account_reads.py` → the MCP (MAIN account), and robin_stocks news is skipped, so no
-  robin_stocks login fires → the 429 is gone from the read + pipeline paths. Verified live (main BP $150 +
-  6 positions). Account model: MAIN = the real book (manual); the AGENTIC account is a funded pilot.
-  robin_stocks stays only for the (now-skipped) news path; `git checkout main` or `USE_MCP=False` fully
-  reverts. **Next (not done):** route exits to `place_order` native `stop_market`/`stop_limit` GTC on the
-  AGENTIC account (DRY_RUN + confirm-first via `review_equity_order`) — auto-exit only covers agentic-held
-  positions; main holdings stay manual. (The SDK's benign `Session termination failed: 400` teardown
-  warning is silenced in `mcp_auth.py` by lowering that one logger to ERROR.)
-- **To revert to native Argus entirely:** `git checkout main` (this work is on branch
-  `feat/robinhood-mcp-agentic`).
+- **STATUS (merged to main, PR #13):** `config.USE_MCP=True`. Dashboard buying power / positions /
+  quotes and the pipeline's quote source read through `ingestion/account_reads.py` → the MCP (MAIN
+  account); robin_stocks news is skipped, so no robin_stocks login fires → the 429 is gone. Account
+  model: MAIN = the real book (manual); the AGENTIC account is a funded pilot traded by the autonomous
+  OPTIONS agent (`alerts/agentic_options.py`, LIVE when `agent_live.arm` exists — see Key Files).
+  `config.DRY_RUN=True` stays the safe default; live runs scope it off per call. (The SDK's benign
+  `Session termination failed: 400` teardown warning is silenced in `mcp_auth.py`.)
+- **Equity (share) trading — planned, not active:** `alerts/agentic_stops.py` (standing GTC stop_market
+  per agentic share position, confirm-first via `review_equity_order`) is KEPT for the future stock
+  side of the agent but is not scheduled or called by anything today. Note `robinhood_mcp.place_order`
+  (equity) does NOT review-first the way `place_option_order` does — add that before enabling stocks.
+- **Fallback:** `config.USE_MCP=False` routes reads back to `robin_stocks` (`ingestion/robinhood.py`) —
+  kept as insurance and the only path that can read crypto. No branch switch needed.
 
 ## Claude Analysis JSON Schema
 Each recommendation must have:
