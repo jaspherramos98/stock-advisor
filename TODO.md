@@ -2,6 +2,23 @@
 
 ## Done
 
+### 39. Refactor step A — remove dead code + outdated files/docs ✅
+First step of the refactor/perf plan (see Backlog "Refactor plan B–E"). Evidence-based: import-graph +
+unreferenced-symbol scan, then a headless AppTest load.
+- **Deleted (local, untracked):** `collect_for_review.py`, `argus_review.txt`, `argus_review_*.zip` (June
+  review tooling), `argus-header-verify.png`, `budget.json` (deprecated since R9), a stray `.lnk`
+  shortcut, `positions_backup_20260721_*.json` (superseded July backup).
+- **Deleted (tracked):** `scripts/mcp_spike.py` (pre-auth probe, job done); dead functions
+  `market_hours.is_market_open`, `paper_book.open_option_ids`, `paper_book.get_closed`,
+  `llm_budget.set_reserve` (redundant — the UI sets reserve via `set_balance(balance, reserve)`).
+- **Kept on purpose:** `alerts/agentic_stops.py` + `scripts/agentic_stops.py` (planned stock side of the
+  agent), `robin_stocks` path (USE_MCP=False fallback + only crypto reader), backtest tool + mock data.
+- **Dedup:** `agentic_stops` now uses `robinhood_mcp._TOOL_REVIEW_ORDER` instead of a hardcoded tool string.
+- **Docs:** rewrote the stale R25 status ("scaffolding only / DRY_RUN / on branch …"), the "_TOOL_* are
+  placeholders" note, the entry_checker sources line, and the mcp_login line; removed mcp_spike/budget.json.
+- Verified: 86 tests, compileall, headless app load (0 exceptions, 6 tabs). Dead-symbol scan now shows only
+  2 intentional test-guarded names.
+
 ### 38. MCP OAuth: silent refresh across restarts + reads never pop a browser ✅
 Recurring pain: every ~3 days the MCP demanded a full browser re-login and concurrent Streamlit reruns
 raced the OAuth flows into `State parameter mismatch`, killing buying-power reads. Root cause found in the
@@ -727,6 +744,26 @@ Lowest core-fit; do last or not at all.
 ---
 
 ## Backlog
+
+### Refactor plan B–E — dashboard lag + structure (A done, #39)
+Measured baseline (headless AppTest profile, 2026-09-26): **~4s per click/tab switch**, 17.7s cold load.
+Warm-rerun cost: ~1.3s MCP buying power (cache bug below), ~1.1s uncached `fetch_prices`, ~0.85s uncached
+Sheets `read_history`, and each MCP call opens a fresh OAuth+HTTP session (~1.2s). `st.tabs` renders all
+six tabs every rerun. One PR per step, before/after timings via `scripts/bench_dashboard.py` (add in B).
+- **B. Quick lag fixes:** `_BP_CACHE` (app.py) is a script-level global that Streamlit resets on every
+  rerun → the 60s cache never hits; replace with `st.cache_data(ttl=60)` (+ `.clear()` on Refresh). Shared
+  cached price reader (ttl 30s) for Portfolio + Positions; cache `read_history` (ttl 600, clear on export).
+  Target ≤1.5s/click.
+- **C. Split app.py (2,739 lines):** each tab → `dashboard/tabs/<name>.py` `render(ctx)`; shared helpers +
+  cached readers → `dashboard/common.py`. Pure move, widget keys unchanged. Verify each tab headless.
+- **D. Render only the active tab:** replace `st.tabs` with a nav control (segmented_control/radio in
+  session_state) so a click runs one tab's code. Persist any input that must survive a tab switch.
+  Target ≤0.5s/click.
+- **E. MCP session reuse:** batch several tool calls into one OAuth/HTTP session in `mcp_auth`
+  (positions+quotes, the agent cycle's reads). Keep NotAuthenticated semantics. Target cold load ≤8s.
+- Not worth it (measured): `_compute_technicals` (0.9ms warm; the 469ms was the one-time pandas import);
+  lazy `anthropic` import (1.1s, scheduler cold start only).
+- Before enabling stock trading: make `robinhood_mcp.place_order` (equity) review-first like options.
 
 ### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)
 Agentic account approved for option_level_2 (2026-08-14). Built + verified in DRY_RUN:
