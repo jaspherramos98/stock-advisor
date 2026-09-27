@@ -221,12 +221,14 @@ scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — marke
                               ARM flag `agent_live.arm` exists (then LIVE); honors kill switch
                               (`agentic_halt.flag`) + credit ledger; logs actions to agent_scheduler.log.
 run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
-                              it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs.
-                              Manage: schtasks /Query|/Run|/Change|/Delete /TN "Argus Options Agent".
+                              it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs —
+                              the user deleted it (2026-09); re-register (user action, real money when armed):
+                              schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>un_agent_silent.vbs\""
+                              /SC MINUTE /MO 20 /F. Manage: schtasks /Query|/Run|/Change|/Delete /TN "…".
 market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
                               run pipeline (fresh signals) → arm the agent (echo armed > agent_live.arm).
                               run_market_open_silent.vbs runs it hidden; Windows task "Argus Market Open"
-                              (daily 06:30) calls it. Deleting the task = manual mornings.
+                              (daily 06:30) calls it — currently deleted by the user = manual mornings.
 scripts/bench_dashboard.py    Click-latency benchmark — runs dashboard/app.py headless (Streamlit AppTest):
                               cold load + N warm reruns (a warm rerun = what a click costs) + exceptions.
                               Live data (needs network + MCP token), so NOT in CI. Use for before/after.
@@ -486,7 +488,8 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   OPTIONS agent (`alerts/agentic_options.py`, LIVE when `agent_live.arm` exists — see Key Files).
   `config.DRY_RUN=True` stays the safe default; live runs scope it off per call. (The SDK's benign
   `Session termination failed: 400` teardown warning is silenced in `mcp_auth.py`.)
-- **Equity (share) trading — planned, not active:** `alerts/agentic_stops.py` (standing GTC stop_market
+- **Equity (share) trading — PLANNED (approved plan: TODO Backlog "Stock trading for the agent"):**
+  `alerts/agentic_stops.py` (standing GTC stop_market
   per agentic share position, confirm-first via `review_equity_order`) is KEPT for the future stock
   side of the agent but is not scheduled or called by anything today. Note `robinhood_mcp.place_order`
   (equity) does NOT review-first the way `place_option_order` does — add that before enabling stocks.
@@ -532,8 +535,8 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
 ## Dashboard Header & Alerts
 - **Header badge** (under the title): live market-session badge (`market_hours.market_session()` →
   🟢/🟡/🔴 + timestamp) and live Robinhood buying power. Buying power IS the allocation budget (R9),
-  shown read-only in the sidebar (`_effective_budget`). Read via `_live_buying_power()` with a 60s TTL
-  cache (the sidebar "💵 Refresh buying power" button forces a refresh).
+  shown read-only in the sidebar (`_effective_budget`). Read via `_live_buying_power()` (`dashboard/common.py`,
+  `st.cache_data` 60s TTL; the sidebar "💵 Refresh buying power" button clears it).
 - **Session-aware exit alerts** (`alerts/exit_checker.py`): each alert is tagged `actionable_now`
   and `market_status`; when the market is closed/extended-hours the alert message appends a caveat
   ("act at the next open" / "extended-hours only, use a limit order") so the user never acts on an

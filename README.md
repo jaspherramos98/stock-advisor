@@ -49,18 +49,25 @@ How all components, files, and external APIs connect.
 - Open positions passed to Claude so it never recommends buying what you already own
 - Mock mode (`MOCK_MODE=true`) skips the Claude API for zero-token testing
 
-**Dashboard (5 tabs)**
-- Today's Recommendations — allocation table, stock detail cards, add to positions
+**Dashboard (6 tabs)** — each tab is its own module in `dashboard/tabs/`
+- Today's Recommendations — allocation table, stock detail cards, batch "watch this trigger", add to positions
 - Portfolio — real invested money, shares, combined value trend graph (like Robinhood)
-- My Positions — open/closed positions, P&L, exit conditions, snooze alerts
-- Watch List — manage tickers Finnhub monitors for company-specific news
+- My Positions — open/closed positions, P&L, structure-anchored suggested exits, performance scorecard, snooze
+- Watch List — what Argus monitors (exit alerts, pinned buy triggers with 1-day expiry) + ticker watchlist
 - History — exported pipeline runs from Google Sheets with charts
+- 🤖 Agent — observe/control the autonomous options agent: paper book, live candlestick with buy/sell
+  markers, LLM credit ledger, kill switch, preview/live cycles, positions + Close-now
+
+**Autonomous options agent** (isolated Robinhood Agentic account, disposable pilot money)
+- Trades long calls/puts from Argus's own buy/short signals through 5 codified strategies
+- Trailing take-profit exits, anti-churn, kill switch, LLM-credit halt; DRY_RUN unless explicitly armed
+- Stock (share) trading for the agent is planned — see TODO.md
 
 **Positions**
 - Add from recommendations with one click (uses live market price by default)
 - Manual price + date entry if you bought at a different price
 - Price validation warns if entry is >50% or <200% of market price
-- Robinhood sync — one-click import of all your Robinhood positions with real cost basis
+- Robinhood sync — import your positions with real cost basis (via the official Trading MCP)
 - Amount invested tracking for portfolio value calculation
 - Close positions with P&L recorded automatically
 
@@ -70,6 +77,7 @@ How all components, files, and external APIs connect.
 - Time-based exits: `2 weeks`, `3 days`, `1 month`
 - Event-based exits: Claude reads fresh news and checks if your exit condition was triggered
 - Snooze alerts per ticker (1 day, 1 week, or permanently dismiss)
+- Buy-trigger ("buy when") alerts for pinned watches, Argus chat ideas, and fresh watchlisted recommendations
 - Email notifications via Gmail SMTP
 
 **Argus Assistant**
@@ -86,8 +94,9 @@ How all components, files, and external APIs connect.
 |---|---|
 | Dashboard | Streamlit |
 | AI Analysis | Anthropic Claude Sonnet |
-| News Sources | Finnhub, SEC EDGAR, Reddit RSS, CoinGecko, robin_stocks |
-| Price Data | yfinance |
+| News Sources | Finnhub, SEC EDGAR, Reddit RSS, CoinGecko |
+| Brokerage | Robinhood official Trading MCP (OAuth; reads + agentic orders), `robin_stocks` fallback |
+| Price Data | Robinhood quotes, yfinance (history + fallback) |
 | Export | Google Sheets API (gspread) |
 | Alerts | Gmail SMTP |
 | Chatbot Proxy | Flask |
@@ -158,39 +167,44 @@ A yellow banner appears at the top of the dashboard when mock mode is active. Ed
 
 ```
 stock-advisor/
-├── dashboard/app.py          # Streamlit UI — all 5 tabs + chatbot
+├── dashboard/
+│   ├── app.py                # Streamlit shell: header, sidebar, pipeline run, chat proxy, tab wiring
+│   ├── common.py             # Cached network readers + shared render helpers
+│   └── tabs/                 # One module per tab (recommendations, portfolio, positions,
+│                             #   watchlist, history, agent) — each exposes render()
 ├── main.py                   # Pipeline orchestration (parallel ingestion)
+├── config.py                 # Model names + MCP / DRY_RUN / persistent-session flags
+├── trading_guards.py         # Order-safety guardrails (idempotency, caps, kill switch)
+├── llm_budget.py             # Local Claude credit ledger (halts agent + chat at reserve)
+├── market_hours.py           # NYSE session logic (holidays, half days)
 ├── analysis/
-│   └── claude_analyst.py     # Claude API integration + prompt building
+│   ├── claude_analyst.py     # Claude API integration + prompt building
+│   ├── scorecard.py          # Closed-trade performance scorecard
+│   └── options_strategies.py # Agent strategy library + exit policy
 ├── ingestion/
-│   ├── rss.py                # RSS feed ingestion
-│   ├── reddit.py             # Reddit RSS
-│   ├── finnhub_news.py       # Finnhub market + company news
-│   ├── sec.py                # SEC EDGAR filings
-│   ├── coingecko.py          # Crypto context + white papers
-│   ├── crypto_news.py        # CoinDesk, CoinTelegraph, Decrypt RSS
-│   ├── etf_news.py           # ETF-specific RSS feeds
-│   ├── prices.py             # Live prices (Finnhub) + 14-day history (yfinance)
-│   └── robinhood.py          # Read-only Robinhood sync (robin_stocks)
-├── validation/
-│   └── scorer.py             # Confidence scoring by source type
-├── calculator/
-│   └── portfolio.py          # Budget allocation (buy signals only)
-├── storage/
-│   ├── positions.py          # Position CRUD + P&L tracking
-│   ├── sheets.py             # Google Sheets export
-│   └── watchlist.py          # Watchlist management
+│   ├── rss.py, reddit.py, finnhub_news.py, sec.py, crypto_news.py, etf_news.py  # news sources
+│   ├── coingecko.py          # Crypto context + market data
+│   ├── prices.py             # Quotes, technicals, key levels, market regime
+│   ├── fundamentals.py, etf_facts.py   # Company / ETF facts
+│   ├── account_reads.py      # Read dispatcher: Robinhood MCP or robin_stocks
+│   ├── robinhood_mcp.py      # Official Trading MCP client (reads + guarded orders)
+│   ├── mcp_auth.py           # OAuth transport (silent refresh, never pops a browser on reads)
+│   ├── mcp_session.py        # One persistent MCP connection per process
+│   ├── options_data.py, signal_context.py, affordable_scout.py   # agent inputs
+│   └── robinhood.py          # robin_stocks fallback (unofficial)
+├── validation/scorer.py      # Confidence scoring by source type
+├── calculator/portfolio.py   # Pyramid budget allocation
+├── storage/                  # positions, watchlist, sheets, entry_watch, paper_book, peak_tracker
 ├── alerts/
-│   ├── exit_checker.py       # Stop loss, gain, time, and event-based checks
-│   ├── notifier.py           # Email alerts
-│   ├── run_checks.py         # Scheduled check runner
-│   └── snooze.py             # Per-ticker alert snooze
+│   ├── exit_checker.py, entry_checker.py   # Sell / buy-trigger checks
+│   ├── notifier.py, run_checks.py, snooze.py
+│   ├── agentic_options.py    # Autonomous options agent (entries + exits)
+│   └── agentic_stops.py      # Standing GTC stops for agent share positions (for planned stock trading)
+├── scripts/                  # run_agent, agentic_options, close_all_agent, mcp_login,
+│                             #   scan_affordable, bench_dashboard, agentic_stops
+├── tests/test_deterministic.py   # Network-free unit tests (CI)
 ├── mock_recommendations.json # Test data for mock mode
-├── .env.example              # Environment variable template
 └── docs/                     # Architecture diagrams
-    ├── pipeline-overview.png
-    ├── position-lifecycle.png
-    └── data-flow.png
 ```
 
 ---
@@ -248,5 +262,6 @@ The checker handles:
 - This tool is for **personal, informational use only**
 - It is **not financial advice**
 - Past signals do not predict future performance
-- The Robinhood sync uses `robin_stocks`, an unofficial library — it may break if Robinhood changes their app. All Robinhood API calls are isolated in `ingestion/robinhood.py` for easy updates
+- Account reads and the agent's orders use Robinhood's **official Trading MCP** (OAuth). Orders only ever go to the dedicated Agentic account, are gated by `DRY_RUN` + an explicit arm file, and never touch your main account
+- `robin_stocks` (unofficial) remains as a fallback (`config.USE_MCP=False`) and may break if Robinhood changes their app; it is isolated in `ingestion/robinhood.py`
 - Never commit `.env` or `google_credentials.json` to version control
