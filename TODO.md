@@ -2,6 +2,11 @@
 
 ## Done
 
+### 45. Stock-trading S0 verification (read-only, 2026-09-27) ✅
+Probed tool schemas + `review_equity_order` on the agentic account (nothing placed). Findings (fractional/dollar
+rules, advisory review, PDT applies, 3 existing order-path bugs) recorded under Backlog "Stock trading for the
+agent" S0 and folded into S1. CLAUDE.md: equity order rules + corrected the stale "MCP has no crypto" note.
+
 ### 44. Docs refresh (pre-compact, 2026-09-27) ✅
 README: 6 tabs + Agent tab, autonomous-agent section, buy-trigger alerts, Robinhood official MCP as the
 brokerage (robin_stocks = fallback), project tree rewritten for dashboard/tabs + common, MCP/agent modules,
@@ -819,12 +824,31 @@ only on whole shares → fractional exits are poll-based (PC must be on), whole 
 (`alerts/agentic_stops.py`, kept for this). `robinhood_mcp.place_order` (equity) is NOT review-first yet.
 Pipeline-cache allocations are sized on the MAIN account's BP → recompute the pyramid on AGENTIC BP.
 Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24/7 exits, not edge.
-- **S0 verify (no money):** PDT status of this account (applies to the OPTIONS agent today too — unguarded);
-  via `review_equity_order` (places nothing): fractional stop rejected? stop + limit sell on same shares allowed?
-  `dollar_amount` behavior/min; regular vs extended hours for fractional.
-- **S1 foundations:** review-first equity `place_order`; pure `equity_exit_decision()` (rec's target/stop from
+- **S0 verify (no money) — DONE 2026-09-27** (tool schemas + `review_equity_order` probes on F; nothing placed):
+  - **Fractional/dollar:** only `type=market` + `regular_hours`. `dollar_amount` min **$1.00** (review returns
+    `EQUITY_DOLLAR_BASED_MINIMUM_AMOUNT_ERROR`); `dollar_amount` + `extended_hours` = HARD error ("fractional and
+    dollar-based orders are only allowed in regular_hours"). ⇒ fractional stop/limit is NOT allowed (tool docs);
+    fractional exits are poll-based market sells, regular hours only.
+  - **Review is ADVISORY and INCOMPLETE:** problems come back as a single soft `data.order_checks.alertType`, not
+    an error — and it is NOT a full validator (a fractional LIMIT buy reviewed fine except an unmarketable-price
+    alert, though the rules forbid it). ⇒ S1 must (a) enforce order-shape rules locally and (b) BLOCK on alert
+    types, not just print them.
+  - **Stop + limit on same shares:** can't probe with no holdings; the sell alert
+    `EQUITY_MAX_SELL_SHARES_EXCEEDED` reports `sharesPendingSell`, so open sell orders reserve shares → assume
+    NO (cancel the resting stop before any other sell). Confirm in S5 with a real whole share.
+  - **PDT:** no API field (`get_accounts` has none; `limited_margin` counts as a margin account, equity $41.92
+    < $25k) ⇒ treat PDT as APPLYING: ≤3 day trades per rolling 5 business days, shared by options + stocks.
+    Review lists PDT among its pre-trade alerts — block on it as a backstop, don't rely on it.
+  - **Existing bugs found (fix in S1):** (1) `place_option_order` reads `preview.get("order_checks")` but the
+    payload is `{"data": {"order_checks": …}}` → option review alerts ALWAYS log as "none" and never block.
+    (2) `_order_args` can send BOTH `dollar_amount` and `quantity` (tool requires exactly one). (3) `ref_id` is
+    `client_id` (e.g. `stop-F-11.5`, deterministic) but the server dedups by it as an idempotency UUID — the same
+    stop on a later day could be swallowed; use a fresh UUID per logical order, reused only on transport retry.
+- **S1 foundations:** review-first equity `place_order` that BLOCKS on `order_checks` alerts (fix option review
+  too); local order-shape validation (exactly one of qty/dollars; fractional ⇒ market + regular_hours; dollars ≥
+  $1); UUID `ref_id`; pure `equity_exit_decision()` (rec's target/stop from
   exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
-  duplicate); shared day-trade counter guard (options + stocks) if PDT applies. Unit tests.
+  duplicate); shared day-trade counter guard (options + stocks; PDT applies per S0). Unit tests.
 - **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on
   agentic BP; fractional = dollar market order, whole share = limit; anti-churn (`_closed_underlyings`) and kill
   switch / arm flag / credit halt shared with options.
@@ -839,7 +863,7 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   `get_portfolio` ×2 — now ~0.3s each on the shared session; dedup within a cycle is optional.
 - Not worth it (measured): `_compute_technicals` (0.9ms warm; 469ms was the one-time pandas import); lazy
   `anthropic` import (1.1s, scheduler cold start only).
-- Before enabling stock trading: make `robinhood_mcp.place_order` (equity) review-first like options.
+- Before enabling stock trading: make `robinhood_mcp.place_order` (equity) review-first like options (→ S1).
 
 ### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)
 Agentic account approved for option_level_2 (2026-08-14). Built + verified in DRY_RUN:

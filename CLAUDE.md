@@ -660,10 +660,15 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
   expires** (symptom: log shows `_perform_authorization_code_grant` then a clean `NotAuthenticated`;
   buying power stops reading): `python scripts/mcp_login.py` (one browser approve), then relaunch — now
   rare (refresh-token lifetime), not every ~3 days.
-- **MCP has NO crypto endpoint.** The Robinhood Trading MCP is equities/ETFs/options only — it can't read
-  or trade crypto (DOGE/XRP/BTC). Sync positions skips crypto; the options agent can't touch it. Track
+- **Argus reads NO crypto through the MCP.** When wired, the Robinhood Trading MCP had no crypto tools; as of
+  2026-09-27 it LISTS them (`get_crypto_positions`, `get_crypto_quotes`, `place_crypto_order`, …) but Argus
+  uses none and they're unverified. Today: Sync positions skips crypto; the options agent can't touch it. Track
   crypto manually (My Positions → add). Only `ingestion/robinhood.py` (robin_stocks) sees crypto, and
-  that path is skipped under `USE_MCP`.
+  that path is skipped under `USE_MCP`. (Wiring crypto reads = a future backlog item.)
+- **Equity order rules (verified S0, 2026-09-27):** fractional / `dollar_amount` orders are `market` +
+  `regular_hours` only (dollar min $1); `review_equity_order` is advisory — problems come back as a soft
+  `data.order_checks.alertType`, not an error, and it doesn't catch every illegal shape. Details: TODO "Stock
+  trading for the agent" S0.
 - **Streamlit caches imported modules.** After editing a module (adding a function, etc.), a browser
   refresh or "Rerun" is NOT enough — the running process holds the stale module (symptom: `ImportError:
   cannot import name X`). FULLY restart the app (`argus_stop.bat` → relaunch). The scheduler is unaffected
