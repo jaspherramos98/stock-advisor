@@ -2,6 +2,23 @@
 
 ## Done
 
+### 42. Refactor step E — persistent MCP session (one connection per process) ✅
+Measured: every MCP tool call opened a fresh OAuth+HTTP+initialize session (~1.2–1.5s). A dashboard cold
+load made 7 calls (10.7s) and an agent cycle 7 (8.8s of 11.4s).
+- New `ingestion/mcp_session.py` `PersistentSession` (no mcp import → CI-testable): one session on a daemon
+  event-loop thread; a single owner task opens/serves/closes it (anyio cancel scopes must exit in the task
+  that entered them); calls serialized; idle 5 min → close. A failed call closes the session and is retried
+  ONCE on a fresh one **only for `get_/review_/list_` tools — order placement is never auto-retried**
+  (a lost response could mean the order filled; a retry could double-place).
+- `mcp_auth`: `_with_session` → reusable `_open_session` context manager; `call_tool` routes through
+  `_PERSISTENT` (NotAuthenticated still unwrapped); `login()` resets it (old tokens). Kill switch:
+  `config.MCP_PERSISTENT_SESSION = False` → per-call sessions.
+- **After:** dashboard MCP time 10.7s → **3.6s**; agent cycle 11.4s → **6.0s** (identical decisions);
+  scheduled-agent process still exits cleanly (daemon thread). 7 new tests (reuse, read retry-once,
+  never-retry orders, open-failure recovery, idle close, reset, 10-thread safety). 93 green.
+- A/B (flag off vs on): no warm-click difference (0.45 vs 0.46–0.49s, 0 MCP calls per click). The click
+  went 0.25s → 0.45s day-over-day with the flag OFF too — traced to the History tab (see Backlog).
+
 ### 41. Refactor step C — split dashboard/app.py into per-tab modules ✅
 `dashboard/app.py` 2,739 → ~900 lines. New `dashboard/common.py` (all cached readers + shared render/pure
 helpers) and `dashboard/tabs/{recommendations,portfolio,positions,watchlist,history,agent}.py`, each a
@@ -772,27 +789,14 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### Refactor plan D–E — (A #39, B #40, C #41 done; click now 0.25s, cold ~14s)
-NOTE after C: click is 0.25s, so **D (active-tab rendering) has little left to win** — the user chose to
-do it anyway in order; keep it minimal. **E** (cold load ~14s, agent cycle) is the remaining felt win.
-Original plan below for reference:
-Measured baseline (headless AppTest profile, 2026-09-26): **~4s per click/tab switch**, 17.7s cold load.
-Warm-rerun cost: ~1.3s MCP buying power (cache bug below), ~1.1s uncached `fetch_prices`, ~0.85s uncached
-Sheets `read_history`, and each MCP call opens a fresh OAuth+HTTP session (~1.2s). `st.tabs` renders all
-six tabs every rerun. One PR per step, before/after timings via `scripts/bench_dashboard.py` (add in B).
-- **B. Quick lag fixes:** `_BP_CACHE` (app.py) is a script-level global that Streamlit resets on every
-  rerun → the 60s cache never hits; replace with `st.cache_data(ttl=60)` (+ `.clear()` on Refresh). Shared
-  cached price reader (ttl 30s) for Portfolio + Positions; cache `read_history` (ttl 600, clear on export).
-  Target ≤1.5s/click.
-- **C. Split app.py (2,739 lines):** each tab → `dashboard/tabs/<name>.py` `render(ctx)`; shared helpers +
-  cached readers → `dashboard/common.py`. Pure move, widget keys unchanged. Verify each tab headless.
-- **D. Render only the active tab:** replace `st.tabs` with a nav control (segmented_control/radio in
-  session_state) so a click runs one tab's code. Persist any input that must survive a tab switch.
-  Target ≤0.5s/click.
-- **E. MCP session reuse:** batch several tool calls into one OAuth/HTTP session in `mcp_auth`
-  (positions+quotes, the agent cycle's reads). Keep NotAuthenticated semantics. Target cold load ≤8s.
-- Not worth it (measured): `_compute_technicals` (0.9ms warm; the 469ms was the one-time pandas import);
-  lazy `anthropic` import (1.1s, scheduler cold start only).
+### Perf follow-ups (refactor plan A–E finished: #39–#42; D skipped — st.tabs switching is already client-side)
+- **History tab = ~0.6s of every click** (warm-rerun profile, 2026-09-27): `_cached_history` caches the Sheets
+  read, but the tab rebuilds DataFrames + Plotly figures from ALL exported rows each rerun, so click cost
+  grows with export count (click 0.25s → 0.45s in a day with identical code). Cache the derived frames/figures.
+- Redundant MCP calls per agent cycle: `get_option_positions` ×2 (exits + `_held_underlyings`) and
+  `get_portfolio` ×2 — now ~0.3s each on the shared session; dedup within a cycle is optional.
+- Not worth it (measured): `_compute_technicals` (0.9ms warm; 469ms was the one-time pandas import); lazy
+  `anthropic` import (1.1s, scheduler cold start only).
 - Before enabling stock trading: make `robinhood_mcp.place_order` (equity) review-first like options.
 
 ### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)

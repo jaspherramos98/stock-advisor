@@ -978,3 +978,112 @@ def test_chat_direction_resolution():
     assert _chat_direction({"action": "buy", "trigger_text": "bearish setup"}) == "short"
     assert _chat_direction({"action": "watch", "trigger_text": "buy above $x"}) is None   # not an entry
     assert _chat_direction({"action": "sell", "trigger_text": "take profit"}) is None      # exit, not short
+
+
+# ── Persistent MCP session (ingestion/mcp_session.py) ─────────────────────────
+def _fake_opener(log, behave, fail_open_on=()):
+    """Async-context-manager opener yielding a fake session. `behave(name, session_idx, args)` returns
+    a result or raises; `fail_open_on` = session indexes whose OPEN raises."""
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def opener():
+        log["opens"] += 1
+        idx = log["opens"]
+        if idx in fail_open_on:
+            raise ValueError(f"open {idx} failed")
+
+        class _S:
+            async def call_tool(self, name, arguments=None):
+                log["calls"].append((idx, name))
+                return behave(name, idx, arguments or {})
+        yield _S()
+    return opener
+
+
+def test_mcp_session_is_retryable():
+    from ingestion.mcp_session import is_retryable
+    assert is_retryable("get_portfolio") and is_retryable("review_option_order")
+    assert not is_retryable("place_option_order") and not is_retryable("place_equity_order")
+    assert not is_retryable("cancel_order")
+
+
+def test_mcp_session_reuses_one_connection():
+    from ingestion.mcp_session import PersistentSession
+    log = {"opens": 0, "calls": []}
+    ps = PersistentSession(_fake_opener(log, lambda n, i, a: f"{n}:{a.get('k')}"))
+    assert [ps.call("get_x", {"k": k}) for k in range(5)] == [f"get_x:{k}" for k in range(5)]
+    assert log["opens"] == 1                                   # handshake paid once
+
+
+def test_mcp_session_retries_a_read_once_on_a_fresh_session():
+    from ingestion.mcp_session import PersistentSession
+    import pytest
+    log = {"opens": 0, "calls": []}
+
+    def behave(name, idx, args):
+        if idx == 1:
+            raise RuntimeError("connection dropped")
+        return "ok"
+    ps = PersistentSession(_fake_opener(log, behave))
+    assert ps.call("get_quotes") == "ok"
+    assert log["calls"] == [(1, "get_quotes"), (2, "get_quotes")] and log["opens"] == 2
+
+    log2 = {"opens": 0, "calls": []}                          # retry fails too → error surfaces
+    ps2 = PersistentSession(_fake_opener(log2, lambda n, i, a: (_ for _ in ()).throw(RuntimeError("down"))))
+    with pytest.raises(RuntimeError):
+        ps2.call("get_quotes")
+    assert len(log2["calls"]) == 2                             # exactly one retry, no loop
+
+
+def test_mcp_session_never_retries_an_order():
+    from ingestion.mcp_session import PersistentSession
+    import pytest
+    log = {"opens": 0, "calls": []}
+
+    def behave(name, idx, args):
+        if name.startswith("place_") and idx == 1:
+            raise RuntimeError("response lost")
+        return "ok"
+    ps = PersistentSession(_fake_opener(log, behave))
+    with pytest.raises(RuntimeError):
+        ps.call("place_option_order", {"qty": 1})
+    assert log["calls"] == [(1, "place_option_order")]          # attempted ONCE — no double-place
+    assert ps.call("get_x") == "ok" and log["opens"] == 2       # broken session was closed + reopened
+
+
+def test_mcp_session_open_failure_propagates_then_recovers():
+    from ingestion.mcp_session import PersistentSession
+    import pytest
+    log = {"opens": 0, "calls": []}
+    ps = PersistentSession(_fake_opener(log, lambda n, i, a: "ok", fail_open_on={1}))
+    with pytest.raises(ValueError):
+        ps.call("get_x")
+    assert ps.call("get_x") == "ok" and log["opens"] == 2
+
+
+def test_mcp_session_idle_close_and_reset():
+    import time as _t
+    from ingestion.mcp_session import PersistentSession
+    log = {"opens": 0, "calls": []}
+    ps = PersistentSession(_fake_opener(log, lambda n, i, a: "ok"), idle_seconds=0.05)
+    ps.call("get_x"); _t.sleep(0.3); ps.call("get_x")
+    assert log["opens"] == 2                                   # idle session closed, then reopened
+
+    log2 = {"opens": 0, "calls": []}
+    ps2 = PersistentSession(_fake_opener(log2, lambda n, i, a: "ok"))
+    ps2.call("get_x"); ps2.reset(); ps2.call("get_x")
+    assert log2["opens"] == 2                                  # reset forces a fresh session
+
+
+def test_mcp_session_thread_safe():
+    import threading
+    from ingestion.mcp_session import PersistentSession
+    log = {"opens": 0, "calls": []}
+    ps = PersistentSession(_fake_opener(log, lambda n, i, a: a["i"]))
+    out = {}
+    threads = [threading.Thread(target=lambda i=i: out.__setitem__(i, ps.call("get_x", {"i": i})))
+               for i in range(10)]
+    for t in threads: t.start()
+    for t in threads: t.join(10)
+    assert out == {i: i for i in range(10)} and log["opens"] == 1

@@ -25,6 +25,7 @@ This module imports the `mcp` SDK at top level, so it must be imported LAZILY by
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.server
 import logging
 import threading
@@ -42,6 +43,7 @@ import anyio
 import httpx2
 
 import config
+from ingestion.mcp_session import PersistentSession
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.client.auth import OAuthClientProvider, OAuthFlowError, TokenStorage
@@ -258,7 +260,9 @@ def _run_sync(interactive: bool, fn):
         raise
 
 
-async def _with_session(interactive: bool, fn):
+@contextlib.asynccontextmanager
+async def _open_session(interactive: bool = False):
+    """Open one authenticated MCP session (yields an initialized ClientSession)."""
     provider = _provider(interactive)
     async with httpx2.AsyncClient(auth=provider, timeout=60.0) as http:
         # Keep terminate_on_close=True (default): Robinhood 400s the teardown DELETE, but that
@@ -268,7 +272,17 @@ async def _with_session(interactive: bool, fn):
             read, write = streams[0], streams[1]
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                return await fn(session)
+                yield session
+
+
+async def _with_session(interactive: bool, fn):
+    async with _open_session(interactive) as session:
+        return await fn(session)
+
+
+# One shared, lazily-opened session for all non-interactive tool calls in this process (see
+# ingestion/mcp_session.py): the ~1.2s handshake is paid once per burst instead of per call.
+_PERSISTENT = PersistentSession(lambda: _open_session(interactive=False))
 
 
 def login() -> list:
@@ -278,19 +292,32 @@ def login() -> list:
     async def _run(session):
         result = await session.list_tools()
         return getattr(result, "tools", result)
-    return _run_sync(interactive=True, fn=_run)
+    tools = _run_sync(interactive=True, fn=_run)
+    _PERSISTENT.reset()   # an already-open shared session still holds the OLD tokens
+    return tools
 
 
 def call_tool(name: str, arguments: dict | None = None):
     """Non-interactive tool call. Requires an existing stored session (login() done once);
     the provider refreshes the access token silently. Raises NotAuthenticated if no token
-    is stored, so a read can never trigger a browser popup."""
+    is stored, so a read can never trigger a browser popup. Runs on the shared persistent
+    session (config.MCP_PERSISTENT_SESSION) — reads auto-retry once on a broken connection,
+    order placement never does."""
     if not has_session():
         raise NotAuthenticated("no Robinhood MCP token — run scripts/mcp_login.py first")
 
-    async def _run(session):
-        return await session.call_tool(name, arguments=arguments or {})
-    return _run_sync(interactive=False, fn=_run)
+    if not config.MCP_PERSISTENT_SESSION:
+        async def _run(session):
+            return await session.call_tool(name, arguments=arguments or {})
+        return _run_sync(interactive=False, fn=_run)
+
+    try:
+        return _PERSISTENT.call(name, arguments or {})
+    except BaseException as e:  # noqa: BLE001 — re-raised below
+        unwrapped = _unwrap(e)
+        if isinstance(unwrapped, NotAuthenticated):
+            raise unwrapped from None
+        raise
 
 
 def list_tools() -> list:

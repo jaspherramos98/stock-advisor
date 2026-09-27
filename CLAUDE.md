@@ -118,7 +118,8 @@ run_checks_silent.vbs         Same, hidden — what the "Argus Alert Checks" sch
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
                               header badge, chatbot context, and exit_checker
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
-                              flags USE_MCP/DRY_RUN + ROBINHOOD_MCP_URL (R25) — single source of truth
+                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION + ROBINHOOD_MCP_URL (R25) —
+                              single source of truth
 llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
                               console balance, record_cost decrements per call, can_spend() halts new
                               agent entries + chat when remaining ≤ reserve (default $0.50). Persists to
@@ -153,6 +154,15 @@ ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mc
                               days); we persist an absolute `expires_at` (_FileTokenStorage) and restore it
                               on init so an expired token takes the refresh path. mcp SDK is an OPTIONAL
                               dep (not in requirements.txt) → imported lazily so CI stays clean.
+                              call_tool runs on ONE shared session per process (`_PERSISTENT`, see
+                              mcp_session.py) when config.MCP_PERSISTENT_SESSION; login() resets it.
+ingestion/mcp_session.py      Persistent MCP session (SDK-free, unit-tested) — keeps one connection open on a
+                              daemon event-loop thread so the ~1.2s handshake is paid once per burst, not per
+                              call (agent cycle 11.4s → 6.0s; dashboard MCP time 10.7s → 3.6s). A single
+                              "owner" task opens/serves/closes the session (anyio same-task rule); calls are
+                              serialized; a failed call closes the session and is retried ONCE on a fresh one
+                              ONLY if `is_retryable` (get_/review_/list_) — order placement is NEVER retried
+                              (a lost response could mean it filled → double-place). Idle 5 min → closes.
 ingestion/options_data.py     Option contract selection (R26/Phase 2) — chain→expiration(DTE window)→
                               strike(OTM %)→quote→liquidity+affordability, via MCP option-data tools.
                               Pure helpers (_dte/pick_expiration/pick_contract_by_moneyness/liquidity_ok/
