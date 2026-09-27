@@ -27,6 +27,8 @@ stored — and never launch a browser (auth is only via scripts/mcp_login.py).
 """
 from __future__ import annotations
 
+import uuid
+
 import config
 from trading_guards import GuardState, OrderIntent, check_order, record_placed
 
@@ -48,6 +50,8 @@ _ORDER_TYPE_MAP = {
     "stop_market": "stop_market",
     "stop_limit": "stop_limit",
 }
+
+MIN_DOLLAR_ORDER = 1.00   # broker minimum for dollar-based orders (EQUITY_DOLLAR_BASED_MINIMUM_AMOUNT_ERROR)
 
 
 class MCPNotWired(RuntimeError):
@@ -314,10 +318,12 @@ def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
     the AGENTIC account. Returns {status, reason, intent, dry_run}: 'rejected' (a guard
     blocked it), 'dry_run' (allowed + logged, not sent), or 'placed'. Never raises on a guard
     rejection; a live-send failure propagates so the caller can halt."""
+    shape_error = _order_shape_error(intent)
     verdict = check_order(intent, state, buying_power)
-    if not verdict.allowed:
-        print(f"[ORDER REJECTED] {intent.side} {intent.ticker} — {verdict.reason}")
-        return {"status": "rejected", "reason": verdict.reason, "intent": intent, "dry_run": config.DRY_RUN}
+    reason = shape_error or (None if verdict.allowed else verdict.reason)
+    if reason:
+        print(f"[ORDER REJECTED] {intent.side} {intent.ticker} — {reason}")
+        return {"status": "rejected", "reason": reason, "intent": intent, "dry_run": config.DRY_RUN}
 
     if config.DRY_RUN:
         record_placed(intent, state)
@@ -333,10 +339,12 @@ def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
     acct = account_number or agentic_account_number()
     if not acct:
         raise MCPNotWired("no agentic account available to place orders")
-    result = _call_tool(_TOOL_PLACE_ORDER, _order_args(intent, acct))
+    ref_id = _new_ref_id()
+    result = _call_tool(_TOOL_PLACE_ORDER, {**_order_args(intent, acct), "ref_id": ref_id})
     record_placed(intent, state)
-    print(f"[ORDER PLACED] {intent.side} {intent.ticker} :: {intent.reason}")
-    return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "raw": result}
+    print(f"[ORDER PLACED] {intent.side} {intent.ticker} ref {ref_id} :: {intent.reason}")
+    return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False,
+            "ref_id": ref_id, "raw": result}
 
 
 def place_option_order(intent, state: GuardState, buying_power: float,
@@ -378,10 +386,12 @@ def place_option_order(intent, state: GuardState, buying_power: float,
               f"exp {intent.expiration} premium ${intent.premium} :: {intent.reason}")
         return {"status": "dry_run", "reason": "logged, not sent", "intent": intent, "dry_run": True}
 
-    result = _call_tool(_TOOL_PLACE_OPTION, args)
+    ref_id = _new_ref_id()   # place-only: review_option_order's schema has no ref_id
+    result = _call_tool(_TOOL_PLACE_OPTION, {**args, "ref_id": ref_id})
     record_placed(intent, state)
-    print(f"[OPTION PLACED] {intent.side}/{intent.position_effect} {tag} :: {intent.reason}")
-    return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "raw": result}
+    print(f"[OPTION PLACED] {intent.side}/{intent.position_effect} {tag} ref {ref_id} :: {intent.reason}")
+    return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False,
+            "ref_id": ref_id, "raw": result}
 
 
 def _order_alert(preview) -> str | None:
@@ -414,25 +424,63 @@ def _option_args(intent, account_number: str) -> dict:
     return args
 
 
+def _new_ref_id() -> str:
+    """Broker idempotency key for ONE placement. The server dedups by ref_id, so a deterministic
+    key (the old client_id, e.g. 'stop-F-11.5') could swallow a legitimate re-placement of the
+    same order on a later day. A fresh UUID per placement is correct because placement is never
+    auto-retried (mcp_session.is_retryable). Local dedup stays on intent.client_id (trading_guards)."""
+    return str(uuid.uuid4())
+
+
+def _fmt_qty(q: float) -> str:
+    """Shares as the broker wants them: ≤6 decimals, no float noise ('0.30000000000000004')."""
+    return f"{q:.6f}".rstrip("0").rstrip(".")
+
+
+def _order_shape_error(intent: OrderIntent) -> str | None:
+    """Pure: why the broker would refuse this equity order's SHAPE, or None if it's legal.
+
+    Rules verified live in S0 (2026-09-27). review_equity_order does NOT reliably catch these
+    (it previewed a fractional limit buy as fine), so they're enforced here before anything is sent."""
+    otype = _ORDER_TYPE_MAP.get(intent.order_type)
+    if otype is None:
+        return f"unknown order_type {intent.order_type!r}"
+    has_qty, has_dollars = intent.quantity is not None, intent.dollars is not None
+    if has_qty == has_dollars:
+        return "exactly one of quantity or dollars is required"
+    if has_dollars:
+        if otype != "market":
+            return "dollar-based orders must be market orders"
+        if intent.dollars < MIN_DOLLAR_ORDER:
+            return f"dollar amount below the ${MIN_DOLLAR_ORDER:.2f} broker minimum"
+    elif intent.quantity <= 0:
+        return "quantity must be positive"
+    elif intent.quantity != int(intent.quantity) and otype != "market":
+        return "fractional shares must be market orders (no limit/stop on fractions)"
+    if otype in ("limit", "stop_limit") and intent.limit_price is None:
+        return f"{otype} order needs a limit_price"
+    if otype in ("stop_market", "stop_limit") and intent.stop_price is None:
+        return f"{otype} order needs a stop_price"
+    return None
+
+
 def _order_args(intent: OrderIntent, account_number: str) -> dict:
-    """Map an OrderIntent to the place_equity_order schema (all values are strings)."""
-    otype = _ORDER_TYPE_MAP.get(intent.order_type, "market")
+    """Map a shape-valid OrderIntent (see _order_shape_error) to the review/place_equity_order
+    schema (all values are strings). ref_id is added by place_order only — review has none."""
     args: dict = {
         "account_number": account_number,
         "symbol": intent.ticker,
         "side": intent.side,
-        "type": otype,
+        "type": _ORDER_TYPE_MAP[intent.order_type],
     }
-    if intent.dollars is not None and otype == "market":
+    if intent.dollars is not None:
         args["dollar_amount"] = f"{intent.dollars:.2f}"
-    if intent.quantity is not None:
-        args["quantity"] = str(intent.quantity)
+    else:
+        args["quantity"] = _fmt_qty(intent.quantity)
     if intent.limit_price is not None:
         args["limit_price"] = f"{intent.limit_price:.2f}"
     if intent.stop_price is not None:
         args["stop_price"] = f"{intent.stop_price:.2f}"
     if intent.time_in_force:
         args["time_in_force"] = intent.time_in_force
-    if intent.client_id:
-        args["ref_id"] = intent.client_id
     return args

@@ -135,7 +135,11 @@ ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B
                               place_order + place_option_order (review-first: `_order_alert` reads the
                               broker alert at data.order_checks.alertType; an alert BLOCKS an opening
                               option order (status 'rejected'), a closing one proceeds with a warning —
-                              never trap an exit). Trades ONLY the Agentic
+                              never trap an exit). Equity orders pass `_order_shape_error` first (exactly
+                              one of qty/$; $ ⇒ market ≥$1; fractional ⇒ market; limit/stop need prices)
+                              → 'rejected' even in DRY_RUN. Every placement sends a fresh UUID `ref_id`
+                              (`_new_ref_id`, place_* only — review tools reject it); local dedup stays on
+                              `client_id` in trading_guards. Trades ONLY the Agentic
                               account. _call_tool delegates to mcp_auth (lazy import); _TOOL_* constants
                               are the verified live tool names (use them — don't hardcode tool strings).
                               USE_MCP=False → never touched.
