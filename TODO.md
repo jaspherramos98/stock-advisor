@@ -2,6 +2,20 @@
 
 ## Done
 
+### 41. Refactor step C — split dashboard/app.py into per-tab modules ✅
+`dashboard/app.py` 2,739 → ~900 lines. New `dashboard/common.py` (all cached readers + shared render/pure
+helpers) and `dashboard/tabs/{recommendations,portfolio,positions,watchlist,history,agent}.py`, each a
+`render()`; app.py wires them into `st.tabs`. Also dropped the dead `if True:` wrapper and 20 unused imports.
+- Done as a scripted mechanical move (verbatim code; re-indent never touches multi-line string interiors)
+  after an AST coupling scan: no cross-tab variable leaks, only Recommendations needs script state
+  (`allocations, budget, prices, recs` → render args). Removed a redundant function-local
+  `import pandas as pd` (Portfolio) that would have made `pd` function-local → UnboundLocalError risk.
+- Verified: 0 undefined names / 0 unused imports (stdlib `symtable` check on all 8 files); 86 tests;
+  headless before/after widget fingerprint IDENTICAL for all 6 tabs + sidebar, 0 exceptions — including
+  seeded runs (mock recs → Recommendations 66 widgets; synthetic invested positions → Portfolio chart path +
+  My Positions 45 widgets; real positions.json untouched).
+- Perf side effect: click 0.52s → **0.25s** (cache decorators now applied once at import, not every rerun).
+
 ### 40. Refactor step B — dashboard click lag 4.7s → 0.5s ✅
 Measured with the new `scripts/bench_dashboard.py` (headless AppTest; warm rerun = click cost).
 **Before:** click median 4.73s, cold 17.6s. **After:** click median 0.52s (−89%), cold ~15.8–17.6s, 0 exceptions.
@@ -758,9 +772,9 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### Refactor plan C–E — structure + cold load (A #39, B #40 done; click now 0.52s)
-NOTE after B: click is already 0.52s, so **D (active-tab rendering) is now low value** (est. 0.5s → ~0.2s)
-— do it only if it falls out of C cheaply. **C** (maintainability) and **E** (cold load 17.6s) remain.
+### Refactor plan D–E — (A #39, B #40, C #41 done; click now 0.25s, cold ~14s)
+NOTE after C: click is 0.25s, so **D (active-tab rendering) has little left to win** — the user chose to
+do it anyway in order; keep it minimal. **E** (cold load ~14s, agent cycle) is the remaining felt win.
 Original plan below for reference:
 Measured baseline (headless AppTest profile, 2026-09-26): **~4s per click/tab switch**, 17.7s cold load.
 Warm-rerun cost: ~1.3s MCP buying power (cache bug below), ~1.1s uncached `fetch_prices`, ~0.85s uncached
