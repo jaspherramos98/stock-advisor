@@ -2,6 +2,18 @@
 
 ## Done
 
+### 47. Order shape validation + per-placement ref_id (S1 bugs 2 + 3, 2026-09-27) ✅
+**Bug 2:** `_order_args` could send both `dollar_amount` and `quantity` (broker wants exactly one) and silently
+turned an unknown order_type into `market`. New pure `robinhood_mcp._order_shape_error(intent)` enforces the S0
+rules — exactly one of qty/$, $ ⇒ market and ≥ `MIN_DOLLAR_ORDER` ($1), fractional ⇒ market, limit/stop need
+their price, known order_type — and `place_order` rejects on it BEFORE the DRY_RUN branch (previews catch bad
+shapes too). `_order_args` now maps a valid intent 1:1; quantities formatted ≤6 dp with no float noise.
+**Bug 3:** `ref_id` was the deterministic `client_id` (server dedups by ref_id → a re-placed stop on a later day
+could be swallowed) and option orders sent none. `_new_ref_id()` = fresh UUID per placement, added only to the
+`place_*` call (review schemas reject it); returned as `res["ref_id"]` + printed for tracing. Safe because
+placement is never auto-retried. Local dedup unchanged (`client_id` in trading_guards). Verified the new args
+live against `review_equity_order` (clean). +4 tests (101). Files: ingestion/robinhood_mcp.py, tests.
+
 ### 46. Option review alerts now block entries (S1 bug 1, 2026-09-27) ✅
 `place_option_order` read `order_checks` at the top level, but the review payload nests it under `data` (verified
 live), so every broker alert (insufficient BP, PDT, halt…) logged as "none" and nothing was ever blocked. New
@@ -851,13 +863,12 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
     Review lists PDT among its pre-trade alerts — block on it as a backstop, don't rely on it.
   - **Existing bugs found (fix in S1):** (1) ✅ FIXED (#46) `place_option_order` read `preview.get("order_checks")`
     but the payload is `{"data": {"order_checks": …}}` → option review alerts ALWAYS logged "none", never blocked.
-    (2) `_order_args` can send BOTH `dollar_amount` and `quantity` (tool requires exactly one). (3) `ref_id` is
-    `client_id` (e.g. `stop-F-11.5`, deterministic) but the server dedups by it as an idempotency UUID — the same
-    stop on a later day could be swallowed; use a fresh UUID per logical order, reused only on transport retry.
+    (2) ✅ FIXED (#47) `_order_args` could send BOTH `dollar_amount` and `quantity`. (3) ✅ FIXED (#47) `ref_id` was
+    `client_id` (deterministic, e.g. `stop-F-11.5`) and options sent none — now a fresh UUID per placement.
 - **S1 foundations:** review-first equity `place_order` that BLOCKS on `order_checks` alerts (reuse
-  `_order_alert`; option side done in #46); UUID `ref_id` for OPTION orders too (`_option_args` sends none today,
-  though place_option_order accepts it); local order-shape validation (exactly one of qty/dollars; fractional ⇒ market + regular_hours; dollars ≥
-  $1); UUID `ref_id`; pure `equity_exit_decision()` (rec's target/stop from
+  `_order_alert`; option side done in #46); ~~order-shape validation + UUID ref_id~~ (done #47); NOTE
+  `trading_guards.check_order` requires `dollars` on every BUY, so a whole-share limit buy is guard-rejected today
+  → extend it to accept `quantity × limit_price` before S2; pure `equity_exit_decision()` (rec's target/stop from
   exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
   duplicate); shared day-trade counter guard (options + stocks; PDT applies per S0). Unit tests.
 - **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on

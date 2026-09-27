@@ -999,11 +999,82 @@ def test_account_reads_dispatch(monkeypatch):
 def test_mcp_order_args_native_stop():
     # OrderIntent 'stop' maps to the MCP's native 'stop_market' with a string stop_price.
     from ingestion.robinhood_mcp import _order_args
-    intent = OrderIntent(ticker="ABC", side="sell", quantity=1.5, order_type="stop",
+    intent = OrderIntent(ticker="ABC", side="sell", quantity=2, order_type="stop",
                          stop_price=97.5, client_id="x1")
     args = _order_args(intent, "AGENTIC123")
     assert args["type"] == "stop_market" and args["stop_price"] == "97.50"
-    assert args["account_number"] == "AGENTIC123" and args["ref_id"] == "x1"
+    assert args["account_number"] == "AGENTIC123" and args["quantity"] == "2"
+    assert "ref_id" not in args and "dollar_amount" not in args   # ref_id is place-only; one of qty/$
+
+
+def test_order_args_sends_exactly_one_of_qty_or_dollars():
+    from ingestion.robinhood_mcp import _order_args
+    buy = _order_args(OrderIntent(ticker="F", side="buy", dollars=5.0), "A")
+    assert buy["dollar_amount"] == "5.00" and "quantity" not in buy and buy["type"] == "market"
+    sell = _order_args(OrderIntent(ticker="F", side="sell", quantity=0.1 + 0.2), "A")
+    assert sell["quantity"] == "0.3" and "dollar_amount" not in sell   # no float noise
+
+
+def test_order_shape_error():
+    from ingestion.robinhood_mcp import _order_shape_error as err
+    ok = [
+        OrderIntent(ticker="F", side="buy", dollars=5.0),                                    # $ market
+        OrderIntent(ticker="F", side="sell", quantity=0.25),                                 # frac market
+        OrderIntent(ticker="F", side="buy", quantity=2, order_type="limit", limit_price=12.7),
+        OrderIntent(ticker="F", side="sell", quantity=3, order_type="stop", stop_price=11.0),
+    ]
+    for i in ok:
+        assert err(i) is None, i
+    assert "exactly one" in err(OrderIntent(ticker="F", side="buy", dollars=5.0, quantity=1))
+    assert "exactly one" in err(OrderIntent(ticker="F", side="buy"))
+    assert "market" in err(OrderIntent(ticker="F", side="buy", dollars=5.0, order_type="limit", limit_price=1))
+    assert "minimum" in err(OrderIntent(ticker="F", side="buy", dollars=0.5))
+    assert "fractional" in err(OrderIntent(ticker="F", side="sell", quantity=0.5, order_type="stop", stop_price=1))
+    assert "fractional" in err(OrderIntent(ticker="F", side="buy", quantity=1.5, order_type="limit", limit_price=1))
+    assert "positive" in err(OrderIntent(ticker="F", side="sell", quantity=0))
+    assert "limit_price" in err(OrderIntent(ticker="F", side="buy", quantity=1, order_type="limit"))
+    assert "stop_price" in err(OrderIntent(ticker="F", side="sell", quantity=1, order_type="stop"))
+    assert "unknown" in err(OrderIntent(ticker="F", side="buy", dollars=5.0, order_type="bogus"))
+
+
+def test_place_order_rejects_bad_shape_even_in_dry_run(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "DRY_RUN", True, raising=False)
+    st = GuardState(start_equity=1000.0)
+    res = mcp.place_order(OrderIntent(ticker="F", side="buy", dollars=0.5, client_id="s1"), st, buying_power=500.0)
+    assert res["status"] == "rejected" and "minimum" in res["reason"] and st.orders_today == 0
+
+
+def test_live_placements_send_fresh_uuid_ref_id(monkeypatch):
+    # Server dedups by ref_id → each placement gets its own UUID (never the reusable client_id),
+    # and it goes ONLY to place_* (the review tools' schemas have no ref_id).
+    import uuid
+    import config
+    from ingestion import robinhood_mcp as mcp
+    from trading_guards import OptionOrderIntent
+    monkeypatch.setattr(config, "DRY_RUN", False, raising=False)
+    calls = []
+    def fake(name, args=None):
+        calls.append((name, dict(args or {})))
+        return {"data": {"order_checks": {}}}
+    monkeypatch.setattr(mcp, "_call_tool", fake)
+
+    st = GuardState(start_equity=1000.0)
+    for cid in ("same-a", "same-b"):   # distinct client_ids pass the local dup guard
+        mcp.place_order(OrderIntent(ticker="F", side="sell", quantity=1, order_type="stop",
+                                    stop_price=11.0, client_id=cid), st, buying_power=500.0,
+                        account_number="AGENTIC")
+    opt = OptionOrderIntent(underlying="F", option_id="o1", right="call", side="buy",
+                            position_effect="open", quantity=1, price=0.10, client_id="o-1")
+    mcp.place_option_order(opt, st, buying_power=500.0, account_number="AGENTIC")
+
+    placed = [a for n, a in calls if n.startswith("place_")]
+    reviews = [a for n, a in calls if n.startswith("review_")]
+    refs = [a["ref_id"] for a in placed]
+    assert len(placed) == 3 and len(set(refs)) == 3
+    assert all(str(uuid.UUID(r)) == r for r in refs)                 # real UUIDs, not client_ids
+    assert reviews and all("ref_id" not in a for a in reviews)
 
 
 def test_delete_position(monkeypatch):
