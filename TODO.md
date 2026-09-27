@@ -2,6 +2,19 @@
 
 ## Done
 
+### 40. Refactor step B — dashboard click lag 4.7s → 0.5s ✅
+Measured with the new `scripts/bench_dashboard.py` (headless AppTest; warm rerun = click cost).
+**Before:** click median 4.73s, cold 17.6s. **After:** click median 0.52s (−89%), cold ~15.8–17.6s, 0 exceptions.
+- **Cache bug:** `_BP_CACHE` was a module-level dict in `app.py`; Streamlit re-executes the script every
+  click, so it was re-created and never hit (~1.3s/click). Now `_cached_buying_power` (`st.cache_data`
+  ttl 60, process-wide so the chat-proxy thread shares it); Refresh button calls `.clear()`.
+- **Uncached reads on every click → cached:** `_cached_prices` (ttl 30, sorted-tuple key) now serves the
+  Portfolio, My Positions, Watch List (open positions + pins) and chat context — equal ticker sets share one
+  fetch; `_cached_history` (Sheets, ttl 600, cleared after a successful export); `_cached_spy_benchmark`
+  (yfinance SPY, ttl 900). Removed the now-dead `spy_benchmark` import. Run-pipeline + add-position quotes
+  stay uncached on purpose (on-demand actions).
+- Docs: CLAUDE.md Key Files (bench script) + Known Issues (never module-level caches in app.py).
+
 ### 39. Refactor step A — remove dead code + outdated files/docs ✅
 First step of the refactor/perf plan (see Backlog "Refactor plan B–E"). Evidence-based: import-graph +
 unreferenced-symbol scan, then a headless AppTest load.
@@ -745,7 +758,10 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### Refactor plan B–E — dashboard lag + structure (A done, #39)
+### Refactor plan C–E — structure + cold load (A #39, B #40 done; click now 0.52s)
+NOTE after B: click is already 0.52s, so **D (active-tab rendering) is now low value** (est. 0.5s → ~0.2s)
+— do it only if it falls out of C cheaply. **C** (maintainability) and **E** (cold load 17.6s) remain.
+Original plan below for reference:
 Measured baseline (headless AppTest profile, 2026-09-26): **~4s per click/tab switch**, 17.7s cold load.
 Warm-rerun cost: ~1.3s MCP buying power (cache bug below), ~1.1s uncached `fetch_prices`, ~0.85s uncached
 Sheets `read_history`, and each MCP call opens a fresh OAuth+HTTP session (~1.2s). `st.tabs` renders all

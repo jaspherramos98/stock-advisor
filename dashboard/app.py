@@ -60,8 +60,9 @@ from market_hours import market_session, market_status_line
 
 
 # Live buying power is read on every chat open AND for the header badge; cache it for a
-# short TTL so reopening the chat / reruns don't re-hit Robinhood each time.
-_BP_CACHE = {"value": None, "ts": 0.0}
+# short TTL so reopening the chat / reruns don't re-hit Robinhood each time. Must be
+# st.cache_data (process-wide), NOT a module-level dict: Streamlit re-executes this script on
+# every click, which re-created the dict and silently defeated the cache (~1.3s per click).
 _BP_TTL_SECONDS = 60
 
 # Chat token controls live in chat_budget so they can be unit-tested without
@@ -95,22 +96,47 @@ def _log_chat_usage(usage, sent_messages):
         pass
 
 
+@st.cache_data(ttl=_BP_TTL_SECONDS, show_spinner=False)
+def _cached_buying_power():
+    try:
+        from ingestion.account_reads import buying_power, is_available
+        return buying_power() if is_available() else None
+    except Exception:
+        return None
+
+
 def _live_buying_power(force: bool = False):
     """
     Returns live Robinhood buying power (float) or None, cached for _BP_TTL_SECONDS.
-    `force=True` bypasses the cache (used by the sidebar 'Sync' button).
+    `force=True` bypasses the cache (used by the sidebar 'Refresh buying power' button).
+    Safe to call from the chat-proxy thread (st.cache_data is process-wide).
     """
-    import time as _t
-    now = _t.monotonic()
-    if not force and _BP_CACHE["value"] is not None and (now - _BP_CACHE["ts"]) < _BP_TTL_SECONDS:
-        return _BP_CACHE["value"]
-    try:
-        from ingestion.account_reads import buying_power, is_available
-        bp = buying_power() if is_available() else None
-    except Exception:
-        bp = None
-    _BP_CACHE["value"], _BP_CACHE["ts"] = bp, now
-    return bp
+    if force:
+        _cached_buying_power.clear()
+    return _cached_buying_power()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_prices(tickers: tuple) -> dict:
+    """Live quotes cached 30s. Every click reruns the whole script and both the Portfolio and
+    My Positions tabs quote the same holdings, so uncached this re-hit the broker on every click.
+    Pass a sorted tuple so equal ticker sets share one cache entry."""
+    return fetch_prices(list(tickers))
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_spy_benchmark(closed_positions: list):
+    """SPY opportunity-cost line for the scorecard — a yfinance SPY download, so cache it (the
+    closed-trade list only changes when a position is closed/removed, which changes the key)."""
+    from analysis.scorecard import spy_benchmark
+    return spy_benchmark(closed_positions)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_history():
+    """Google Sheets export history, cached 10 min (it only changes on export, which clears it)."""
+    from storage.sheets import read_history
+    return read_history()
 
 
 def _effective_budget() -> float:
@@ -240,11 +266,10 @@ def _build_argus_context() -> str:
     # --- Open positions ---
     try:
         from storage.positions import get_open_positions
-        from ingestion.prices import fetch_prices as _fp
         positions = get_open_positions()
         if positions:
             tickers    = [p["ticker"] for p in positions]
-            live_prices = _fp(tickers)
+            live_prices = _cached_prices(tuple(sorted(set(tickers))))
             lines.append("\nOPEN POSITIONS:")
             for p in positions:
                 ticker     = p["ticker"]
@@ -901,6 +926,7 @@ if True:
                     with st.spinner("Exporting..."):
                         success = export_to_sheets(allocations, budget)
                     if success:
+                        _cached_history.clear()  # new rows → History tab must re-read
                         sheet_id  = os.getenv("GOOGLE_SHEET_ID", "")
                         sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}"
                         st.success(f"Exported! [Open sheet]({sheet_url})")
@@ -1126,7 +1152,7 @@ if True:
             # Fetch live prices for all invested positions
             inv_tickers = [p["ticker"] for p in invested_positions]
             with st.spinner("Fetching live prices..."):
-                inv_prices = fetch_prices(inv_tickers)
+                inv_prices = _cached_prices(tuple(sorted(set(inv_tickers))))
 
             # Calculate portfolio summary
             total_invested    = sum(p.get("amount_invested", 0) for p in invested_positions)
@@ -1349,7 +1375,7 @@ if True:
         else:
             pos_tickers = [p["ticker"] for p in all_positions]
             with st.spinner("Fetching live prices..."):
-                live_prices = fetch_prices(pos_tickers)
+                live_prices = _cached_prices(tuple(sorted(set(pos_tickers))))
 
             col1, col2 = st.columns(2)
             col1.metric("Open positions", len(all_positions))
@@ -1560,7 +1586,7 @@ if True:
             st.subheader("Closed positions")
 
             # ── Scorecard: the honest read on whether Argus is actually earning ──
-            from analysis.scorecard import compute_scorecard, spy_benchmark
+            from analysis.scorecard import compute_scorecard
             sc = compute_scorecard(closed_positions)
 
             if sc.get("trades"):
@@ -1609,7 +1635,7 @@ if True:
                     )
 
                 # SPY opportunity cost — did active trading beat just holding the index?
-                bench = spy_benchmark(closed_positions)
+                bench = _cached_spy_benchmark(closed_positions)
                 if bench:
                     edge = bench["edge"]
                     verdict = "beat" if edge >= 0 else "LAGGED"
@@ -1719,8 +1745,7 @@ if True:
         else:
             _pos_px = {}
             try:
-                from ingestion.prices import fetch_prices as _fp3
-                _pos_px = _fp3([p["ticker"] for p in _open_pos]) or {}
+                _pos_px = _cached_prices(tuple(sorted({p["ticker"] for p in _open_pos}))) or {}
             except Exception:
                 pass
             for p in _open_pos:
@@ -1775,8 +1800,7 @@ if True:
                     st.rerun()
             _live = {}
             try:
-                from ingestion.prices import fetch_prices as _fp2
-                _live = _fp2([p["ticker"] for p in _pinned]) or {}
+                _live = _cached_prices(tuple(sorted({p["ticker"] for p in _pinned}))) or {}
             except Exception:
                 pass
 
@@ -1923,10 +1947,8 @@ if True:
         st.subheader("Historical performance")
         st.caption("Based on your exported runs in Google Sheets.")
 
-        from storage.sheets import read_history
-
         with st.spinner("Loading history from Google Sheets..."):
-            history = read_history()
+            history = _cached_history()
 
         if not history:
             st.info(
