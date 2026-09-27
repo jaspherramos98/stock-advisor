@@ -206,6 +206,9 @@ market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: 
                               run pipeline (fresh signals) → arm the agent (echo armed > agent_live.arm).
                               run_market_open_silent.vbs runs it hidden; Windows task "Argus Market Open"
                               (daily 06:30) calls it. Deleting the task = manual mornings.
+scripts/bench_dashboard.py    Click-latency benchmark — runs dashboard/app.py headless (Streamlit AppTest):
+                              cold load + N warm reruns (a warm rerun = what a click costs) + exceptions.
+                              Live data (needs network + MCP token), so NOT in CI. Use for before/after.
 scripts/scan_affordable.py    Read-only screener — which tickers have a ~30-DTE OTM option within the
                               agentic buying power (+ = affordable). Argv or auto (recs+chat+cheap preset).
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
@@ -655,7 +658,13 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   `/ENABLE`. Recovery = disable task + stop Argus + delete pickle + real quiet (hours) + ONE manual
   `python ingestion/robinhood.py` + approve push.
 - Flask proxy must be on port 8502; guard against multiple threads with `st.session_state.proxy_started`
-- Streamlit rerenders entire script on every interaction — all expensive operations should be cached
+- Streamlit rerenders entire script on every interaction — all expensive operations should be cached.
+  **Cache with `st.cache_data`, never a module-level dict in `app.py`**: the script re-executes every
+  click, so `_X_CACHE = {...}` is re-created and silently never hits (this was ~1.3s/click on buying
+  power). Dashboard network reads now go through `_cached_buying_power` (60s), `_cached_prices`
+  (30s, pass a sorted tuple so equal ticker sets share an entry — used by Portfolio, My Positions, Watch
+  List, and chat context), `_cached_spy_benchmark` (15m) and `_cached_history` (10m, cleared on
+  export). Measure with `scripts/bench_dashboard.py` — click went 4.7s → 0.5s (2026-09-26).
 - Chatbot DOM injection uses `(function() { if already injected, return; })()` guard to prevent duplicates
 - Pipeline cache date-checks against today — stale cache from yesterday is ignored, backup cache used if main fails mid-run
 - **Console encoding (caused "0 recommendations"):** pipeline `print()`s contain non-ASCII
