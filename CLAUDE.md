@@ -620,7 +620,10 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
      expander with a clear button.
    - Then the original Finnhub ticker watchlist editor per asset type.
    Owned tickers are excluded from ENTRY alerts by design (you're already in).
-5. **History** — Google Sheets export history with charts
+5. **History** — Google Sheets export history with charts. The cleaned frame, metrics and figures are
+   cached (`_history_views` / `_allocation_fig`, `st.cache_resource` keyed on the rows — a new export
+   changes the key, no manual clear). Plotly Express costs ~0.1s/figure, so uncached this tab alone
+   was ~0.2–0.4s of EVERY click (all tabs rerun on each interaction).
 6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
    **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
    equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset buttons.
