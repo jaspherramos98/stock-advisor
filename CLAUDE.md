@@ -63,7 +63,18 @@ part of "done," not an afterthought.
 
 ## Key Files
 ```
-dashboard/app.py              Main Streamlit app + Flask proxy + chatbot
+dashboard/app.py              Main Streamlit app (~900 lines): page setup, header badge, sidebar, pipeline
+                              run, Flask chat proxy + chatbot injection, then `st.tabs` → each tab's
+                              `<name>_tab.render(...)`. Only the Recommendations tab takes script state
+                              (`allocations, budget, prices, recs`); the rest are self-contained.
+dashboard/common.py           Shared dashboard helpers: every cached network reader (`_cached_buying_power`/
+                              `_live_buying_power`, `_cached_prices`, `_cached_history`,
+                              `_cached_spy_benchmark`, `_c_agentic_*`/`_c_option_*`) + `_stop_loss_price`,
+                              `_suggested_exit`, `_render_alloc_table`. Imported once, so cache decorators
+                              aren't re-applied every rerun.
+dashboard/tabs/               One module per tab, each with `render()`: recommendations.py, portfolio.py,
+                              positions.py, watchlist.py, history.py, agent.py. Tab code imports its own
+                              deps + helpers from dashboard.common — never from app.py (circular).
 analysis/claude_analyst.py    Claude analysis prompt and JSON schema
 analysis/scorecard.py         Closed-trade performance scorecard — payoff/profit-factor/expectancy,
                               concentration, let-run-vs-closed-early discipline leak, SPY benchmark
@@ -560,6 +571,8 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   run_checks.bat CRLF.
 
 ## Dashboard Tabs
+Each tab lives in `dashboard/tabs/<name>.py` (`render()`); `app.py` only wires them into `st.tabs`.
+Widget keys/labels are unchanged from the pre-split monolith, so saved session state carries over.
 1. **Today's Recommendations** — single allocation table (`_render_alloc_table`) with HR gold
    highlighting, stock detail expanders,
    add to positions. **Table layout (R14):** 12 columns sized in explicit pixels so the whole table
@@ -659,12 +672,13 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   `python ingestion/robinhood.py` + approve push.
 - Flask proxy must be on port 8502; guard against multiple threads with `st.session_state.proxy_started`
 - Streamlit rerenders entire script on every interaction — all expensive operations should be cached.
-  **Cache with `st.cache_data`, never a module-level dict in `app.py`**: the script re-executes every
+  **Cache with `st.cache_data` in `dashboard/common.py`, never a module-level dict in `app.py`**: the script re-executes every
   click, so `_X_CACHE = {...}` is re-created and silently never hits (this was ~1.3s/click on buying
   power). Dashboard network reads now go through `_cached_buying_power` (60s), `_cached_prices`
   (30s, pass a sorted tuple so equal ticker sets share an entry — used by Portfolio, My Positions, Watch
   List, and chat context), `_cached_spy_benchmark` (15m) and `_cached_history` (10m, cleared on
-  export). Measure with `scripts/bench_dashboard.py` — click went 4.7s → 0.5s (2026-09-26).
+  export). Measure with `scripts/bench_dashboard.py` — click went 4.7s → 0.5s (caches, 2026-09-26)
+  → 0.25s (tab split: decorators no longer re-applied every rerun, 2026-09-27).
 - Chatbot DOM injection uses `(function() { if already injected, return; })()` guard to prevent duplicates
 - Pipeline cache date-checks against today — stale cache from yesterday is ignored, backup cache used if main fails mid-run
 - **Console encoding (caused "0 recommendations"):** pipeline `print()`s contain non-ASCII
