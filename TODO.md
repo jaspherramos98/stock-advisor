@@ -2,6 +2,12 @@
 
 ## Done
 
+### 44. Docs refresh (pre-compact, 2026-09-27) ✅
+README: 6 tabs + Agent tab, autonomous-agent section, buy-trigger alerts, Robinhood official MCP as the
+brokerage (robin_stocks = fallback), project tree rewritten for dashboard/tabs + common, MCP/agent modules,
+scripts, tests. CLAUDE.md: scheduled tasks marked deleted-by-user with the re-register command; equity
+trading points to the approved plan; buying-power cache location (dashboard/common.py).
+
 ### 43. History tab — cache charts (click 0.45s → 0.25s) ✅
 Warm-rerun profile showed the History tab was the largest per-click cost: `_cached_history` cached the
 Sheets read, but every rerun rebuilt the DataFrame and 4 Plotly Express figures (~0.1s fixed overhead each —
