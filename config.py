@@ -24,12 +24,16 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 #   DRY_RUN  — when True, order placement LOGS the intended order and places NOTHING.
 #              This is the safety default and must stay True until a clean multi-day dry
 #              run is diffed against manual orders. Never default this to False.
+#   MCP_PERSISTENT_SESSION — when True, MCP tool calls share ONE open connection per process
+#              (ingestion/mcp_session.py) instead of a ~1.2s handshake per call. Reads retry once
+#              on a broken connection; order placement never retries. False = per-call sessions.
 #
-# USE_MCP=True (this branch): the dashboard/pipeline read account data via the official MCP
-# (OAuth refresh tokens → no 429), defaulting to the MAIN account. Requires `mcp[cli]` in the
-# venv + a stored session from scripts/mcp_login.py; if absent, reads degrade to unavailable
-# ($0) and the app still runs. To return to the unofficial robin_stocks path, set False (or
-# `git checkout main`). ORDERS remain gated by DRY_RUN and only ever hit the AGENTIC account.
+# USE_MCP=True: the dashboard/pipeline read account data via the official MCP (OAuth refresh
+# tokens → no 429), defaulting to the MAIN account. Requires `mcp[cli]` in the venv + a stored
+# session from scripts/mcp_login.py; if absent, reads degrade to unavailable ($0) and the app
+# still runs. To return to the unofficial robin_stocks path, set False. ORDERS remain gated by
+# DRY_RUN and only ever hit the AGENTIC account.
 USE_MCP = True
 DRY_RUN = True
+MCP_PERSISTENT_SESSION = True
 ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading"
