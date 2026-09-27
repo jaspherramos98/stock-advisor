@@ -581,7 +581,10 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
   Runs as the logged-on user, so the PC must be awake.
 - **`.bat` files must be CRLF.** Batch files saved with Unix LF endings make cmd.exe mis-tokenize
   lines (symptom: `'M' is not recognized...` from a split `REM`). Keep argus.bat / argus_stop.bat /
-  run_checks.bat CRLF.
+  run_checks.bat CRLF — now enforced by `.gitattributes` (`*.bat text eol=crlf`), which also normalizes
+  every other text file to LF in the repo (`* text=auto`). Note: under `text=auto` git will NOT fix a
+  file already committed with CRLF — convert its bytes to LF and re-add (happened to CLAUDE.md once when
+  a script wrote it with Windows line endings).
 
 ## Dashboard Tabs
 Each tab lives in `dashboard/tabs/<name>.py` (`render()`); `app.py` only wires them into `st.tabs`.
