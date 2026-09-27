@@ -1,0 +1,7 @@
+# Normalize text files to LF in the repo (the working tree follows core.autocrlf).
+# Guards against a CRLF blob sneaking in from a tool that writes Windows line endings.
+* text=auto
+# cmd.exe mis-tokenizes LF batch files, so .bat must always be CRLF on disk.
+*.bat text eol=crlf
+*.png binary
+*.zip binary
