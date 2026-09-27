@@ -2,6 +2,18 @@
 
 ## Done
 
+### 43. History tab — cache charts (click 0.45s → 0.25s) ✅
+Warm-rerun profile showed the History tab was the largest per-click cost: `_cached_history` cached the
+Sheets read, but every rerun rebuilt the DataFrame and 4 Plotly Express figures (~0.1s fixed overhead each —
+NOT row-driven: only 27 rows; my earlier "grows with exports" note was wrong).
+- `dashboard/tabs/history.py`: `_history_views(history)` (frame + metrics + 3 static figures) and
+  `_allocation_fig(history, selected)` cached with `st.cache_resource` keyed on the rows (a new export changes
+  the key → auto-refresh; no clear-on-export coupling). Figures are never mutated after build, so sharing is safe.
+  Folded the 4× duplicated chart styling into `_style()`.
+- Verified: old vs new tab code run on the real 27 rows with a recording `st` → **all 18 outputs byte-identical**
+  (4/4 figure JSON, 4/4 metrics, filter widget, raw table); app fingerprint identical; 93 tests; 0 lint issues.
+- Click median 0.45s → **0.25s** (`scripts/bench_dashboard.py`).
+
 ### 42. Refactor step E — persistent MCP session (one connection per process) ✅
 Measured: every MCP tool call opened a fresh OAuth+HTTP+initialize session (~1.2–1.5s). A dashboard cold
 load made 7 calls (10.7s) and an agent cycle 7 (8.8s of 11.4s).
@@ -790,9 +802,6 @@ Lowest core-fit; do last or not at all.
 ## Backlog
 
 ### Perf follow-ups (refactor plan A–E finished: #39–#42; D skipped — st.tabs switching is already client-side)
-- **History tab = ~0.6s of every click** (warm-rerun profile, 2026-09-27): `_cached_history` caches the Sheets
-  read, but the tab rebuilds DataFrames + Plotly figures from ALL exported rows each rerun, so click cost
-  grows with export count (click 0.25s → 0.45s in a day with identical code). Cache the derived frames/figures.
 - Redundant MCP calls per agent cycle: `get_option_positions` ×2 (exits + `_held_underlyings`) and
   `get_portfolio` ×2 — now ~0.3s each on the shared session; dedup within a cycle is optional.
 - Not worth it (measured): `_compute_technicals` (0.9ms warm; 469ms was the one-time pandas import); lazy
