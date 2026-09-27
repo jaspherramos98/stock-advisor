@@ -801,6 +801,33 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
+### Stock trading for the agent — PLAN (approved 2026-09-27, not built)
+Goal: the autonomous agent also trades SHARES on the agentic account, alongside options.
+**Decisions (user):** route by conviction — highly_recommended or conviction ≥75 → options (aggressive leg),
+other pipeline buys → stocks (core); **shared buying-power pool**, entries processed **best idea first across
+both legs** each cycle; stock sizing = Argus pyramid (R8) + 40% single-name cap via `trading_guards.check_order`;
+**no paper stage** — DRY_RUN then one tiny live trade (S6) as a hard gate before scheduling.
+**Facts that shape it:** account `limited_margin` + Robinhood has no retail short selling → stocks LONG-ONLY
+(bearish stays puts). BP ~$42 → mostly FRACTIONAL (`dollar_amount` market orders); Robinhood allows stop/limit
+only on whole shares → fractional exits are poll-based (PC must be on), whole shares also get a resting GTC stop
+(`alerts/agentic_stops.py`, kept for this). `robinhood_mcp.place_order` (equity) is NOT review-first yet.
+Pipeline-cache allocations are sized on the MAIN account's BP → recompute the pyramid on AGENTIC BP.
+Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24/7 exits, not edge.
+- **S0 verify (no money):** PDT status of this account (applies to the OPTIONS agent today too — unguarded);
+  via `review_equity_order` (places nothing): fractional stop rejected? stop + limit sell on same shares allowed?
+  `dollar_amount` behavior/min; regular vs extended hours for fractional.
+- **S1 foundations:** review-first equity `place_order`; pure `equity_exit_decision()` (rec's target/stop from
+  exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
+  duplicate); shared day-trade counter guard (options + stocks) if PDT applies. Unit tests.
+- **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on
+  agentic BP; fractional = dollar market order, whole share = limit; anti-churn (`_closed_underlyings`) and kill
+  switch / arm flag / credit halt shared with options.
+- **S3 exits:** every cycle poll exits for all stock positions; whole shares also hold a GTC stop (agentic_stops);
+  cancel the resting stop before a poll-based sell (open sell orders hold the shares).
+- **S4 dashboard:** Agent tab — stock positions, exit decision, Close-now, P&L.
+- **S5 tiny live (user runs it):** one ~$5 fractional buy → confirm fill → confirm the agent's exit sells it in
+  the app. Only then add the stock leg to the scheduled cycle.
+
 ### Perf follow-ups (refactor plan A–E finished: #39–#42; D skipped — st.tabs switching is already client-side)
 - Redundant MCP calls per agent cycle: `get_option_positions` ×2 (exits + `_held_underlyings`) and
   `get_portfolio` ×2 — now ~0.3s each on the shared session; dedup within a cycle is optional.
