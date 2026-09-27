@@ -179,10 +179,9 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
                 "stop_price": f"{intent.stop_price:.2f}",
                 "time_in_force": intent.time_in_force or "gtc",
             }))
-            checks = ((preview.get("data") or {}).get("order_checks")) if isinstance(preview, dict) else None
             if verbose:
                 print(f"[REVIEW] sell {intent.quantity} {intent.ticker} stop @ ${intent.stop_price} "
-                      f"— checks: {checks or 'none'}")
+                      f"— checks: {mcp._order_alert(preview) or 'none'}")
         except Exception as e:  # noqa: BLE001 — a failed preview must not place the order
             print(f"agentic_stops: review failed for {intent.ticker} — {e}; skipping")
             results.append({"ticker": intent.ticker, "status": "review_failed", "reason": str(e)})

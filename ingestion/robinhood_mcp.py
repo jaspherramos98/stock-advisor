@@ -357,14 +357,20 @@ def place_option_order(intent, state: GuardState, buying_power: float,
     tag = f"{intent.quantity} {intent.underlying} {intent.strike}{intent.right[0].upper()} @ {intent.price}"
 
     # Confirm-first: review before placing (both dry and live) to surface pre-trade alerts.
+    # A broker alert BLOCKS an opening order (don't add risk the broker is flagging: BP, PDT, halt).
+    # A closing order still proceeds with a warning: a missed exit is worse than the alert, and the
+    # broker hard-rejects a truly illegal order anyway.
     if review:
         try:
             preview = _call_tool(_TOOL_REVIEW_OPTION, args)
-            checks = preview.get("order_checks") if isinstance(preview, dict) else None
-            print(f"[OPTION REVIEW] {intent.side} {tag} — checks: {checks or 'none'}")
         except Exception as e:  # noqa: BLE001 — a failed review must not place the order
             print(f"[OPTION REVIEW FAILED] {intent.underlying} — {e}")
             return {"status": "review_failed", "reason": str(e), "intent": intent, "dry_run": config.DRY_RUN}
+        alert = _order_alert(preview)
+        print(f"[OPTION REVIEW] {intent.side} {tag} — checks: {alert or 'none'}")
+        if alert and intent.position_effect == "open":
+            return {"status": "rejected", "reason": f"broker pre-trade alert: {alert}",
+                    "intent": intent, "dry_run": config.DRY_RUN}
 
     if config.DRY_RUN:
         record_placed(intent, state)
@@ -376,6 +382,20 @@ def place_option_order(intent, state: GuardState, buying_power: float,
     record_placed(intent, state)
     print(f"[OPTION PLACED] {intent.side}/{intent.position_effect} {tag} :: {intent.reason}")
     return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "raw": result}
+
+
+def _order_alert(preview) -> str | None:
+    """The broker's pre-trade alert from a review_*_order payload, or None when clean.
+
+    Payload shape (verified live): {"data": {"order_checks": {} | {"alertType": "...", ...}}}.
+    Reading order_checks at the top level (the old bug) always saw nothing, so no alert ever blocked."""
+    data = _data(preview)
+    checks = data.get("order_checks") if isinstance(data, dict) else None
+    if not checks:
+        return None
+    if isinstance(checks, dict):
+        return checks.get("alertType") or str(checks)
+    return str(checks)
 
 
 def _option_args(intent, account_number: str) -> dict:

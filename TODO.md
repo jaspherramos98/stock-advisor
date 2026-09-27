@@ -2,6 +2,16 @@
 
 ## Done
 
+### 46. Option review alerts now block entries (S1 bug 1, 2026-09-27) ✅
+`place_option_order` read `order_checks` at the top level, but the review payload nests it under `data` (verified
+live), so every broker alert (insufficient BP, PDT, halt…) logged as "none" and nothing was ever blocked. New
+`robinhood_mcp._order_alert(preview)` reads `data.order_checks.alertType`. Policy: an alert BLOCKS an opening
+order (`status: "rejected"`, reason `broker pre-trade alert: <TYPE>` — existing callers already skip non-placed);
+a CLOSING order proceeds with the alert logged (a blocked exit could trap a loser; the broker hard-rejects truly
+illegal orders). `agentic_stops` reuses the helper. Verified live under DRY_RUN: 50× F call →
+`OPTION_NOT_ENOUGH_BP_FOR_PREMIUM` → rejected; 1× → clean. +4 tests (97). Files: ingestion/robinhood_mcp.py,
+alerts/agentic_stops.py, tests/test_deterministic.py.
+
 ### 45. Stock-trading S0 verification (read-only, 2026-09-27) ✅
 Probed tool schemas + `review_equity_order` on the agentic account (nothing placed). Findings (fractional/dollar
 rules, advisory review, PDT applies, 3 existing order-path bugs) recorded under Backlog "Stock trading for the
@@ -839,13 +849,14 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   - **PDT:** no API field (`get_accounts` has none; `limited_margin` counts as a margin account, equity $41.92
     < $25k) ⇒ treat PDT as APPLYING: ≤3 day trades per rolling 5 business days, shared by options + stocks.
     Review lists PDT among its pre-trade alerts — block on it as a backstop, don't rely on it.
-  - **Existing bugs found (fix in S1):** (1) `place_option_order` reads `preview.get("order_checks")` but the
-    payload is `{"data": {"order_checks": …}}` → option review alerts ALWAYS log as "none" and never block.
+  - **Existing bugs found (fix in S1):** (1) ✅ FIXED (#46) `place_option_order` read `preview.get("order_checks")`
+    but the payload is `{"data": {"order_checks": …}}` → option review alerts ALWAYS logged "none", never blocked.
     (2) `_order_args` can send BOTH `dollar_amount` and `quantity` (tool requires exactly one). (3) `ref_id` is
     `client_id` (e.g. `stop-F-11.5`, deterministic) but the server dedups by it as an idempotency UUID — the same
     stop on a later day could be swallowed; use a fresh UUID per logical order, reused only on transport retry.
-- **S1 foundations:** review-first equity `place_order` that BLOCKS on `order_checks` alerts (fix option review
-  too); local order-shape validation (exactly one of qty/dollars; fractional ⇒ market + regular_hours; dollars ≥
+- **S1 foundations:** review-first equity `place_order` that BLOCKS on `order_checks` alerts (reuse
+  `_order_alert`; option side done in #46); UUID `ref_id` for OPTION orders too (`_option_args` sends none today,
+  though place_option_order accepts it); local order-shape validation (exactly one of qty/dollars; fractional ⇒ market + regular_hours; dollars ≥
   $1); UUID `ref_id`; pure `equity_exit_decision()` (rec's target/stop from
   exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
   duplicate); shared day-trade counter guard (options + stocks; PDT applies per S0). Unit tests.
