@@ -881,6 +881,56 @@ def test_option_args_shape():
     assert args["quantity"] == "2" and args["price"] == "0.12" and args["direction"] == "debit"
 
 
+def test_order_alert_reads_nested_order_checks():
+    from ingestion.robinhood_mcp import _order_alert
+    # Real review payload shape: alert nested under data.order_checks; {} = clean.
+    assert _order_alert({"data": {"order_checks": {}}}) is None
+    assert _order_alert({"data": {"order_checks": {"alertType": "OPTION_NOT_ENOUGH_BP_FOR_PREMIUM"}}}) \
+        == "OPTION_NOT_ENOUGH_BP_FOR_PREMIUM"
+    assert _order_alert({"order_checks": {}, "data": {}}) is None
+    assert _order_alert(None) is None and _order_alert("text") is None
+
+
+def _review_returning(monkeypatch, alert_type):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "DRY_RUN", True, raising=False)
+    checks = {"alertType": alert_type} if alert_type else {}
+    monkeypatch.setattr(mcp, "_call_tool", lambda name, args=None: {"data": {"order_checks": checks}})
+    return mcp
+
+
+def test_option_review_alert_blocks_open(monkeypatch):
+    from trading_guards import OptionOrderIntent
+    mcp = _review_returning(monkeypatch, "OPTION_NOT_ENOUGH_BP_FOR_PREMIUM")
+    st = GuardState(start_equity=1000.0)
+    intent = OptionOrderIntent(underlying="F", option_id="o1", right="call", side="buy",
+                               position_effect="open", quantity=1, price=0.10, client_id="t-open")
+    res = mcp.place_option_order(intent, st, buying_power=500.0, account_number="AGENTIC")
+    assert res["status"] == "rejected" and "OPTION_NOT_ENOUGH_BP_FOR_PREMIUM" in res["reason"]
+    assert st.orders_today == 0                                    # blocked → not counted
+
+
+def test_option_review_alert_does_not_block_close(monkeypatch):
+    from trading_guards import OptionOrderIntent
+    mcp = _review_returning(monkeypatch, "SOME_ALERT")
+    st = GuardState(start_equity=1000.0)
+    intent = OptionOrderIntent(underlying="F", option_id="o1", right="call", side="sell",
+                               position_effect="close", quantity=1, price=0.10,
+                               direction="credit", client_id="t-close")
+    res = mcp.place_option_order(intent, st, buying_power=500.0, account_number="AGENTIC")
+    assert res["status"] == "dry_run"                              # exits still go out
+
+
+def test_option_review_clean_open_proceeds(monkeypatch):
+    from trading_guards import OptionOrderIntent
+    mcp = _review_returning(monkeypatch, None)
+    st = GuardState(start_equity=1000.0)
+    intent = OptionOrderIntent(underlying="F", option_id="o1", right="call", side="buy",
+                               position_effect="open", quantity=1, price=0.10, client_id="t-clean")
+    assert mcp.place_option_order(intent, st, buying_power=500.0, account_number="AGENTIC")["status"] == "dry_run"
+
+
 def test_plan_protective_stops():
     from alerts.agentic_stops import plan_protective_stops, _stop_price
     # stop price = current × (1 − pct/100)
