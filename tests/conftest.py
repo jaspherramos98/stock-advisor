@@ -17,6 +17,14 @@ def _isolated_pipeline_history(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_agent_books(tmp_path, monkeypatch):
+    """The agent's plan books (shares + crypto) — never the real files in tests."""
+    from storage import agent_stock_book
+    monkeypatch.setattr(agent_stock_book, "_FILE", str(tmp_path / "agent_stocks.json"))
+    monkeypatch.setattr(agent_stock_book, "_CRYPTO_FILE", str(tmp_path / "agent_crypto.json"))
+
+
+@pytest.fixture(autouse=True)
 def _no_live_briefing(monkeypatch):
     """The entry loop gathers a live per-candidate briefing (analysis/agent_context.gather: yfinance,
     Finnhub, the MCP). Tests must never hit the network — stub it; build()/render() are tested directly."""

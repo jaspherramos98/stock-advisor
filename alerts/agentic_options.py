@@ -232,9 +232,11 @@ def _try_option_entry(mcp, acct, sig: dict, regime: dict, avail: float, state,
 def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None,
                  held_options: set[str] | None = None) -> list[dict]:
     """Entries across both legs, best idea first, from ONE shared buying-power pool. Each signal is
-    routed (agentic_stocks.route) to options or shares; an options-routed buy with no affordable
+    routed (agentic_stocks.route) to options, shares or crypto; an options-routed buy with no affordable
     contract falls back to shares. `held_options` = underlyings already held as options (the cycle
-    passes the exit pass's read; None → read it here)."""
+    passes the exit pass's read; None → read it here). Crypto has its own cap + held set and never
+    uses the PDT budget (PDT doesn't apply to crypto)."""
+    from alerts import agentic_crypto as acr
     from alerts import agentic_stocks as stk
     from storage.agent_stock_book import invested
 
@@ -252,12 +254,16 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
     opts = _held_underlyings(mcp, acct) if held_options is None else held_options
     held = opts | stk.held_tickers(mcp, acct) | (exclude or set())
+    held_crypto = acr.held_tickers(mcp, acct) | (exclude or set())   # a coin and a stock can share a ticker
     # config.AGENT_STOCK_BUDGET_CAP limits the TOTAL entry cost the agent holds in shares. The
     # pyramid sizes on the smaller of buying power and the cap, so a $20 cap still spreads
     # across several names (40% single-name cap → ≥3 positions to deploy it all).
     cap = stk.budget_cap()
     stock_left = stk.stock_room(invested(), cap)
     stock_dollars = stk.size_buys(signals, min(buying_power, cap) if cap is not None else buying_power)
+    # Crypto: its own cap (config.AGENT_CRYPTO_BUDGET_CAP) out of the same buying-power pool.
+    crypto_left = stk.stock_room(invested(leg="crypto"), acr.budget_cap())
+    crypto_dollars = acr.size_buys(signals, buying_power)
     state = GuardState(start_equity=buying_power)
     avail = buying_power
     results: list[dict] = []
@@ -269,6 +275,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
         dlog.record("entry", sig.get("ticker"), action, reason, inputs={
             **dlog.signal_inputs(sig), "buying_power": round(avail, 2),
             "stock_room": None if stock_left == float("inf") else round(stock_left, 2),
+            "crypto_room": None if crypto_left == float("inf") else round(crypto_left, 2),
             "regime": regime.get("risk")}, **extra)
 
     def briefing(sig) -> dict | None:
@@ -284,7 +291,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     def shadow_judge(ctx, leg, ticker) -> dict | None:
         try:
             from analysis.agent_judge import judge_entry
-            verdict = judge_entry(ctx, leg, stock_dollars.get(ticker))
+            verdict = judge_entry(ctx, leg, (crypto_dollars if leg == "crypto" else stock_dollars).get(ticker))
             if verdict and verbose:
                 print(f"  judge {ticker}: {verdict['decision']} ×{verdict.get('size_multiplier')} — "
                       f"{verdict.get('thesis') or verdict.get('error', '')}")
@@ -293,33 +300,37 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             print(f"agentic_options: judge failed for {ticker} — {e}")
             return None
 
-    for i, sig in enumerate(signals):
+    for sig in signals:
         ticker = (sig.get("ticker") or "").upper()
         leg = stk.route(sig)
         if not ticker:
             continue
-        if ticker in held:
+        if ticker in (held_crypto if leg == "crypto" else held):
             log(sig, "skip", "already held (or closed this cycle)")
             continue
         if leg is None:
-            log(sig, "skip", "not tradeable by the agent (e.g. a crypto watch trigger)")
+            log(sig, "skip", "not tradeable by the agent (e.g. a crypto short or watch)")
             continue
-        # PDT: each open position reserves a same-day exit. Out of budget → stop opening (the
-        # remaining, lower-ranked signals would only be skipped one by one anyway).
-        if max_new is not None and max_new <= 0:
+        # PDT: each open position reserves a same-day exit. Out of budget → no more stock/option
+        # entries this cycle; crypto isn't subject to PDT, so crypto candidates still go through.
+        if leg != "crypto" and max_new is not None and max_new <= 0:
             if verbose:
-                print(f"  PDT day-trade budget exhausted — no more entries this cycle (next: {ticker})")
+                print(f"  PDT day-trade budget exhausted — skipping {ticker}")
             results.append({"ticker": ticker, "status": "skipped", "reason": "PDT day-trade budget exhausted"})
-            for rest in signals[i:]:
-                if (rest.get("ticker") or "").upper() not in held:
-                    log(rest, "skip", "PDT day-trade budget exhausted")
-            break
+            log(sig, "skip", "PDT day-trade budget exhausted")
+            continue
 
         ctx = briefing(sig)
         # J2 entry judge. SHADOW: the verdict is logged beside the rules' decision and changes
         # nothing below — the J4 review scores it before it's ever allowed to bind.
         verdict = shadow_judge(ctx, leg, ticker)
         row, spent, why = None, 0.0, []
+        if leg == "crypto":
+            row, spent = acr.enter(mcp, acct, sig, crypto_dollars.get(ticker, 0.0), avail, state,
+                                   verbose, room=crypto_left)
+            crypto_left -= spent
+            if row is None:
+                why.append("crypto: size below the $1 minimum or crypto cap full/off")
         if leg == "option":
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
             if row is None:
@@ -334,7 +345,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             log(sig, "skip", "; ".join(why) or "no leg produced an order", leg=leg, context=ctx, judge=verdict)
             continue
         results.append(row)
-        key = row.get("option_id") or f"eq:{ticker}"
+        key = row.get("option_id") or (acr.peak_key(ticker) if leg == "crypto" else f"eq:{ticker}")
         log(sig, row["status"] if row["status"] in ("placed", "dry_run") else "skip",
             row.get("reason") if row["status"] not in ("placed", "dry_run") else f"{row['leg']} entry",
             key=key, leg=row.get("leg"), order={k: row.get(k) for k in
@@ -343,8 +354,8 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             context=ctx, judge=verdict)
         if spent:
             avail -= spent   # reserve so later entries don't oversize
-            held.add(ticker)
-            if max_new is not None:
+            (held_crypto if leg == "crypto" else held).add(ticker)
+            if max_new is not None and leg != "crypto":
                 max_new -= 1
     return results
 
@@ -482,6 +493,11 @@ def run_options_agent(verbose: bool = True, entries: bool = True, broker=None) -
         exits += _stk.run_exits(mcp, acct, bp, verbose)
     except Exception as e:  # noqa: BLE001 — a stock-exit failure must not block options entries/exits
         print(f"agentic_options: stock exit pass failed — {e}")
+    try:
+        from alerts import agentic_crypto as _acr
+        exits += _acr.run_exits(mcp, acct, bp, verbose)
+    except Exception as e:  # noqa: BLE001 — same isolation for the crypto leg
+        print(f"agentic_options: crypto exit pass failed — {e}")
     if not entries:
         return {"entries": [], "exits": exits}
     if any(x.get("status") == "placed" for x in exits):

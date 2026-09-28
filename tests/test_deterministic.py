@@ -903,6 +903,50 @@ def test_paper_fill_price_crosses_the_spread():
     assert fill_price(None, "sell") is None
 
 
+def test_paper_crypto_leg_enters_past_pdt_and_exits(monkeypatch, tmp_path):
+    """Crypto buys route to the crypto leg: own cap, no PDT, plan in the crypto book, exit by the plan."""
+    import agent_mode
+    from alerts import agentic_options as ao, agentic_crypto as acr, agentic_stocks as stk, paper_broker
+    from ingestion import robinhood_mcp as live
+    from storage import agent_stock_book as book, decision_log as dl, paper_book as pb, peak_tracker
+    monkeypatch.setattr(agent_mode, "MODE_FILE", str(tmp_path / "mode.txt"))
+    monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))
+    monkeypatch.setattr(peak_tracker, "_FILE", str(tmp_path / "peaks.json"))
+    pb.reset(40.0)
+    price = {"v": 100.0}
+    monkeypatch.setattr(live, "is_available", lambda: True)
+    monkeypatch.setattr(live, "fetch_quotes", lambda t: {x: {"price": 50.0} for x in t})
+    monkeypatch.setattr(live, "fetch_crypto_quotes",
+                        lambda t: {x.upper(): {"price": price["v"], "bid": price["v"], "ask": price["v"]} for x in t})
+    monkeypatch.setattr(ao, "_market_open", lambda: True)
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral", "detail": {}})
+    monkeypatch.setattr(ao, "_signals", lambda: [
+        {"ticker": "STK", "direction": "buy", "conviction": 70, "risk_level": "medium"},
+        {"ticker": "BTC", "direction": "buy", "conviction": 60, "risk_level": "medium", "asset_type": "crypto",
+         "exit_condition": "target 8% gain, stop loss at 4%"}])
+    monkeypatch.setattr(paper_broker.PaperBroker, "day_trade_budget", lambda self, a, e: 0)   # PDT spent
+    monkeypatch.setattr(acr, "budget_cap", lambda: 10.0)
+
+    out = ao.run_paper_agent(verbose=False)
+    assert [(e["ticker"], e.get("leg"), e["status"]) for e in out["entries"]] == \
+        [("STK", None, "skipped"), ("BTC", "crypto", "placed")]                  # shares blocked by PDT, crypto isn't
+    btc = out["entries"][1]
+    assert btc["dollars"] <= 4.0                                                 # 40% single-name cap of the $10 crypto cap
+    assert "BTC" in pb.get_book()["crypto"] and pb.get_book()["shares"] == {}
+    rec = [r for r in dl.read() if r["ticker"] == "BTC"][-1]
+    assert rec["mode"] == "paper" and rec["key"] == "cr:BTC" and rec["leg"] == "crypto"
+    with agent_mode.paper_scope():
+        assert set(book.all_entries(leg="crypto")) == {"BTC"} and book.all_entries() == {}
+
+    price["v"] = 110.0                                                           # +10% → the 8% target fires
+    monkeypatch.setattr(ao, "_signals", lambda: [])
+    out = ao.run_paper_agent(verbose=False)
+    assert [(x["close"], x["leg"], x["status"]) for x in out["exits"]] == [("BTC", "crypto", "placed")]
+    assert pb.get_book()["crypto"] == {} and pb.get_book()["closed"][-1]["leg"] == "crypto"
+    with agent_mode.paper_scope():
+        assert book.all_entries(leg="crypto") == {}
+
+
 def test_paper_broker_guards_and_order_types(monkeypatch, tmp_path):
     from alerts.paper_broker import PaperBroker
     from ingestion import robinhood_mcp as live
@@ -1305,7 +1349,8 @@ def test_entries_stop_when_pdt_budget_exhausted(monkeypatch):
     monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: set())
     monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral"})
     out = ao._run_entries(mcp=None, acct="A", buying_power=100.0, verbose=False, max_new=0)
-    assert out == [{"ticker": "AAA", "status": "skipped", "reason": "PDT day-trade budget exhausted"}]
+    # Each stock/option candidate is skipped (not a hard stop — a crypto candidate later could still enter).
+    assert out == [{"ticker": t, "status": "skipped", "reason": "PDT day-trade budget exhausted"} for t in ("AAA", "BBB")]
 
 
 def test_agent_signals_ignore_stale_cache_and_chat(monkeypatch, tmp_path):
@@ -1338,7 +1383,7 @@ def test_stock_routing():
     coin = {"ticker": "BTC", "direction": "buy", "conviction": 60, "asset_type": "crypto"}
     watch = {"ticker": "E", "direction": "watch"}
     assert [route(s) for s in (hr, strong, core, short, coin, watch)] == \
-        ["option", "option", "stock", "option", None, None]
+        ["option", "option", "stock", "option", "crypto", None]
 
 
 def test_stock_rank_and_plan():
@@ -1647,10 +1692,13 @@ def test_entry_loop_logs_every_candidate(monkeypatch):
     monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
     monkeypatch.setattr(stk, "budget_cap", lambda: 0.0)                     # stock cap full → shares decline too
     monkeypatch.setattr(ao, "_try_option_entry", lambda *a, **k: (None, 0.0))
+    from alerts import agentic_crypto as acr
+    monkeypatch.setattr(acr, "budget_cap", lambda: 0.0)                     # crypto cap 0 = crypto leg off
     ao._run_entries(mcp=None, acct="A", buying_power=40.0, verbose=False, max_new=None)
     by = {r["ticker"]: r for r in dl.read()}
     assert by["HELD"]["reason"].startswith("already held")
-    assert by["BTC"]["action"] == "skip" and "not tradeable" in by["BTC"]["reason"]
+    assert by["BTC"]["action"] == "skip" and by["BTC"]["reason"].startswith("crypto: size below")
+    assert by["BTC"]["leg"] == "crypto"
     assert by["NOPE"]["reason"] == ("options: no applicable strategy or affordable/liquid contract; "
                                     "shares: size below the $1 minimum or stock cap full")  # fallback failed too
     assert by["LATE"]["reason"].startswith("shares: size below") and by["LATE"]["leg"] == "stock"
@@ -1839,7 +1887,8 @@ def test_watch_candidates_and_shares_only_route():
     assert got["AMD"]["source"] == "pinned-watch" and got["AMD"]["entry_trigger"] == "pullback to $500"
     sig = {"ticker": "LLY", "direction": "buy", "conviction": 90, "shares_only": True}
     assert route(sig) == "stock"                                               # even at conv ≥75: never options
-    assert route(dict(sig, asset_type="crypto")) is None                       # crypto can't be held as shares
+    assert route(dict(sig, asset_type="crypto")) == "crypto"                   # a fired crypto watch → the crypto leg
+    assert route({"ticker": "BTC", "direction": "short", "asset_type": "crypto"}) is None   # never short crypto
 
 
 def test_fired_watch_is_judged_and_bought_as_shares(monkeypatch):

@@ -1,5 +1,5 @@
 """
-Agent stock book — remembers the PLAN behind each share position the agent opens.
+Agent stock book — remembers the PLAN behind each share (or coin) position the agent opens.
 
 The broker knows what the agentic account holds and at what average cost, but not WHY: which exit
 condition the entry signal carried ("target 8% gain, stop loss at 4%") or when the agent opened it
@@ -7,9 +7,10 @@ condition the entry signal carried ("target 8% gain, stop loss at 4%") or when t
 .equity_exit_decision) trades the plan the position was opened on. A holding with no record (bought
 by hand) falls back to STOCK_EXIT_DEFAULT.
 
-Keyed by ticker (one agent position per name — the entry loop never stacks). Persisted to
-agent_stocks.json (repo root, gitignored). Only placements are recorded (a dry run changes nothing);
-a paper cycle's placements go to paper_agent_stocks.json (agent_mode.paper_scope).
+Keyed by ticker (one agent position per name — the entry loop never stacks), one file per leg:
+agent_stocks.json for shares, agent_crypto.json for coins (a coin and a stock can share a ticker, and each
+leg has its own $ cap). Both gitignored. Only placements are recorded (a dry run changes nothing); a paper
+cycle's placements go to the paper_* twins (agent_mode.paper_scope).
 """
 from __future__ import annotations
 
@@ -19,21 +20,27 @@ from datetime import date
 
 from agent_mode import state_file
 
-_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent_stocks.json")
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_FILE = os.path.join(_REPO, "agent_stocks.json")
+_CRYPTO_FILE = os.path.join(_REPO, "agent_crypto.json")
 
 
-def _load() -> dict:
+def _path(leg: str) -> str:
+    return state_file(_CRYPTO_FILE if leg == "crypto" else _FILE)
+
+
+def _load(leg: str = "stock") -> dict:
     try:
-        with open(state_file(_FILE), encoding="utf-8") as f:
+        with open(_path(leg), encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
-def _save(book: dict) -> None:
+def _save(book: dict, leg: str = "stock") -> None:
     try:
-        with open(state_file(_FILE), "w", encoding="utf-8") as f:
+        with open(_path(leg), "w", encoding="utf-8") as f:
             json.dump(book, f, indent=1)
     except OSError as e:
         print(f"agent_stock_book: could not save — {e}")
@@ -41,36 +48,36 @@ def _save(book: dict) -> None:
 
 def record_entry(ticker: str, exit_condition: str | None, source: str | None = None,
                  conviction: float | None = None, opened: date | None = None,
-                 dollars: float | None = None) -> None:
+                 dollars: float | None = None, leg: str = "stock") -> None:
     """Remember the plan for a newly opened position (overwrites a stale record for the ticker).
-    `dollars` = the entry cost, which the stock budget cap (config.AGENT_STOCK_BUDGET_CAP) counts."""
-    book = _load()
+    `dollars` = the entry cost, which the leg's $ cap (config.AGENT_STOCK/CRYPTO_BUDGET_CAP) counts."""
+    book = _load(leg)
     book[ticker.upper()] = {"exit_condition": exit_condition or "", "source": source or "pipeline",
                             "conviction": conviction, "opened": (opened or date.today()).isoformat(),
                             "dollars": dollars}
-    _save(book)
+    _save(book, leg)
 
 
-def invested() -> float:
-    """Entry cost of every position the agent believes it holds — what the stock cap counts. Read
+def invested(leg: str = "stock") -> float:
+    """Entry cost of every position the agent believes it holds in this leg — what the cap counts. Read
     from the book (not the broker) so an order placed seconds ago counts before its fill shows up."""
-    return round(sum(float(e.get("dollars") or 0) for e in _load().values()), 2)
+    return round(sum(float(e.get("dollars") or 0) for e in _load(leg).values()), 2)
 
 
-def get_entry(ticker: str) -> dict | None:
-    return _load().get(ticker.upper())
+def get_entry(ticker: str, leg: str = "stock") -> dict | None:
+    return _load(leg).get(ticker.upper())
 
 
-def all_entries() -> dict:
-    """{TICKER: entry} for every position the agent believes it opened."""
-    return _load()
+def all_entries(leg: str = "stock") -> dict:
+    """{TICKER: entry} for every position the agent believes it opened in this leg."""
+    return _load(leg)
 
 
-def forget(ticker: str) -> None:
+def forget(ticker: str, leg: str = "stock") -> None:
     """Drop a record once the position is closed (a later re-entry starts a fresh plan)."""
-    book = _load()
+    book = _load(leg)
     if book.pop(ticker.upper(), None) is not None:
-        _save(book)
+        _save(book, leg)
 
 
 def days_held(entry: dict | None, today: date | None = None) -> int | None:

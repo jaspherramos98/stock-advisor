@@ -31,6 +31,9 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 #              leg is always on; routing in alerts/agentic_stocks.py: HR / conviction ≥75 → options,
 #              other buys → shares). 20.0 while the stock leg is new. None = no cap (the pyramid sizes
 #              on the full agentic buying power). ← set None to take the training wheels off.
+#   AGENT_CRYPTO_BUDGET_CAP — max TOTAL $ (entry cost) the agent may hold in CRYPTO at once (crypto buys
+#              route to alerts/agentic_crypto.py). 10.0 while the crypto leg is new — Robinhood crypto has a
+#              ~2% bid/ask spread per round trip. None = no cap. 0 = crypto leg off.
 #   Whether the agent trades at all (off / paper / live) is NOT here — see agent_mode.py (Agent tab).
 #
 # USE_MCP=True: the dashboard/pipeline read account data via the official MCP (OAuth refresh
@@ -42,6 +45,7 @@ USE_MCP = True
 DRY_RUN = True
 MCP_PERSISTENT_SESSION = True
 AGENT_STOCK_BUDGET_CAP = 20.0
+AGENT_CRYPTO_BUDGET_CAP = 10.0
 # Entry judge (analysis/agent_judge.py, plan J2): "shadow" = a Sonnet call reviews each candidate and its
 # verdict is LOGGED beside the rules' decision but changes NOTHING (the J4 review compares them);
 # "off" = no judge calls. (A binding mode arrives only in J5, if the shadow data shows it helps.)
