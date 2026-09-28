@@ -940,6 +940,8 @@ NEWS ITEMS:
             messages=[{"role": "user", "content": user_prompt}],
             system=system_prompt,
         )
+        from llm_budget import record_usage
+        print(f"Pipeline analysis cost: ${record_usage(CLAUDE_MODEL, message.usage):.4f}")
 
         raw = message.content[0].text.strip()
 

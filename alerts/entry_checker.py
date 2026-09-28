@@ -22,7 +22,6 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import json
 import re
 from datetime import datetime, date
 
@@ -30,11 +29,6 @@ from ingestion.prices import fetch_prices
 from market_hours import market_session
 from storage.entry_watch import (
     get_chat_suggestions, get_pinned, was_notified_today, mark_notified, renew_pins,
-)
-
-CACHE_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "pipeline_cache.json"
 )
 
 # Words that mark the price after them as a BREAKOUT (buy when price rises to it)
@@ -118,16 +112,15 @@ def _catalyst_is_stale(catalyst_date: str | None) -> bool:
 
 def _candidates_from_recommendations() -> list[dict]:
     """Watch recs (with a real entry_trigger) out of today's pipeline cache, scoped to the user's
-    watchlist and dropped if their catalyst news is stale."""
-    if not os.path.exists(CACHE_FILE):
-        return []
+    watchlist and dropped if their catalyst news is stale. Another day's cache is ignored (the same
+    today-only rule as the dashboard and the agent) — yesterday's watches must not alert today."""
+    from storage.pipeline_cache import load_today
     try:
-        with open(CACHE_FILE, "r") as f:
-            cache = json.load(f)
-        recs = cache.get("recommendations", []) if isinstance(cache, dict) else (cache or [])
-    except Exception as e:
+        cache, _ = load_today()
+    except Exception as e:  # noqa: BLE001
         print(f"Entry checker: could not read pipeline cache — {e}")
         return []
+    recs = (cache or {}).get("recommendations", []) or []
 
     watchlist = _watchlist_tickers()
     out = []
