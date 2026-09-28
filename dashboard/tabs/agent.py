@@ -327,6 +327,22 @@ def render() -> None:
             st.markdown("#### 🔴 Last LIVE cycle result")
             st.json(st.session_state["agent_live_result"])
 
+        # --- decision log (plan J0): every candidate/exit the agent considered + why ---
+        with st.expander("🧾 Decision log — what the agent considered and why"):
+            from storage import decision_log as _dl
+            _only_live = st.checkbox("Live cycles only (hide dry previews)", value=True, key="agent_dlog_live")
+            _recs = _dl.read(limit=60, mode="live" if _only_live else None)
+            if _recs:
+                st.dataframe(pd.DataFrame([{
+                    "Time": r.get("ts", "").replace("T", " "), "Mode": r.get("mode"),
+                    "Kind": r.get("kind"), "Ticker": r.get("ticker") or "—",
+                    "Action": r.get("action"), "Why": r.get("reason"),
+                    "Conv": (r.get("inputs") or {}).get("conviction"),
+                    "P&L %": r.get("pnl_pct"),
+                } for r in reversed(_recs)]), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No decisions logged yet — they appear after the agent's next cycle with a signal.")
+
         # --- agentic equity positions + sync/refresh ---
         st.markdown("### 📈 Agentic positions")
         if st.button("🔄 Sync positions", use_container_width=True, disabled=not _acct,

@@ -217,6 +217,7 @@ def _try_option_entry(mcp, acct, sig: dict, regime: dict, avail: float, state,
     res = mcp.place_option_order(intent, state, buying_power=avail, account_number=acct)
     row = {"ticker": ticker, "leg": "option", "strategy": plan["strategy"], "qty": n,
            "contract": f"{contract['strike']}{plan['right'][0].upper()} {contract['expiration']}",
+           "option_id": contract["instrument_id"], "premium": intent.premium,
            **{k: res[k] for k in ("status", "reason")}}
     return row, (intent.premium if res["status"] in ("placed", "dry_run") else 0.0)
 
@@ -249,10 +250,25 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     avail = buying_power
     results: list[dict] = []
 
-    for sig in signals:
+    from storage import decision_log as dlog
+
+    def log(sig, action, reason, **extra):
+        # One record per candidate considered — the J0 measuring stick (storage/decision_log.py).
+        dlog.record("entry", sig.get("ticker"), action, reason, inputs={
+            **dlog.signal_inputs(sig), "buying_power": round(avail, 2),
+            "stock_room": None if stock_left == float("inf") else round(stock_left, 2),
+            "regime": regime.get("risk"), "stocks_enabled": use_stocks}, **extra)
+
+    for i, sig in enumerate(signals):
         ticker = (sig.get("ticker") or "").upper()
         leg = stk.route(sig, use_stocks)
-        if not ticker or ticker in held or leg is None:
+        if not ticker:
+            continue
+        if ticker in held:
+            log(sig, "skip", "already held (or closed this cycle)")
+            continue
+        if leg is None:
+            log(sig, "skip", "not tradeable by the agent (e.g. crypto, or shares-only with the stock leg off)")
             continue
         # PDT: each open position reserves a same-day exit. Out of budget → stop opening (the
         # remaining, lower-ranked signals would only be skipped one by one anyway).
@@ -260,18 +276,32 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             if verbose:
                 print(f"  PDT day-trade budget exhausted — no more entries this cycle (next: {ticker})")
             results.append({"ticker": ticker, "status": "skipped", "reason": "PDT day-trade budget exhausted"})
+            for rest in signals[i:]:
+                if (rest.get("ticker") or "").upper() not in held:
+                    log(rest, "skip", "PDT day-trade budget exhausted")
             break
 
-        row, spent = (None, 0.0)
+        row, spent, why = None, 0.0, []
         if leg == "option":
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
+            if row is None:
+                why.append("options: no applicable strategy or affordable/liquid contract")
         if row is None and use_stocks and stk.can_hold_shares(sig):   # stock leg, or options fallback
             row, spent = stk.enter(mcp, acct, sig, stock_dollars.get(ticker, 0.0), avail, state,
                                    verbose, room=stock_left)
             stock_left -= spent
+            if row is None:
+                why.append("shares: size below the $1 minimum or stock cap full")
         if row is None:
+            log(sig, "skip", "; ".join(why) or "no leg produced an order", leg=leg)
             continue
         results.append(row)
+        key = row.get("option_id") or f"eq:{ticker}"
+        log(sig, row["status"] if row["status"] in ("placed", "dry_run") else "skip",
+            row.get("reason") if row["status"] not in ("placed", "dry_run") else f"{row['leg']} entry",
+            key=key, leg=row.get("leg"), order={k: row.get(k) for k in
+                                                ("strategy", "qty", "contract", "dollars", "premium")
+                                                if row.get(k) is not None}, status=row["status"])
         if spent:
             avail -= spent   # reserve so later entries don't oversize
             held.add(ticker)
@@ -316,18 +346,29 @@ def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
                 print(f"  {p.get('chain_symbol','?')} {oid[:8]}: entry {entry} mark {mark} peak {peak} dte {dte} → {action} ({reason})")
             if action != "close":
                 continue
-            peak_tracker.clear_peak(oid)
             right = (p.get("type") or "call").lower()
+            sym = p.get("chain_symbol") or "?"
             intent = OptionOrderIntent(
-                underlying=(p.get("chain_symbol") or "?"), option_id=oid, right=right,
+                underlying=sym, option_id=oid, right=right,
                 side="sell", position_effect="close", quantity=qty,
                 price=round(float(quote.get("bid_price") or mark), 2), direction="credit",
                 expiration=exp, reason=f"exit: {reason}",
                 client_id=f"optexit-{oid}-{reason[:12]}",
             )
             res = mcp.place_option_order(intent, state, buying_power=buying_power, account_number=acct)
-            results.append({"close": p.get("chain_symbol"), "reason": reason,
-                            **{k: res[k] for k in ("status", "reason")}})
+            # Forget the high-water mark only once the close is really sent — a rejected close (or a
+            # dry preview) used to wipe it, silently resetting the trailing stop.
+            if res["status"] == "placed":
+                peak_tracker.clear_peak(oid)
+            from storage import decision_log as dlog
+            dlog.record("exit", sym, res["status"], reason, key=oid,
+                        entry_id=dlog.last_entry_id(oid),
+                        inputs={"entry": entry, "mark": mark, "peak": peak, "dte": dte, "qty": qty},
+                        pnl_pct=round((mark - entry) / entry * 100, 1) if entry else None,
+                        detail=res.get("reason"))
+            # `reason` = why we exited; the order status text goes in `detail` (it used to overwrite it).
+            results.append({"close": sym, "reason": reason, "status": res["status"],
+                            "detail": res.get("reason")})
         except Exception as e:  # noqa: BLE001 — one bad position must not abort the rest
             print(f"agentic_options: exit eval failed for a position — {e}")
     return results
@@ -466,6 +507,9 @@ def run_options_agent(verbose: bool = True, stocks: bool | None = None) -> dict:
             st = get_state()
             if verbose:
                 print(f"-- entries SKIPPED: LLM credit ${st['remaining']:.2f} ≤ reserve ${st['reserve']:.2f} --")
+            from storage import decision_log as dlog
+            dlog.record("halt", None, "entries_halted", "LLM credit at/under reserve",
+                        inputs={"remaining": st["remaining"], "reserve": st["reserve"]})
             return {"entries": [], "exits": exits,
                     "entries_halted": f"LLM credit ${st['remaining']:.2f} ≤ reserve ${st['reserve']:.2f}"}
     except Exception as e:  # noqa: BLE001 — ledger must never block exits/reads

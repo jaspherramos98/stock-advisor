@@ -1390,6 +1390,44 @@ def test_stock_exit_cancels_resting_stop_before_selling(monkeypatch, tmp_path):
     assert stuck.orders == [] and out[0]["status"] == "deferred"                # never sell into a held stop
 
 
+def test_decision_log_roundtrip_and_link():
+    from storage import decision_log as dl
+    e = dl.record("entry", "f", "placed", "stock entry", key="eq:F", inputs={"conviction": 68})
+    dl.record("entry", "F", "skip", "already held", key="eq:F")
+    x = dl.record("exit", "F", "placed", "+8% target", key="eq:F", entry_id=dl.last_entry_id("eq:F"),
+                  pnl_pct=8.1)
+    recs = dl.read()
+    assert [r["kind"] for r in recs] == ["entry", "entry", "exit"]
+    assert recs[0]["ticker"] == "F" and recs[0]["mode"] in ("dry", "live") and recs[0]["inputs"]["conviction"] == 68
+    assert recs[2]["id"] == x and recs[2]["entry_id"] == e          # exit links to the TAKEN entry, not the skip
+    assert dl.read(limit=1)[0]["id"] == x and dl.last_entry_id("eq:NONE") is None
+    assert dl.signal_inputs({"conviction": 70, "entry_rationale": "long text", "source": None}) == {"conviction": 70}
+
+
+def test_entry_loop_logs_every_candidate(monkeypatch):
+    from alerts import agentic_options as ao
+    from alerts import agentic_stocks as stk
+    from storage import decision_log as dl
+    sigs = [{"ticker": "HELD", "direction": "buy", "conviction": 80},
+            {"ticker": "BTC", "direction": "buy", "conviction": 60, "asset_type": "crypto"},
+            {"ticker": "NOPE", "direction": "buy", "conviction": 80},       # ≥75 → options first
+            {"ticker": "LATE", "direction": "buy", "conviction": 50}]
+    monkeypatch.setattr(ao, "_signals", lambda: sigs)
+    monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: {"HELD"})
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral"})
+    monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
+    monkeypatch.setattr(stk, "budget_cap", lambda: 0.0)                     # stock cap full → shares decline too
+    monkeypatch.setattr(ao, "_try_option_entry", lambda *a, **k: (None, 0.0))
+    ao._run_entries(mcp=None, acct="A", buying_power=40.0, verbose=False, max_new=None, stocks=True)
+    by = {r["ticker"]: r for r in dl.read()}
+    assert by["HELD"]["reason"].startswith("already held")
+    assert by["BTC"]["action"] == "skip" and "not tradeable" in by["BTC"]["reason"]
+    assert by["NOPE"]["reason"] == ("options: no applicable strategy or affordable/liquid contract; "
+                                    "shares: size below the $1 minimum or stock cap full")  # fallback failed too
+    assert by["LATE"]["reason"].startswith("shares: size below") and by["LATE"]["leg"] == "stock"
+    assert all(r["kind"] == "entry" and r["inputs"]["buying_power"] == 40.0 for r in by.values())
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 

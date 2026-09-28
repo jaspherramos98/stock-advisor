@@ -209,6 +209,11 @@ def close_position(mcp, acct, pos: dict, equity: float, reason: str, state=None,
                          client_id=f"stkexit-{t}-{date.today().isoformat()}")
     res = mcp.place_order(intent, state or GuardState(start_equity=equity), buying_power=equity,
                           account_number=acct)
+    from storage import decision_log as dlog
+    avg, px = pos.get("avg_cost"), pos.get("current_price")
+    dlog.record("exit", t, res["status"], reason, key=f"eq:{t}", entry_id=dlog.last_entry_id(f"eq:{t}"),
+                inputs={"avg_cost": avg, "price": px, "shares": pos.get("shares")},
+                pnl_pct=round((px - avg) / avg * 100, 1) if avg and px else None, detail=res.get("reason"))
     if res["status"] == "placed":
         book.forget(t)
         peak_tracker.clear_peak(f"eq:{t}")
@@ -259,6 +264,9 @@ def run_exits(mcp, acct, equity: float, verbose: bool) -> list[dict]:
                                      reason=f"protective stop {stop_pct:g}% under entry",
                                      client_id=f"stkstop-{t}-{stop_px}")
                 res = mcp.place_order(intent, state, buying_power=equity, account_number=acct)
+                from storage import decision_log as dlog
+                dlog.record("stop", t, res["status"], intent.reason, key=f"eq:{t}",
+                            inputs={"avg_cost": p.get("avg_cost"), "stop_price": stop_px, "shares": whole})
                 results.append({"stop": t, "leg": "stock", "stop_price": stop_px,
                                 **{k: res[k] for k in ("status", "reason")}})
         except Exception as e:  # noqa: BLE001 — one bad position must not abort the rest
