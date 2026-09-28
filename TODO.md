@@ -2,6 +2,13 @@
 
 ## Done
 
+### 68. Every pipeline run is archived (2026-09-28) ✅
+`pipeline_cache.save` overwrote the only copy of each run, so past recommendations were lost (the Sheets export had
+27 rows from June) and a judge replay / pipeline scorecard had nothing to read. Every save now also appends the run
+to `pipeline_history/<date>.jsonl` (gitignored, one line per run, ~7 KB) and `read_history(since, until)` reads it back.
+An archive failure never blocks the cache write. Seeded with today's 06:31 run. 151 tests. Files:
+storage/pipeline_cache.py, .gitignore, tests (+ conftest isolation), CLAUDE.md.
+
 ### 67. LLM ledger counts every Claude call + entry alerts ignore stale caches + backlog cleanup (2026-09-28) ✅
 - **Ledger:** the daily pipeline analysis (Sonnet, the biggest regular call) and the exit checker's Haiku calls never
   hit `llm_budget`, so "LLM credit left" — which halts agent entries at the reserve — read high. New
@@ -1102,8 +1109,6 @@ Lowest core-fit; do last or not at all.
   hand (My Positions). Needs a decision on scope (read-only sync vs agent trading) before building.
 - **Paper realism:** shares fill at the last price (no spread) and paper has no resting stops (a gap through the
   stop fills at the next 20-min poll's price). Fine for judging the rules; revisit if paper P&L looks too rosy.
-- **Archive every pipeline run** (`pipeline_history/<date>.json`) — past recs are lost today (the cache is overwritten
-  daily; the Sheets export had only 27 rows from June), so a future judge replay has nothing to replay.
 
 ### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built, J4 data accruing)
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
