@@ -310,6 +310,88 @@ def _normalize_quotes(tickers: list[str], data) -> dict[str, dict]:
     return results
 
 
+# --- fills → day-trade (PDT) budget ----------------------------------------------------
+
+# Order states that can still fill. An UNFILLED opening order is treated as opened today: if it
+# fills later today, a same-day exit would be a day trade, so it must hold its reservation now.
+_WORKING_STATES = ("new", "queued", "confirmed", "unconfirmed", "partially_filled")
+
+
+def _pending_open(key: str, pending_qty: float, today) -> list[dict]:
+    return ([{"key": key, "effect": "open", "qty": pending_qty, "ts": "~pending", "date": today}]
+            if pending_qty > 0 else [])
+
+
+def _fills_from_option_orders(orders: list, today) -> list[dict]:
+    """Pure: option order rows → PDT fills (one per execution, + a pseudo-fill for any still-working
+    opening quantity). Keyed by option_id; the broker's trade_date wins, else the Eastern date of
+    the execution timestamp."""
+    from market_hours import et_date
+    out = []
+    for o in orders or []:
+        working = (o.get("state") or "").lower() in _WORKING_STATES
+        for leg in o.get("legs") or []:
+            effect = leg.get("position_effect")
+            if effect not in ("open", "close"):
+                continue
+            key = f"opt:{leg.get('option_id')}"
+            for ex in leg.get("executions") or []:
+                ts = ex.get("timestamp")
+                day = ex.get("trade_date")
+                out.append({"key": key, "effect": effect, "qty": _to_float(ex.get("quantity")),
+                            "ts": ts, "date": _dt_date(day) if day else et_date(ts)})
+            if working and effect == "open":
+                out += _pending_open(key, _to_float(o.get("pending_quantity")), today)
+    return out
+
+
+def _fills_from_equity_orders(orders: list, today) -> list[dict]:
+    """Pure: equity order rows → PDT fills. Long-only account: buy opens, sell closes. Equity
+    executions carry no trade_date → Eastern date of the timestamp. Still-working buys → pseudo-fill."""
+    from market_hours import et_date
+    out = []
+    for o in orders or []:
+        effect = {"buy": "open", "sell": "close"}.get((o.get("side") or "").lower())
+        if not effect:
+            continue
+        key = f"eq:{o.get('instrument_id') or o.get('symbol')}"
+        for ex in o.get("executions") or []:
+            ts = ex.get("timestamp")
+            out.append({"key": key, "effect": effect, "qty": _to_float(ex.get("quantity")),
+                        "ts": ts, "date": et_date(ts)})
+        if effect == "open" and (o.get("state") or "").lower() in _WORKING_STATES:
+            # Dollar-based orders have no share quantity until filled → reserve with a nominal 1.
+            remaining = _to_float(o.get("quantity")) - _to_float(o.get("cumulative_quantity"))
+            out += _pending_open(key, remaining if remaining > 0 else 1.0, today)
+    return out
+
+
+def _dt_date(s: str):
+    import datetime as _dt
+    try:
+        return _dt.date.fromisoformat(s[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def day_trade_budget(account_number: str, account_equity: float) -> int | None:
+    """Live PDT budget for the agentic account: new positions that may be opened now (None =
+    unlimited, ≥$25k). Reads the broker's own fill history (options + equities) so manual trades
+    and restarts are counted. RAISES on a read failure — callers must fail CLOSED (no entries)."""
+    import market_hours as mh
+    from trading_guards import PDT_WINDOW_DAYS, day_trade_budget as _budget
+    import datetime as _dt
+    window = mh.recent_trading_days(PDT_WINDOW_DAYS)
+    # Filter is on created_at, but a GTC order created earlier can FILL inside the window → 10 days slack.
+    since = (min(window) - _dt.timedelta(days=10)).isoformat()
+    opt = _data(_call_tool("get_option_orders", {"account_number": account_number, "created_at_gte": since}))
+    eq = _data(_call_tool("get_equity_orders", {"account_number": account_number, "created_at_gte": since}))
+    today = mh._now_et().date()
+    fills = (_fills_from_option_orders((opt or {}).get("orders"), today)
+             + _fills_from_equity_orders((eq or {}).get("orders"), today))
+    return _budget(fills, window, today, account_equity)
+
+
 # --- orders: guarded, DRY_RUN-safe -----------------------------------------------------
 
 def place_order(intent: OrderIntent, state: GuardState, buying_power: float,

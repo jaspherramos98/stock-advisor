@@ -147,7 +147,21 @@ def _closed_underlyings(exits: list[dict], live: bool) -> set[str]:
     return {(r.get("close") or "").upper() for r in exits if r.get("close") and ok(r)}
 
 
-def _run_entries(mcp, acct, buying_power, verbose, exclude=None) -> list[dict]:
+def _entry_budget(mcp, acct, equity: float, verbose: bool) -> int | None:
+    """PDT budget = how many new positions this cycle may open (None = unlimited). Fails CLOSED:
+    if the fill history can't be read we can't prove a same-day exit won't flag the account, so
+    no entries this cycle (exits are unaffected)."""
+    try:
+        budget = mcp.day_trade_budget(acct, equity)
+    except Exception as e:  # noqa: BLE001
+        print(f"agentic_options: day-trade count unavailable — {e}; entries blocked this cycle")
+        return 0
+    if verbose:
+        print(f"  PDT: {'exempt' if budget is None else f'{budget} new position(s) allowed'}")
+    return budget
+
+
+def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None) -> list[dict]:
     from ingestion import options_data as od
     from ingestion import account_reads as ar
     from analysis.options_strategies import applicable_plans, size_contracts
@@ -167,6 +181,13 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None) -> list[dict]:
         ticker = (sig.get("ticker") or "").upper()
         if ticker in held:
             continue
+        # PDT: each open position reserves a same-day exit. Out of budget → stop opening (the
+        # remaining, lower-priority signals would only be skipped one by one anyway).
+        if max_new is not None and max_new <= 0:
+            if verbose:
+                print(f"  PDT day-trade budget exhausted — no more entries this cycle (next: {ticker})")
+            results.append({"ticker": ticker, "status": "skipped", "reason": "PDT day-trade budget exhausted"})
+            break
         sig = enrich(sig)   # add rsi + earnings context for the technical/earnings strategies
         plans = applicable_plans(sig, regime)
         if not plans:
@@ -203,6 +224,8 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None) -> list[dict]:
                         **{k: res[k] for k in ("status", "reason")}})
         if res["status"] in ("placed", "dry_run"):
             avail -= intent.premium  # reserve so later entries don't oversize
+            if max_new is not None:
+                max_new -= 1
     return results
 
 
@@ -391,5 +414,7 @@ def run_options_agent(verbose: bool = True) -> dict:
 
     if verbose:
         print("-- entries --")
-    entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits, live=True))
+    # Budget is read AFTER exits so this cycle's same-day closes are already counted.
+    entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits, live=True),
+                           max_new=_entry_budget(mcp, acct, bp, verbose))
     return {"entries": entries, "exits": exits}

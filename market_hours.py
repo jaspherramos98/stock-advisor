@@ -82,6 +82,31 @@ def _now_et() -> datetime:
         return datetime.now()  # fall back to local time if tz data is unavailable
 
 
+def et_date(ts: str | None):
+    """Eastern-time calendar date of an ISO-8601 timestamp ('2026-08-14T08:52:12.077Z'), or None."""
+    if not ts:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.astimezone(ZoneInfo("America/New_York")).date()
+    except (ValueError, TypeError):
+        return None
+
+
+def recent_trading_days(n: int, today=None) -> list:
+    """The last `n` NYSE trading days ending at `today` (inclusive when it's a trading day), newest
+    first. The PDT rule counts day trades over a rolling 5-business-day window."""
+    import datetime as _dt
+    day = today or _now_et().date()
+    out = []
+    while len(out) < n:
+        if day.weekday() < 5 and day not in nyse_holidays(day.year):
+            out.append(day)
+        day -= _dt.timedelta(days=1)
+    return out
+
+
 def market_session(now: datetime = None) -> dict:
     """
     Structured snapshot of the current US market session. Returns a dict:

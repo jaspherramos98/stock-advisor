@@ -124,6 +124,17 @@ def _c_agentic_equity(acct):
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def _c_day_trade_budget(acct, equity):
+    """PDT: new positions the agent may open now ('exempt' ≥$25k, None = unreadable)."""
+    from ingestion import robinhood_mcp as _m
+    try:
+        b = _m.day_trade_budget(acct, equity or 0.0)
+    except Exception:  # noqa: BLE001 — display only; the agent itself fails closed
+        return None
+    return "exempt" if b is None else b
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def _c_option_orders(acct):
     from ingestion import robinhood_mcp as _m, mcp_auth as _a
     d = _m._data(_m._unwrap_tool_result(_a.call_tool("get_option_orders", {"account_number": acct})))

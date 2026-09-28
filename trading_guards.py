@@ -20,6 +20,11 @@ MAX_ORDERS_PER_DAY = 10            # hard cap on placements per trading day
 DAILY_LOSS_LIMIT_PCT = 0.05        # halt NEW orders once day P&L <= -5% of start equity
 MIN_BUYING_POWER = 10.0            # mirror calculator.portfolio.MIN_ALLOCATION_BUDGET
 MAX_SINGLE_ORDER_FRACTION = 0.40   # mirror calculator.portfolio.MAX_SINGLE_ALLOCATION
+# Pattern-day-trader rule (FINRA): a margin account (Robinhood `limited_margin` counts) under $25k
+# that makes 4+ day trades in 5 business days gets flagged → 90-day restriction. Stay at ≤3.
+PDT_MAX_DAY_TRADES = 3
+PDT_WINDOW_DAYS = 5
+PDT_EQUITY_EXEMPT = 25_000.0
 
 
 @dataclass
@@ -142,6 +147,39 @@ def check_option_order(intent: OptionOrderIntent, state: GuardState, buying_powe
         if buying_power < intent.premium:
             return GuardResult(False, f"premium ${intent.premium:.2f} exceeds buying power ${buying_power:.2f}")
     return GuardResult(True, "ok")
+
+
+def count_day_trades(fills: list[dict], window: list, today) -> tuple[int, int]:
+    """Pure: (day trades inside `window`, instruments opened `today` and not yet closed today).
+
+    fills: [{"key": instrument id, "effect": "open"|"close", "qty": float, "ts": sortable,
+             "date": trading date}] — options AND stocks together (PDT counts both).
+    Per (instrument, day), each closing fill that meets still-open same-day quantity counts as one
+    day trade (buy,sell,buy,sell = 2; buy,buy,sell = 1). Deliberately conservative: it may
+    over-count an edge case, never under-count, because an overcount only costs an entry."""
+    days = set(window)
+    open_qty: dict = {}
+    trades = 0
+    for f in sorted(fills, key=lambda f: (str(f.get("date")), str(f.get("ts")))):
+        k = (f.get("key"), f.get("date"))
+        if f.get("effect") == "open":
+            open_qty[k] = open_qty.get(k, 0.0) + float(f.get("qty") or 0)
+        elif f.get("effect") == "close" and open_qty.get(k, 0.0) > 0:
+            open_qty[k] = max(0.0, open_qty[k] - float(f.get("qty") or 0))
+            if f.get("date") in days:
+                trades += 1
+    reserved = sum(1 for (key, day), q in open_qty.items() if day == today and q > 0)
+    return trades, reserved
+
+
+def day_trade_budget(fills: list[dict], window: list, today, account_equity: float) -> int | None:
+    """How many NEW positions may be opened now without risking a PDT flag, or None = unlimited
+    (account at/over the $25k exemption). Every position opened today is RESERVED one day trade,
+    so a same-day exit always has budget — exits are never blocked, only entries."""
+    if account_equity >= PDT_EQUITY_EXEMPT:
+        return None
+    used, reserved = count_day_trades(fills, window, today)
+    return max(0, PDT_MAX_DAY_TRADES - used - reserved)
 
 
 def record_placed(intent, state: GuardState) -> None:
