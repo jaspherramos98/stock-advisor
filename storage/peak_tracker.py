@@ -5,20 +5,22 @@ The fixed +60% exit made the agent give back gains ("it hit +130% of value then 
 to a loss"). A trailing lock instead remembers the PEAK mark of each open contract and sells
 when it pulls back a set % from that peak — capturing the rip without waiting for a fixed target.
 
-Keyed by option_id, persisted to peaks.json (repo root, gitignored). Shared by the paper AND
-live exit paths so both get the trailing behavior. Pure file I/O; safe to import anywhere.
+Keyed by option_id (or "eq:TICKER" for shares), persisted to peaks.json (repo root, gitignored); a
+paper cycle uses paper_peaks.json (agent_mode.paper_scope). Pure file I/O; safe to import anywhere.
 """
 from __future__ import annotations
 
 import json
 import os
 
+from agent_mode import state_file
+
 _FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "peaks.json")
 
 
 def _load() -> dict:
     try:
-        with open(_FILE, encoding="utf-8") as f:
+        with open(state_file(_FILE), encoding="utf-8") as f:
             return json.load(f) or {}
     except (OSError, ValueError):
         return {}
@@ -26,7 +28,7 @@ def _load() -> dict:
 
 def _save(d: dict) -> None:
     try:
-        with open(_FILE, "w", encoding="utf-8") as f:
+        with open(state_file(_FILE), "w", encoding="utf-8") as f:
             json.dump(d, f)
     except OSError:
         pass

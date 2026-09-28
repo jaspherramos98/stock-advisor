@@ -9,6 +9,9 @@ agent_mode.txt
 agent_scheduler.log
 market_open.log
 paper_book.json
+paper_agent_stocks.json
+paper_peaks.json
+paper_holding_review.json
 peaks.json
 agent_stocks.json
 agent_decisions.jsonl

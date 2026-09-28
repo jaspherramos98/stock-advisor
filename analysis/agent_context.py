@@ -205,7 +205,8 @@ def gather(sig: dict, *, regime: dict | None, holdings: set[str], records: list[
     now = mh._now_et()
     session = safe("market session", lambda: mh.market_session(now), {}) or {}
     if records is None:
-        records = safe("decision log", lambda: decision_log.read(mode="live"), [])
+        # The agent's own record in THIS book: live trades in a live cycle, paper trades in a paper one.
+        records = safe("decision log", lambda: decision_log.read(mode=decision_log._mode()), [])
     return build(sig, history=history, rec_price=rec.get("price") if isinstance(rec, dict) else None,
                  news=news, earnings=earnings, sector=sector_of.get(t), regime=regime,
                  holdings={h: sector_of.get(h) for h in holdings}, record=track_record(records),

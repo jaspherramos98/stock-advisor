@@ -722,11 +722,8 @@ def test_closed_underlyings_anti_churn():
         {"close": None, "status": "placed"},      # malformed → ignored
         {"close": "aal", "status": "dry_run"},
     ]
-    # Live: only placed/dry_run closes block re-entry.
-    assert _closed_underlyings(exits, live=True) == {"SNAP", "AAL"}
-    # Paper: every close executes, so all non-null tickers block re-entry.
-    paper = [{"close": "SNAP", "pnl": -3.0}, {"close": "TLT", "pnl": 1.0}]
-    assert _closed_underlyings(paper, live=False) == {"SNAP", "TLT"}
+    # Only placed (live or paper fill) / dry_run closes block re-entry.
+    assert _closed_underlyings(exits) == {"SNAP", "AAL"}
 
 
 def test_paper_book_flow(tmp_path, monkeypatch):
@@ -735,21 +732,121 @@ def test_paper_book_flow(tmp_path, monkeypatch):
     pb.reset(25.0)
     assert pb.cash() == 25.0
     # buy 1 F 15C @ 0.18 = $18
-    assert pb.open_position({"option_id": "o1", "ticker": "F", "right": "call", "strike": 15,
-                             "expiration": "2026-09-18", "strategy": "catalyst_momentum",
-                             "qty": 1, "entry_price": 0.18})
-    assert pb.cash() == 7.0 and pb.open_tickers() == {"F"}
-    # can't afford a $18 second contract with $7 left
-    assert not pb.open_position({"option_id": "o2", "ticker": "NIO", "right": "call", "strike": 5,
-                                 "qty": 1, "entry_price": 0.18})
-    # no duplicate option_id
-    assert not pb.open_position({"option_id": "o1", "ticker": "F", "qty": 1, "entry_price": 0.10})
+    assert pb.open_option({"option_id": "o1", "ticker": "F", "right": "call", "strike": 15,
+                           "expiration": "2026-09-18", "qty": 1, "entry_price": 0.18}) is None
+    assert pb.cash() == 7.0
+    # can't afford a $18 second contract with $7 left; no duplicate option_id
+    assert "exceeds" in pb.open_option({"option_id": "o2", "ticker": "NIO", "qty": 1, "entry_price": 0.18})
+    assert pb.open_option({"option_id": "o1", "ticker": "F", "qty": 1, "entry_price": 0.10})
     # close at 0.30 → pnl (0.30-0.18)*100 = $12; cash back to 7 + 30 = 37
-    rec = pb.close_position("o1", 0.30, "target")
-    assert rec["pnl"] == 12.0 and pb.cash() == 37.0 and not pb.get_open()
+    rec = pb.close_option("o1", 0.30, "target")
+    assert rec["pnl"] == 12.0 and rec["leg"] == "option" and pb.cash() == 37.0 and not pb.get_book()["options"]
+
+    # shares: $10 of SPY @ $500, then sell it all at $510
+    assert pb.buy_shares("spy", 10.0, 500.0) is None
+    held = pb.get_book()["shares"]["SPY"]
+    assert held["shares"] == 0.02 and held["avg_cost"] == 500.0 and pb.cash() == 27.0
+    assert "exceeds" in pb.buy_shares("QQQ", 100.0, 400.0)
+    s_open = pb.summarize(pb.get_book(), {}, {"SPY": 510.0})
+    assert s_open["open_value"] == 10.2 and s_open["n_open"] == 1
+    rec = pb.sell_shares("SPY", 5, 510.0, "target")                 # qty capped at what's held
+    assert rec["pnl"] == 0.2 and rec["leg"] == "stock" and "SPY" not in pb.get_book()["shares"]
+    assert pb.sell_shares("SPY", 1, 510.0) is None
 
     s = pb.summarize(pb.get_book(), {})
-    assert s["realized"] == 12.0 and s["equity"] == 37.0 and s["total_pnl"] == 12.0 and s["win_rate"] == 100.0
+    assert s["realized"] == 12.2 and s["equity"] == 37.2 and s["win_rate"] == 100.0
+    # PDT fills: open+close for both instruments
+    assert [(f["key"], f["effect"]) for f in pb.get_book()["fills"]] == [
+        ("opt:o1", "open"), ("opt:o1", "close"), ("eq:SPY", "open"), ("eq:SPY", "close")]
+
+
+def test_paper_book_migrates_v1(tmp_path, monkeypatch):
+    import json as _json
+    from storage import paper_book as pb
+    monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))
+    (tmp_path / "paper.json").write_text(_json.dumps({"cash": 9.0, "start": 25.0, "open": [{"option_id": "x"}],
+                                                      "closed": []}))
+    b = pb.get_book()
+    assert b["options"] == [{"option_id": "x"}] and b["shares"] == {} and b["fills"] == [] and b["cash"] == 9.0
+
+
+def test_paper_scope_isolates_agent_state(tmp_path, monkeypatch):
+    import agent_mode
+    from storage import agent_stock_book as book, decision_log as dl, peak_tracker
+    monkeypatch.setattr(book, "_FILE", str(tmp_path / "agent_stocks.json"))
+    monkeypatch.setattr(peak_tracker, "_FILE", str(tmp_path / "peaks.json"))
+    book.record_entry("LIVE", "target 8% gain")
+    with agent_mode.paper_scope():
+        assert agent_mode.in_paper() and book.all_entries() == {}          # paper never sees the live book
+        book.record_entry("PAPR", "target 6% gain", dollars=5.0)
+        peak_tracker.update_peak("eq:PAPR", 10.0)
+        dl.record("entry", "PAPR", "placed")
+    assert not agent_mode.in_paper()
+    assert set(book.all_entries()) == {"LIVE"} and peak_tracker.get_peak("eq:PAPR") is None
+    assert (tmp_path / "paper_agent_stocks.json").exists() and (tmp_path / "paper_peaks.json").exists()
+    assert [r["mode"] for r in dl.read()] == ["paper"]
+    assert dl.read(mode=dl.ACTING_MODES) == dl.read(mode="paper")
+
+
+def test_paper_cycle_runs_the_live_entry_loop(monkeypatch, tmp_path):
+    """A paper cycle goes through run_options_agent's real entry loop (routing, sizing, the stock cap, the
+    decision log) with PaperBroker filling at live prices — only market data is stubbed."""
+    import agent_mode
+    from alerts import agentic_options as ao, agentic_stocks as stk, paper_broker
+    from ingestion import robinhood_mcp as live
+    from storage import agent_stock_book as book, decision_log as dl, paper_book as pb, peak_tracker
+    monkeypatch.setattr(agent_mode, "MODE_FILE", str(tmp_path / "mode.txt"))
+    monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))
+    monkeypatch.setattr(book, "_FILE", str(tmp_path / "agent_stocks.json"))
+    monkeypatch.setattr(peak_tracker, "_FILE", str(tmp_path / "peaks.json"))
+    pb.reset(40.0)
+    monkeypatch.setattr(live, "is_available", lambda: True)
+    monkeypatch.setattr(live, "fetch_quotes", lambda tickers: {t: {"price": 50.0} for t in tickers})
+    monkeypatch.setattr(ao, "_market_open", lambda: True)
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral", "detail": {}})
+    monkeypatch.setattr(ao, "_signals", lambda: [
+        {"ticker": "CORE", "direction": "buy", "conviction": 68, "risk_level": "medium",
+         "exit_condition": "target 8% gain, stop loss at 4%"}])
+    monkeypatch.setattr(stk, "budget_cap", lambda: 20.0)
+    monkeypatch.setattr("market_hours.recent_trading_days", lambda n, today=None: [])
+
+    out = ao.run_paper_agent(verbose=False)
+    assert out["mode"] == "paper" and [(e["ticker"], e["leg"], e["status"]) for e in out["entries"]] == \
+        [("CORE", "stock", "placed")]
+    bk = pb.get_book()
+    assert bk["cash"] == round(40.0 - out["entries"][0]["dollars"], 2) and "CORE" in bk["shares"]
+    assert out["entries"][0]["dollars"] <= 16.0                        # 40% single-name cap of $40
+    rec = dl.read()[-1]
+    assert rec["mode"] == "paper" and rec["ticker"] == "CORE" and rec["action"] == "placed"
+    assert book.all_entries() == {}                                   # the LIVE stock book is untouched
+    with agent_mode.paper_scope():
+        assert "CORE" in book.all_entries()                           # the paper one has the plan
+
+    # Next cycle: price +10% → the stock exit rule's target fires and paper sells it.
+    monkeypatch.setattr(live, "fetch_quotes", lambda tickers: {t: {"price": 55.0} for t in tickers})
+    monkeypatch.setattr(ao, "_signals", lambda: [])
+    out = ao.run_paper_agent(verbose=False)
+    assert [(x["close"], x["status"]) for x in out["exits"]] == [("CORE", "placed")]
+    assert pb.get_book()["shares"] == {} and pb.get_book()["closed"][-1]["pnl"] > 0
+
+
+def test_paper_broker_guards_and_order_types(monkeypatch, tmp_path):
+    from alerts.paper_broker import PaperBroker
+    from ingestion import robinhood_mcp as live
+    from storage import paper_book as pb
+    from trading_guards import GuardState, OrderIntent
+    monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))
+    monkeypatch.setattr(live, "fetch_quotes", lambda tickers: {t: {"price": 10.0} for t in tickers})
+    pb.reset(40.0)
+    b, st = PaperBroker(), GuardState(start_equity=40.0)
+    big = OrderIntent(ticker="F", side="buy", dollars=30.0, client_id="a")
+    assert b.place_order(big, st, 40.0)["status"] == "rejected"          # 40% single-name cap, like live
+    stop = OrderIntent(ticker="F", side="sell", quantity=1, order_type="stop", stop_price=9.0, client_id="b")
+    assert b.place_order(stop, st, 40.0)["status"] == "rejected"         # no resting orders on paper
+    ok = OrderIntent(ticker="F", side="buy", dollars=10.0, client_id="c")
+    assert b.place_order(ok, st, 40.0)["status"] == "placed" and b.fetch_buying_power() == 30.0
+    assert b.place_order(ok, st, 30.0)["status"] == "rejected"           # duplicate client_id
+    assert [p["ticker"] for p in b.fetch_positions()] == ["F"] and b.fetch_positions()[0]["shares"] == 1.0
 
 
 def test_paper_position_pnl():

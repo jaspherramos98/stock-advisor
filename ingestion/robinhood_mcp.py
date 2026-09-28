@@ -190,6 +190,13 @@ def fetch_positions(account_number: str | None = None) -> list[dict]:
     return _normalize_positions(rows, quotes)
 
 
+def fetch_option_positions(account_number: str) -> list[dict]:
+    """Open (nonzero) option position rows for an account, as get_option_positions returns them.
+    RAISES on a read failure — callers decide (the exit pass skips the cycle, the held check assumes none)."""
+    data = _data(_call_tool("get_option_positions", {"account_number": account_number, "nonzero": True}))
+    return [p for p in (data.get("positions", []) if isinstance(data, dict) else []) if p]
+
+
 def fetch_buying_power(account_number: str | None = None) -> float | None:
     """Same contract as ingestion.robinhood.fetch_buying_power: dollars or None. Defaults to
     the MAIN account (matches the dashboard budget semantics). Pass the agentic account to

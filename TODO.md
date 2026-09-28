@@ -2,6 +2,24 @@
 
 ## Done
 
+### 65. Paper mode runs the live agent code, both legs (simplification step 2 of 2, 2026-09-28) ✅
+The old paper loop (`_run_paper_entries/_run_paper_exits`) was a separate, older copy: options only, no routing,
+no stock leg, no judge, no decision log, no PDT — so paper results said nothing about what live would do. Now
+`run_paper_agent` = `run_options_agent(broker=PaperBroker())` inside `agent_mode.paper_scope()`: the SAME entry/exit
+code, with only the account/order backend swapped. New `alerts/paper_broker.py` (same guards + order-shape checks as
+live, fills at live prices into the paper book, no review, no resting stops). `storage/paper_book.py` v2 holds
+options AND fractional shares + PDT fills (v1 migrates on load). Paper scope (a ContextVar) points the agent's state
+files at paper_* twins (`agent_mode.state_file`: stock book, peaks, holding-review state) and tags decision-log
+records "paper"; the J4 scorecard and the Agent-tab log count live + paper (`decision_log.ACTING_MODES`). Account
+reads went through `mcp_auth.call_tool` directly in two places — now `robinhood_mcp.fetch_option_positions` (which
+also surfaces tool errors). Agent tab: paper panel shows both legs, reset defaults to the real agentic BP; the
+dry-run Preview button is gone. Smoke-tested live 2026-09-28 (PDT read, 7 pins scanned, no signal → idle). Paper book
+reset to $41.92. 149 tests (paper book v1/v2, scope isolation, broker guards, a full two-cycle paper run through the
+live loop). Files: agent_mode.py, alerts/paper_broker.py (new), alerts/agentic_options.py, alerts/agentic_stocks.py,
+storage/paper_book.py, storage/decision_log.py, storage/agent_stock_book.py, storage/peak_tracker.py,
+analysis/holding_review.py, analysis/judge_scorecard.py, analysis/agent_context.py, ingestion/robinhood_mcp.py,
+dashboard/tabs/agent.py, dashboard/common.py, scripts/judge_review.py, .gitignore, tests.
+
 ### 64. One agent control: Off / Paper / Live (simplification step 1 of 2, 2026-09-28) ✅
 Six overlapping controls (arm file `agent_live.arm`, kill switch `agentic_halt.flag`, `config.AGENT_TRADE_STOCKS`,
 `stock_leg_test.pending` + `scripts/stock_leg_test.py`, the preview's stock toggle, the 6:30 task arming live) were
@@ -1057,13 +1075,9 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### Paper mode runs the live code, both legs (simplification step 2 of 2 — NEXT)
-`run_paper_agent` is a separate, older copy of the entry/exit logic: options only, no routing, no judge, no
-decision log, no PDT. Make paper = the SAME `_run_entries`/`_run_exits` with only order placement (and position
-reads) swapped for the paper book; extend `storage/paper_book` to hold shares (fractional dollar buys, stock exit
-rules); paper cash = real agentic BP with the same $20 stock cap; tag decision-log records `mode: paper`; delete
-`_run_paper_entries/_run_paper_exits`; show both legs in the Agent tab paper panel. Consider dropping the Preview
-button once paper works. Judge verdicts are reused across live/paper (2h), so extra cost ≈ $0.
+### Small follow-ups
+- **Paper realism:** shares fill at the last price (no spread) and paper has no resting stops (a gap through the
+  stop fills at the next 20-min poll's price). Fine for judging the rules; revisit if paper P&L looks too rosy.
 - **Archive every pipeline run** (`pipeline_history/<date>.json`) — past recs are lost today (the cache is overwritten
   daily; the Sheets export had only 27 rows from June), so a future judge replay has nothing to replay.
 

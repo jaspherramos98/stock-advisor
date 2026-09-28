@@ -8,6 +8,9 @@ Each run:
   EXITS   — for each open agentic option position, apply the exit policy (profit target / stop /
             near-expiry) and place a sell-to-close when it fires.
 
+BROKER: every account read and order goes through a `mcp` backend — the real robinhood_mcp module, or
+alerts.paper_broker.PaperBroker for a paper cycle (run_paper_agent). Paper therefore runs this exact code.
+
 SAFETY (engineering, NOT limits on aggression):
   - config.DRY_RUN True → logs intended option orders, places nothing.
   - review_option_order before every place (in place_option_order); is_error honored.
@@ -151,21 +154,17 @@ def _signals() -> list[dict]:
 def _held_underlyings(mcp, acct) -> set[str]:
     """Underlyings we already hold an open option position on — don't stack a second entry."""
     try:
-        from ingestion import mcp_auth
-        data = mcp._data(mcp._unwrap_tool_result(
-            mcp_auth.call_tool("get_option_positions", {"account_number": acct, "nonzero": True})))
-        rows = data.get("positions", []) if isinstance(data, dict) else []
-        return {(p.get("chain_symbol") or p.get("symbol") or "").upper() for p in rows if p}
+        return {(p.get("chain_symbol") or p.get("symbol") or "").upper() for p in mcp.fetch_option_positions(acct)}
     except Exception as e:  # noqa: BLE001
         print(f"agentic_options: option positions read failed — {e}")
         return set()
 
 
-def _closed_underlyings(exits: list[dict], live: bool) -> set[str]:
-    """Underlyings actually closed this cycle → excluded from re-entry (anti-churn). Live closes
-    only count when the order was placed/dry_run; paper closes always execute."""
-    ok = (lambda r: r.get("status") in ("placed", "dry_run")) if live else (lambda r: True)
-    return {(r.get("close") or "").upper() for r in exits if r.get("close") and ok(r)}
+def _closed_underlyings(exits: list[dict]) -> set[str]:
+    """Underlyings actually closed this cycle → excluded from re-entry (anti-churn). A close only
+    counts when the order was placed (a paper fill reports 'placed' too) or dry-run logged."""
+    return {(r.get("close") or "").upper() for r in exits
+            if r.get("close") and r.get("status") in ("placed", "dry_run")}
 
 
 def _entry_budget(mcp, acct, equity: float, verbose: bool) -> int | None:
@@ -348,14 +347,11 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
 
 
 def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
-    from ingestion import mcp_auth, options_data as od
+    from ingestion import options_data as od
     from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
-    import datetime as _dt
 
     try:
-        data = mcp._data(mcp._unwrap_tool_result(
-            mcp_auth.call_tool("get_option_positions", {"account_number": acct, "nonzero": True})))
-        rows = data.get("positions", []) if isinstance(data, dict) else []
+        rows = mcp.fetch_option_positions(acct)
     except Exception as e:  # noqa: BLE001
         print(f"agentic_options: exit read failed — {e}")
         return []
@@ -429,105 +425,25 @@ def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
     return results
 
 
-def _run_paper_exits(verbose: bool) -> list[dict]:
-    from storage import paper_book as pb
-    from ingestion import options_data as od
-    from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
-    results = []
-    for p in pb.get_open():
-        try:
-            from storage import peak_tracker
-            q = od.fetch_quote(p["option_id"]) or {}
-            mark = float(q.get("mark_price") or q.get("bid_price") or 0)
-            dte = od._dte(p.get("expiration")) if p.get("expiration") else None
-            peak = peak_tracker.update_peak(p["option_id"], mark)
-            action, reason = option_exit_decision(p["entry_price"], mark, dte, DEFAULT_EXIT, peak_mark=peak)
-            if verbose:
-                print(f"  [paper] {p['ticker']} entry {p['entry_price']} mark {mark} peak {peak} dte {dte} → {action} ({reason})")
-            if action == "close":
-                rec = pb.close_position(p["option_id"], exit_price=mark, reason=reason)
-                peak_tracker.clear_peak(p["option_id"])
-                if rec:
-                    results.append({"close": p["ticker"], "pnl": rec["pnl"], "reason": reason})
-        except Exception as e:  # noqa: BLE001
-            print(f"agentic_options: paper exit failed for {p.get('ticker')} — {e}")
-    return results
-
-
-def _run_paper_entries(verbose: bool, exclude=None) -> list[dict]:
-    from storage import paper_book as pb
-    from ingestion import options_data as od
-    from ingestion import account_reads as ar
-    from analysis.options_strategies import applicable_plans, size_contracts
-    from ingestion.signal_context import enrich
-
-    regime = _regime()
-    held = pb.open_tickers() | (exclude or set())  # exclude = closed this cycle (anti-churn)
-    results = []
-    for sig in _signals():
-        ticker = (sig.get("ticker") or "").upper()
-        if not ticker or ticker in held:
-            continue
-        cash = pb.cash()
-        if cash <= 0:
-            break
-        sig = enrich(sig)
-        plans = applicable_plans(sig, regime)
-        if not plans:
-            continue
-        spot = (ar.quotes([ticker]).get(ticker) or {}).get("price")
-        if not spot:
-            continue
-        plan, contract = None, None
-        for cand in plans:
-            c = od.select_contract(ticker, spot, cand["right"], cand["dte_min"],
-                                   cand["dte_max"], cand["otm_pct"], max_premium=cash)
-            if c:
-                plan, contract = cand, c
-                break
-        if not contract:
-            continue
-        n = size_contracts(plan["alloc_pct"], cash, contract["cost_1x"])
-        if n < 1:
-            continue
-        ok = pb.open_position({
-            "option_id": contract["instrument_id"], "ticker": ticker, "right": plan["right"],
-            "strike": contract["strike"], "expiration": contract["expiration"],
-            "strategy": plan["strategy"], "qty": n, "entry_price": round(contract["ask"], 2)})
-        if ok:
-            held.add(ticker)
-            results.append({"ticker": ticker, "strategy": plan["strategy"], "qty": n,
-                            "contract": f"{contract['strike']:g}{plan['right'][0].upper()} {contract['expiration']}",
-                            "cost": round(contract["ask"] * 100 * n, 2)})
-            if verbose:
-                print(f"  [paper] BUY {n} {ticker} {contract['strike']:g}{plan['right'][0].upper()} "
-                      f"@ {contract['ask']} = ${contract['ask']*100*n:.0f} ({plan['strategy']})")
-    return results
-
-
 def run_paper_agent(verbose: bool = True) -> dict:
-    """Simulation cycle — exits then entries against the paper book (storage.paper_book). No real
-    orders, no real money; uses LIVE option quotes so P&L is realistic. Does nothing in mode "off".
-    This is what the scheduler runs in PAPER mode, building a track record to judge the strategies."""
-    from ingestion import robinhood_mcp as mcp
-    if _halted():
-        return {"status": "halted", "reason": "agent mode is off"}
-    if not mcp.is_available():
-        return {"status": "skipped", "reason": "USE_MCP off"}
-    if verbose:
-        print("== Paper options agent ==\n-- paper exits --")
-    exits = _run_paper_exits(verbose)
-    if verbose:
-        print("-- paper entries --")
-    entries = _run_paper_entries(verbose, exclude=_closed_underlyings(exits, live=False))
-    return {"entries": entries, "exits": exits, "mode": "paper"}
+    """PAPER cycle — the SAME cycle as live (run_options_agent: routing, sizing, stock cap, PDT, shadow
+    judge, decision log, exits) against alerts.paper_broker.PaperBroker, which fills at live prices
+    into storage.paper_book instead of sending orders. Inside agent_mode.paper_scope(), so the agent's
+    state files and decision-log records are the paper ones. Market-hours only (fills need live prices)."""
+    import agent_mode
+    from alerts.paper_broker import PaperBroker
+    with agent_mode.paper_scope():
+        return {**run_options_agent(verbose, broker=PaperBroker()), "mode": "paper"}
 
 
-def run_options_agent(verbose: bool = True, entries: bool = True) -> dict:
+def run_options_agent(verbose: bool = True, entries: bool = True, broker=None) -> dict:
     """One full cycle: exits first (free capital), then entries. Honors agent mode "off", market
-    hours (for live placement), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}.
-    entries=False → exits only (paper mode keeps managing any real positions opened while live)."""
-    from ingestion import robinhood_mcp as mcp
+    hours (for live placement and paper fills), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}.
+    entries=False → exits only (paper mode keeps managing any real positions opened while live).
+    broker = the order/account backend: None → the real Robinhood MCP; a PaperBroker → paper fills."""
+    from ingestion import robinhood_mcp
+    mcp = broker or robinhood_mcp
+    paper = getattr(mcp, "PAPER", False)
 
     if _halted():
         return {"status": "halted", "reason": "agent mode is off"}
@@ -536,12 +452,13 @@ def run_options_agent(verbose: bool = True, entries: bool = True) -> dict:
     acct = mcp.agentic_account_number()
     if not acct:
         return {"status": "skipped", "reason": "no agentic account"}
-    if not config.DRY_RUN and not _market_open():
-        return {"status": "skipped", "reason": "market closed — options place in regular hours"}
+    if (paper or not config.DRY_RUN) and not _market_open():
+        return {"status": "skipped", "reason": "market closed — orders fill in regular hours"}
 
     bp = mcp.fetch_buying_power(acct) or 0.0
     if verbose:
-        print(f"== Autonomous options agent ==  DRY_RUN={config.DRY_RUN} | agentic BP=${bp:.2f}\n-- exits --")
+        label = "PAPER" if paper else f"DRY_RUN={config.DRY_RUN}"
+        print(f"== Autonomous agent ==  {label} | buying power ${bp:.2f}\n-- exits --")
     # Exits always run (token-free, capital-protecting) — options, then any share positions the agent
     # opened (it's a no-op without reads when the agent owns no shares).
     exits = _run_exits(mcp, acct, bp, verbose)
@@ -574,6 +491,6 @@ def run_options_agent(verbose: bool = True, entries: bool = True) -> dict:
     if verbose:
         print("-- entries --")
     # Budget is read AFTER exits so this cycle's same-day closes are already counted.
-    entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits, live=True),
+    entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits),
                            max_new=_entry_budget(mcp, acct, bp, verbose))
     return {"entries": entries, "exits": exits}
