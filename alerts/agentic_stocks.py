@@ -53,8 +53,11 @@ def budget_cap() -> float | None:
 
 
 def route(sig: dict) -> str | None:
-    """'option' | 'stock' | None (not tradeable by the agent)."""
+    """'option' | 'stock' | 'crypto' | None (not tradeable by the agent). Crypto buys go to the crypto leg
+    (alerts/agentic_crypto.py); crypto is never shorted and has no options here."""
     direction = (sig.get("direction") or "").lower()
+    if (sig.get("asset_type") or "").lower() == "crypto":
+        return "crypto" if direction == "buy" else None
     if direction == "short":
         return "option"                                   # bearish → puts (no share shorting)
     if direction != "buy":
@@ -75,12 +78,14 @@ def rank(signals: list[dict]) -> list[dict]:
     return sorted(signals, key=_conviction, reverse=True)
 
 
-def size_buys(signals: list[dict], buying_power: float) -> dict[str, float]:
-    """{TICKER: dollars} — the pyramid over every buy signal, on the agentic buying power."""
+def size_buys(signals: list[dict], buying_power: float, eligible=None) -> dict[str, float]:
+    """{TICKER: dollars} — the pyramid over every buy signal `eligible` accepts (default: share buys), on
+    the given buying power. The crypto leg passes its own filter + cap."""
     import math
     from calculator.portfolio import calculate_allocations
     from trading_guards import MAX_SINGLE_ORDER_FRACTION
-    buys = [dict(s, direction="buy") for s in signals if can_hold_shares(s) and s.get("ticker")]
+    eligible = eligible or can_hold_shares
+    buys = [dict(s, direction="buy") for s in signals if eligible(s) and s.get("ticker")]
     if not buys:
         return {}
     # The allocator rounds to the nearest cent, so a name sized exactly AT the 40% cap comes back a

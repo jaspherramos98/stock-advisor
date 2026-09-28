@@ -129,7 +129,8 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
                               flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_JUDGE +
                               AGENT_STOCK_BUDGET_CAP (max total $ entry cost the agent holds in shares;
-                              20.0 while the stock leg is new — set None to remove the cap) + ROBINHOOD_MCP_URL
+                              20.0 while the stock leg is new — set None to remove the cap) +
+                              AGENT_CRYPTO_BUDGET_CAP (same for coins; 10.0; 0 = crypto leg off) + ROBINHOOD_MCP_URL
                               (R25) — single source of truth. Whether the agent trades is NOT here: agent_mode.py
 agent_mode.py                 THE agent control: off | paper | live, in agent_mode.txt (gitignored), set only from
                               the Agent tab radio. No file → paper; garbled → off. Also `paper_scope()` (a
@@ -322,7 +323,14 @@ storage/decision_log.py       Agent decision log (judgment plan J0) — append-o
                               blocks trading. tests/conftest.py redirects it to a temp file for every test.
                               Agent tab: "🧾 Decision log" (live + paper by default; `ACTING_MODES`). The J4
                               scorecard counts live + paper verdicts (same live data, virtual fills).
-storage/agent_stock_book.py   Plan behind each agent share position (exit_condition, source, conviction, opened
+alerts/agentic_crypto.py      Crypto leg of the agent (K2) — `route` sends every crypto BUY here (never shorted, no
+                              options). Pyramid sizing on min(BP, config.AGENT_CRYPTO_BUDGET_CAP = $10; 0 = leg off)
+                              from the shared BP pool; dollar MARKET buys via `place_crypto_order` (preview-first) or
+                              the paper broker; plan in agent_stock_book leg="crypto"; exits = the stock rule
+                              (`decide_exit`) vs the plan with a peak keyed "cr:TICKER", market sell, no resting stops.
+                              NOT subject to PDT: crypto entries never spend the day-trade budget, and a spent budget
+                              only skips stock/option candidates. Own held set (SOL is a coin AND a stock).
+storage/agent_stock_book.py   Plan behind each agent share position (and coin: leg="crypto" → agent_crypto.json) (exit_condition, source, conviction, opened
                               date) → agent_stocks.json (gitignored). Written only on a placement (paper cycles write
                               paper_agent_stocks.json — as do peak_tracker/holding_review: agent_mode.state_file); S3's exit
                               pass reads it (no record → STOCK_EXIT_DEFAULT).
@@ -806,7 +814,8 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
   + agentic-enabled, $1 market buy previews clean with ZERO fee, `rhs_account_number` == `account_number`.
   **Robinhood crypto is market-maker priced: bid/ask spread ~1.9% (BTC/DOGE/ETH)** — a round trip costs ~2%
   before any move. No account holds crypto today, so the POSITION row shape is unverified (parsed defensively;
-  confirm on the first real position). The agent's crypto leg = K2/K3 (TODO). Dashboard Sync still skips crypto.
+  confirm on the first real position). The agent trades it via alerts/agentic_crypto.py (K2 #71); K3 (pipeline
+  crypto recs, off-hours crypto exits, dashboard rows) is TODO. Dashboard Sync still skips crypto.
 - **Equity order rules (verified S0, 2026-09-27):** fractional / `dollar_amount` orders are `market` +
   `regular_hours` only (dollar min $1); `review_equity_order` is advisory — problems come back as a soft
   `data.order_checks.alertType`, not an error, and it doesn't catch every illegal shape. Details: TODO "Stock

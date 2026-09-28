@@ -172,6 +172,9 @@ def plan_text(leg: str | None, stock_dollars: float | None) -> str:
                 "earnings/mean-reversion), sized by the playbook; falls back to shares if no affordable contract.")
     if leg == "stock":
         return f"RULES' PLAN: buy ${stock_dollars or 0:.2f} of shares (dollar-based market order)."
+    if leg == "crypto":
+        return (f"RULES' PLAN: buy ${stock_dollars or 0:.2f} of this coin (dollar-based market order; Robinhood "
+                "crypto carries a ~2% bid/ask spread, so the move must clear that before it pays).")
     return "RULES' PLAN: none."
 
 

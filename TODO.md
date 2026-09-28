@@ -2,6 +2,18 @@
 
 ## Done
 
+### 71. The agent trades crypto — crypto leg (agent crypto K2, 2026-09-28) ✅
+New `alerts/agentic_crypto.py`: `agentic_stocks.route` now sends every crypto BUY to a "crypto" leg (crypto shorts →
+not tradeable; a fired crypto watch → crypto too). Sizing = the pyramid on min(BP, new `config.AGENT_CRYPTO_BUDGET_CAP`
+= $10; 0 = leg off) from the shared BP pool (`size_buys` gained an `eligible` filter). Dollar market buys via
+`place_crypto_order` / the paper broker; plan recorded in `agent_stock_book` leg="crypto" (`agent_crypto.json`, paper
+twin in paper scope); exits = the stock rule vs the plan, peak key "cr:TICKER", market sell, no resting stops. PDT
+doesn't apply to crypto: crypto entries never spend the day-trade budget and a spent budget now SKIPS each stock/option
+candidate instead of ending the loop (so a later crypto candidate still enters). Own held set (SOL is a coin and a
+stock). Judge plan text states the ~2% spread. 156 tests (full paper crypto round trip past a spent PDT budget; cap 0
+= off; routing). Files: alerts/agentic_crypto.py (new), alerts/agentic_options.py, alerts/agentic_stocks.py,
+storage/agent_stock_book.py, analysis/agent_judge.py, config.py, CLAUDE.md, tests (+ conftest book isolation).
+
 ### 70. Crypto client for the Robinhood MCP (agent crypto K1, 2026-09-28) ✅
 User chose agent crypto trading (option 2) with read-only sync as the fallback. Read-only probes + previews first
 (nothing placed): the agentic account's crypto account is onboarded + agentic-enabled; a $1 market buy previews clean
@@ -1127,8 +1139,7 @@ Lowest core-fit; do last or not at all.
 
 ### Small follow-ups
 - **Crypto for the agent — IN PROGRESS (user, 2026-09-28: "do 2 [agent trades crypto] then switch to 1 [read-only
-  sync] if it doesn't work"):** K1 client ✅ #70. **K2** agent crypto leg — route crypto buys to a crypto leg with its
-  own `$` cap, pyramid sizing, plan book, `equity_exit_decision` exits, paper + live; PDT doesn't apply. **K3** crypto
+  sync] if it doesn't work"):** K1 client ✅ #70. K2 agent crypto leg ✅ #71. **K3** crypto
   recs in the morning pipeline (`--crypto`), an off-hours crypto EXIT pass (crypto trades 24/7; the agent runs market
   hours only), dashboard rows. Proven in Paper first — real crypto orders only once the user picks Live.
 
