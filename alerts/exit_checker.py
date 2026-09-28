@@ -17,6 +17,7 @@ from storage.positions import (
 # use them — those pull heavy optional deps not installed in CI, and keeping them out of
 # module scope lets the pure helpers here be imported/unit-tested without them.
 from market_hours import market_session
+from analysis.exit_rules import parse_exit_condition
 from config import CLAUDE_MODEL, CLAUDE_CHEAP_MODEL
 
 load_dotenv()
@@ -100,7 +101,6 @@ def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
       - Stop loss exits:  "stop loss at 4%", "stop loss at 4"
     Returns an alert dict if triggered, None otherwise.
     """
-    exit_cond     = position["exit_condition"].lower()
     effective_ref = get_effective_price(position)
 
     if effective_ref <= 0:
@@ -113,12 +113,13 @@ def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
     if position.get("direction") == "short":
         change_pct = -change_pct
 
-    import re
+    # Shared parser (analysis/exit_rules.py). The old inline regexes also matched the STOP % as a
+    # gain target, so "target 8% gain, stop loss at 4%" fired "gain target reached" at +4%.
+    rule = parse_exit_condition(position["exit_condition"])
 
     # --- Check stop loss first — most important ---
-    stop_match = re.search(r"stop\s*loss\s*at\s*(\d+(?:\.\d+)?)\s*%?", exit_cond)
-    if stop_match:
-        stop_pct = float(stop_match.group(1))
+    stop_pct = rule["stop_pct"]
+    if stop_pct is not None:
         if change_pct <= -(stop_pct - PCT_TOLERANCE):
             return {
                 "ticker":         position["ticker"],
@@ -135,21 +136,9 @@ def _check_percentage_exit(position: dict, current_price: float) -> dict | None:
                 "exit_condition": position["exit_condition"],
             }
 
-    # --- Check gain targets ---
-    # Looks for: "target 8% gain", "10% gain", "8% rise"
-    gain_matches = re.findall(
-        r"(?:target\s+)?(\d+(?:\.\d+)?)\s*%\s*(gain|rise|profit|up)?",
-        exit_cond
-    )
-    for match in gain_matches:
-        target_pct = float(match[0])
-        label      = match[1] if match[1] else "gain"
-
-        # Skip if this looks like a stop loss percentage we already handled
-        context = exit_cond[max(0, exit_cond.find(f"{target_pct}%") - 15): exit_cond.find(f"{target_pct}%") + 5]
-        if "stop" in context or "loss" in context:
-            continue
-
+    # --- Check gain target ---
+    target_pct = rule["target_pct"]
+    if target_pct is not None:
         if change_pct >= (target_pct - PCT_TOLERANCE):
             return {
                 "ticker":         position["ticker"],
@@ -173,8 +162,6 @@ def _check_time_exit(position: dict) -> dict | None:
     Uses entry_date (when user actually bought) if available,
     otherwise falls back to opened_at (when they added it to the app).
     """
-    exit_cond = position["exit_condition"].lower()
-
     # Use actual purchase date if available, otherwise app-add date
     entry_date_str = position.get("entry_date")
     if entry_date_str:
@@ -187,61 +174,21 @@ def _check_time_exit(position: dict) -> dict | None:
 
     days_open = (datetime.now() - start_date).days
 
-    import re
-
-    # Week-based exits
-    week_match = re.search(r"(\d+)\s*week", exit_cond)
-    if week_match:
-        target_days = int(week_match.group(1)) * 7
-        if days_open >= target_days:
-            return {
-                "ticker":         position["ticker"],
-                "alert_type":     "time_based",
-                "message":        (
-                    f"⏰ Time exit for {position['ticker']}. "
-                    f"Position has been open {days_open} days since purchase. "
-                    f"Time limit of {week_match.group(1)} week(s) reached. "
-                    f"Exit condition: {position['exit_condition']}"
-                ),
-                "days_open":      days_open,
-                "exit_condition": position["exit_condition"],
-            }
-
-    # Day-based exits
-    day_match = re.search(r"(\d+)\s*day", exit_cond)
-    if day_match:
-        target_days = int(day_match.group(1))
-        if days_open >= target_days:
-            return {
-                "ticker":         position["ticker"],
-                "alert_type":     "time_based",
-                "message":        (
-                    f"⏰ Time exit for {position['ticker']}. "
-                    f"Position has been open {days_open} days since purchase. "
-                    f"Time limit of {day_match.group(1)} day(s) reached. "
-                    f"Exit condition: {position['exit_condition']}"
-                ),
-                "days_open":      days_open,
-                "exit_condition": position["exit_condition"],
-            }
-
-    # Month-based exits
-    month_match = re.search(r"(\d+)\s*month", exit_cond)
-    if month_match:
-        target_days = int(month_match.group(1)) * 30
-        if days_open >= target_days:
-            return {
-                "ticker":         position["ticker"],
-                "alert_type":     "time_based",
-                "message":        (
-                    f"⏰ Time exit for {position['ticker']}. "
-                    f"Position has been open {days_open} days since purchase. "
-                    f"Time limit of {month_match.group(1)} month(s) reached. "
-                    f"Exit condition: {position['exit_condition']}"
-                ),
-                "days_open":      days_open,
-                "exit_condition": position["exit_condition"],
-            }
+    # Earliest week/day/month limit in the text (shared parser; weeks ×7, months ×30).
+    max_days = parse_exit_condition(position["exit_condition"])["max_days"]
+    if max_days is not None and days_open >= max_days:
+        return {
+            "ticker":         position["ticker"],
+            "alert_type":     "time_based",
+            "message":        (
+                f"⏰ Time exit for {position['ticker']}. "
+                f"Position has been open {days_open} days since purchase. "
+                f"Time limit of {max_days} day(s) reached. "
+                f"Exit condition: {position['exit_condition']}"
+            ),
+            "days_open":      days_open,
+            "exit_condition": position["exit_condition"],
+        }
 
     return None
 

@@ -97,7 +97,15 @@ storage/
   watchlist.py                Ticker watchlist
   sheets.py                   Google Sheets export/read
 alerts/snooze.py              Alert snooze/dismiss logic
-alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-aware (tags actionable_now)
+alerts/exit_checker.py        Stop/gain/time/event exit alerts — now session-aware (tags actionable_now).
+                              Parses exits via analysis/exit_rules.py (see below)
+analysis/exit_rules.py        ONE exit_condition parser (`parse_exit_condition` → target/stop/max_days) shared
+                              by exit_checker, scorecard.parse_band and dashboard `_stop_loss_price` (3 copies
+                              before). Target = explicit "target X%" else "X% gain/rise/…" — NEVER a bare %
+                              (analyst text has "avg daily range is 2.2%"); the stop phrase is blanked first.
+                              Also `equity_exit_decision` (stock analog of option_exit_decision): hard stop →
+                              ATR trail (after +1R, sell 1 stop-distance off the peak) → target → time limit;
+                              missing fields → STOCK_EXIT_DEFAULT (8% / 4% / 30d). Pure, unit-tested.
 alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a watch trigger price is hit;
                               sources = pinned watches + Argus chat's last suggestion + today's
                               recommendations (recs gated to the watchlist + fresh catalyst_date)
