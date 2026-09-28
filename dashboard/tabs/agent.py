@@ -354,6 +354,33 @@ def render() -> None:
             else:
                 st.caption("No decisions logged yet — they appear after the agent's next cycle with a signal.")
 
+        # --- judge scorecard (plan J4): does the shadow judge beat the rules? ---
+        with st.expander("⚖ Judge scorecard — is the shadow judge worth letting it decide?"):
+            st.caption("Scores every shadow verdict against what the market did next (1 and 5 trading days), "
+                       "plus realized P&L of trades the rules took, split by the judge's call. Nothing is "
+                       "concluded below 15 samples per group. Needs price history — computed on click.")
+            if st.button("Compute scorecard", key="agent_judge_scorecard"):
+                from analysis.judge_scorecard import scorecard as _scorecard
+                with st.spinner("Scoring verdicts against price history..."):
+                    st.session_state["judge_scorecard"] = _scorecard()
+            _sc = st.session_state.get("judge_scorecard")
+            if _sc:
+                (st.success if _sc["conclusion"].get("helps") else st.info)(_sc["conclusion"]["text"])
+                _rows = []
+                for _g, _label in (("enter", "Judge: ENTER"), ("not_enter", "Judge: WAIT/SKIP")):
+                    for _h, _s in _sc["entries"][_g].items():
+                        _rows.append({"Group": _label, "Horizon": f"{_h}d", "n": _s["n"],
+                                      "Avg return %": _s.get("avg"), "Win %": _s.get("win_rate")})
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                _t = _sc["taken"]
+                st.caption(f"Trades the rules took — judge said enter: n={_t['judge_enter']['n']} "
+                           f"avg {_t['judge_enter'].get('avg', '—')}% | said wait/skip: "
+                           f"n={_t['judge_wait_or_skip']['n']} avg {_t['judge_wait_or_skip'].get('avg', '—')}%. "
+                           f"Holding reviews (1d after) — "
+                           + " · ".join(f"{k}: n={v['n']} avg {v.get('avg', '—')}%" for k, v in _sc["reviews"].items())
+                           + f". Judge calls {_sc['judge_calls']}, cost \\${_sc['judge_cost_usd']:.2f}.")
+                st.caption(_sc["caveat"])
+
         # --- agentic equity positions + sync/refresh ---
         st.markdown("### 📈 Agentic positions")
         if st.button("🔄 Sync positions", use_container_width=True, disabled=not _acct,

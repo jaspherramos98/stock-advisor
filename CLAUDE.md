@@ -272,7 +272,16 @@ analysis/agent_judge.py       Entry judge (judgment plan J2): one Sonnet call pe
                               (can only SHRINK) and turns anything malformed/failed into an explicit skip.
                               config.AGENT_JUDGE = "shadow" (logged as `judge` on the decision record, changes
                               NOTHING) | "off". ~$0.012 + ~10s per call; cost → llm_budget; skipped at the credit
-                              reserve; loads .env itself. Tests stub `_call_model` (tests/conftest.py).
+                              reserve; loads .env itself. `reusable_verdict`: a ticker's verdict is reused for
+                              2h unless price moved >1.5% (a still-eligible candidate used to be re-judged every
+                              20-min cycle ≈ $0.23/day/ticker). Tests stub `_call_model` (tests/conftest.py).
+analysis/judge_scorecard.py   Judge scorecard (J4) — scores shadow verdicts vs what happened next: entry verdicts →
+                              underlying return 1/5 trading days later (sign-flipped for bearish), enter vs
+                              wait/skip; taken trades → realized P&L by the judge's call; reviews → move after.
+                              One sample per ticker/day (reused verdicts excluded). `conclusion()` = J5 input:
+                              needs ≥15 per group; "helps" = enter beats wait/skip by ≥1 pp at 5d and isn't worse
+                              on taken trades. `scripts/judge_review.py` prints it; Agent tab "⚖ Judge scorecard".
+                              Proxy caveat: underlying return ≠ an option trade's P&L.
 analysis/holding_review.py    Event-driven holding review (J3) — on the HOLD path of both exit passes, a position is
                               reviewed only when an EVENT fires: an unseen Finnhub headline (2h per-ticker cooldown —
                               roundup pieces get tagged to big names; headlines in between batch into the next
