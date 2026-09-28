@@ -14,6 +14,7 @@ load_dotenv()
 # fattest part of the input). 15 is still a full read for a personal tool. The per-
 # asset-type slot split in _deduplicate_by_asset_type scales off this.
 MAX_STORIES = 15
+ADDON_STORIES = 5   # extra story slots per additional asset class (ETFs / crypto) — see _deduplicate_by_asset_type
 
 
 def _deduplicate(items: list[dict], max_stories: int = MAX_STORIES) -> list[dict]:
@@ -48,30 +49,19 @@ def _deduplicate_by_asset_type(
     Deduplicates while reserving slots for each enabled asset type.
     Prevents high-scoring stock news from crowding out ETF/crypto news.
 
-    Slot allocation out of MAX_STORIES (25):
-    - Stocks only:              25 stock slots
-    - Stocks + ETFs:            17 stock, 8 ETF
-    - Stocks + Crypto:          17 stock, 8 crypto
-    - Stocks + ETFs + Crypto:   13 stock, 6 ETF, 6 crypto
+    Slot allocation: the PRIMARY class (stocks when on, else the first enabled) keeps all MAX_STORIES (15)
+    slots and each additional class ADDS its own ADDON_STORIES (5), so turning crypto on never costs stock
+    coverage and adds a fixed, small slice of tokens:
+    - Stocks only:              15 stock
+    - Stocks + Crypto:          15 stock, 5 crypto
+    - Stocks + ETFs + Crypto:   15 stock, 5 ETF, 5 crypto
+    (The old fixed 17/8 and 13/6/6 splits assumed a 25-story cap — after R22 cut MAX_STORIES to 15, enabling a
+    second class silently raised the run from 15 to 25 stories.)
     """
-    enabled = sum([include_stocks, include_etfs, include_crypto])
-
-    if enabled == 1:
-        slots = {
-            "stocks": MAX_STORIES if include_stocks else 0,
-            "etfs":   MAX_STORIES if include_etfs   else 0,
-            "crypto": MAX_STORIES if include_crypto  else 0,
-        }
-    elif enabled == 2:
-        major = 17
-        minor = 8
-        slots = {
-            "stocks": major if include_stocks else 0,
-            "etfs":   (minor if include_etfs else 0) if include_stocks else major,
-            "crypto": (minor if include_crypto else 0) if include_stocks else major,
-        }
-    else:
-        slots = {"stocks": 13, "etfs": 6, "crypto": 6}
+    enabled = [k for k, on in (("stocks", include_stocks), ("etfs", include_etfs), ("crypto", include_crypto)) if on]
+    slots = {k: 0 for k in ("stocks", "etfs", "crypto")}
+    for i, k in enumerate(enabled):
+        slots[k] = MAX_STORIES if i == 0 else ADDON_STORIES
 
     def get_asset_type(item: dict) -> str:
         source_type = item.get("source_type", "")

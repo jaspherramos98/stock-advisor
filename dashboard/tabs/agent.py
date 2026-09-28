@@ -5,13 +5,13 @@ Extracted verbatim from dashboard/app.py (tab 6); rendered via render().
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from dashboard.common import (_cached_prices, _c_agentic_bp, _c_agentic_equity, _c_day_trade_budget, _c_option_orders,
-                              _c_option_positions, _c_option_quote)
+from dashboard.common import (_cached_prices, _c_agentic_bp, _c_agentic_crypto, _c_agentic_equity, _c_crypto_quotes,
+                              _c_day_trade_budget, _c_option_orders, _c_option_positions, _c_option_quote)
 
 
 def render() -> None:
     st.subheader("🤖 Autonomous agent")
-    st.caption("Trades options and shares on the **isolated Agentic pilot** account only (never your main "
+    st.caption("Trades options, shares and crypto on the **isolated Agentic pilot** account only (never your main "
                "book). Set its mode, see what it holds, override any position. Disposable-capital experiment: "
                "high-variance / likely -EV.")
 
@@ -49,7 +49,8 @@ def render() -> None:
             else:
                 _mode.set_mode(_pick)
                 st.rerun()
-        st.caption("Takes effect on the next scheduled cycle (every 20 min, market hours). Paper still exits "
+        st.caption("Takes effect on the next scheduled cycle (every 20 min, market hours; crypto exits also run "
+                   "off-hours). Paper still exits "
                    "any real positions left from Live. Off stops everything, exits included — resting stops "
                    "on shares still protect at Robinhood.")
 
@@ -69,9 +70,9 @@ def render() -> None:
 
         # --- Paper trading: the SAME agent code as live, fills are virtual ---
         st.markdown("### 📊 Paper trading — simulated, zero money at risk")
-        st.caption("In Paper mode the scheduler runs the exact live agent (options AND shares, the \\$20 stock cap, "
-                   "PDT, the shadow judge, the decision log) but fills orders here at live prices instead of "
-                   "sending them. Shares fill at the last price; options at the ask/bid the agent sends.")
+        st.caption("In Paper mode the scheduler runs the exact live agent (options, shares and crypto, the \\$20 "
+                   "stock and \\$10 crypto caps, PDT, the shadow judge, the decision log) but fills orders here at "
+                   "live prices instead of sending them — buys at the ask, sells at the bid.")
         _book = {}
         try:
             from storage import paper_book as _pb
@@ -83,7 +84,10 @@ def render() -> None:
             _held_sh = _book["shares"]
             _quotes = _cached_prices(tuple(sorted(_held_sh))) if _held_sh else {}
             _px = {t: (_quotes.get(t) or {}).get("price") for t in _held_sh}
-            _ps = _pb.summarize(_book, _marks, _px)
+            _held_cr = _book["crypto"]
+            _cq = _c_crypto_quotes(tuple(sorted(_held_cr))) if _held_cr else {}
+            _cpx = {t: (_cq.get(t) or {}).get("price") for t in _held_cr}
+            _ps = _pb.summarize(_book, _marks, _px, _cpx)
 
             pm1, pm2, pm3, pm4 = st.columns(4)
             pm1.metric("Paper equity", f"\\${_ps['equity']:,.2f}",
@@ -102,6 +106,10 @@ def render() -> None:
                        "Entry": f"${h['avg_cost']:.2f}", "Now": f"${_px.get(t) or h['avg_cost']:.2f}",
                        "Unreal %": f"{((_px.get(t) or h['avg_cost']) - h['avg_cost']) / h['avg_cost'] * 100:+.1f}%"}
                       for t, h in _held_sh.items()]
+            _rows += [{"Ticker": f"{t} (crypto)", "Holding": f"{h['shares']:.8g} (${h['cost']:.2f})",
+                       "Entry": f"${h['avg_cost']:,.4g}", "Now": f"${_cpx.get(t) or h['avg_cost']:,.4g}",
+                       "Unreal %": f"{((_cpx.get(t) or h['avg_cost']) - h['avg_cost']) / h['avg_cost'] * 100:+.1f}%"}
+                      for t, h in _held_cr.items()]
             if _rows:
                 st.markdown("**Open (paper)**")
                 st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
@@ -128,7 +136,7 @@ def render() -> None:
         except Exception as _e:  # noqa: BLE001
             st.caption(f"Paper book unavailable: {_e}")
 
-        # --- REAL positions on the agentic account (shares + options), each with a manual override ---
+        # --- REAL positions on the agentic account (shares, crypto, options), each with a manual override ---
         st.markdown("### 💼 Real positions — agentic account")
         st.caption("What the agent holds with real money (refreshes every 30s). Sell now / Close now override "
                    "the agent immediately; the agent's own call is shown per row.")
@@ -176,6 +184,53 @@ def render() -> None:
                     st.caption(f"{_t}: render error — {_e}")
             st.caption("Share exits: the agent re-checks every cycle; the whole-share part of an agent "
                        "position also rests on a GTC stop at its plan's stop (protects while the PC is off).")
+        else:
+            st.caption("None.")
+
+        st.markdown("**Crypto**")
+        _crp = []
+        if _acct:
+            try:
+                _crp = _c_agentic_crypto(_acct)
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Could not read agentic crypto positions: {_e}")
+        if _crp:
+            from alerts import agentic_crypto as _acr
+            from alerts.agentic_stocks import decide_exit as _decide
+            from storage import agent_stock_book as _abook
+            from storage.peak_tracker import get_peak as _get_peak
+            _cplans = _abook.all_entries(leg="crypto")
+            for _cp in _crp:
+                _t = (_cp.get("ticker") or "").upper()
+                _plan = _cplans.get(_t)
+                try:
+                    if _plan:
+                        _cact, _cwhy = _decide(_cp, _plan, _get_peak(_acr.peak_key(_t)))
+                        _agent = (f"agent-managed · plan *{_plan.get('exit_condition') or 'default'}* · "
+                                  f"opened {_plan.get('opened')} · agent: **{_cact}** ({_cwhy})")
+                    else:
+                        _agent = "not agent-managed (bought by hand — the agent never touches it)"
+                    cr1, cr2 = st.columns([4, 1], vertical_alignment="center")
+                    with cr1:
+                        st.markdown(f"**{_t}** {_cp['shares']:.8g} · avg \\${_cp['avg_cost']:,.4g} → "
+                                    f"\\${_cp['current_price']:,.4g} (**{_cp['pnl_pct']:+.1f}%**, "
+                                    f"\\${_cp['equity']:.2f}) · {_agent}")
+                    with cr2:
+                        if st.button("Sell now", key=f"agent_sell_cr_{_t}", use_container_width=True):
+                            _old = _cfg.DRY_RUN
+                            _cfg.DRY_RUN = False   # a manual override click IS the confirmation
+                            try:
+                                _r = _acr.close_position(_amcp, _acct, _cp, _agbp or 0,
+                                                         "manual override sell (dashboard)")
+                            finally:
+                                _cfg.DRY_RUN = _old
+                            st.success(f"Sell {_r['status']}: {_r.get('detail') or _r.get('reason')}")
+                            _c_agentic_crypto.clear()
+                            st.rerun()
+                except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
+                    st.caption(f"{_t}: render error — {_e}")
+            st.caption("Crypto exits: the agent re-checks every cycle, and every 20 min off-hours too (crypto "
+                       "trades 24/7). No resting stops. Robinhood's crypto spread is ~2% per round trip.")
         else:
             st.caption("None.")
 

@@ -8,8 +8,10 @@ What it does is decided by the agent MODE (agent_mode.py — set from the dashbo
   - off   → nothing (not even exits).
   - paper → a paper-book cycle (no money), plus live EXITS for any real positions the agent still
             holds from an earlier live period (so switching to paper never strands them).
-  - live  → a real cycle: exits, then options + share entries (shares capped by
-            config.AGENT_STOCK_BUDGET_CAP).
+  - live  → a real cycle: exits, then options + share + crypto entries (shares/crypto capped by
+            config.AGENT_STOCK_BUDGET_CAP / AGENT_CRYPTO_BUDGET_CAP).
+Outside market hours (crypto trades 24/7): only the crypto EXIT pass runs — live, plus paper in paper mode.
+It makes no calls at all while the agent holds no coins.
 Credit: entries also halt when the LLM ledger hits its reserve (llm_budget).
 
 Logs actions to agent_scheduler.log (UTF-8). Routine "nothing happened" cycles log one heartbeat
@@ -27,7 +29,7 @@ sys.path.insert(0, _REPO)
 
 import agent_mode
 import config
-from alerts.agentic_options import run_options_agent, run_paper_agent
+from alerts.agentic_options import run_crypto_exits, run_options_agent, run_paper_agent, run_paper_crypto_exits
 
 _LOG = os.path.join(_REPO, "agent_scheduler.log")
 
@@ -71,7 +73,7 @@ def _report(tag: str, out: dict) -> None:
     halted = out.get("entries_halted")
     if entries or exits or halted:
         _log(f"[{tag}] entries={entries} exits={exits}" + (f" [{halted}]" if halted else ""))
-    elif tag != "LIVE-EXITS":   # the paper-mode exit pass is silent unless it did something
+    elif not tag.endswith("EXITS"):   # exit-only passes are silent unless they did something
         _log(f"[{tag}] market open — no actionable signal this cycle")
 
 
@@ -81,12 +83,16 @@ def main() -> int:
     if mode == "off":
         _log(f"[{tag}] agent is off — skip")
         return 0
-    # Off-hours we don't run (prices move in-session) — just a one-line heartbeat.
+    config.DRY_RUN = False   # this process only exists to run the cycle the mode asked for
+    # Off-hours: stocks/options don't trade, but crypto does 24/7 — run ONLY the crypto exit pass (free when the
+    # agent holds no coins), then a one-line heartbeat.
     if not _market_open():
-        _log(f"[{tag}] heartbeat — market closed, skip")
+        _report("LIVE-CRYPTO-EXITS", run_crypto_exits(verbose=False))
+        if mode == "paper":
+            _report("PAPER-CRYPTO-EXITS", run_paper_crypto_exits(verbose=False))
+        _log(f"[{tag}] heartbeat — market closed (crypto exits only)")
         return 0
 
-    config.DRY_RUN = False   # this process only exists to run the cycle the mode asked for
     if mode == "live":
         _report(tag, run_options_agent(verbose=False))
     else:

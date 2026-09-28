@@ -345,18 +345,19 @@ scripts/agentic_stops.py      Run agentic_stops.sync_protective_stops() (DRY_RUN
 scripts/mcp_login.py          Interactive MCP login (R25) — browser auth, stores tokens, prints the tool
                               list + schemas. Run once, and again only when the refresh token expires
                               (reads raise a clean NotAuthenticated). Needs `pip install "mcp[cli]"`.
-scripts/run_agent.py          Scheduled agent runner (Phase 2) — market-hours gated; does what agent_mode says:
-                              off → nothing; paper → live exits-only pass + run_paper_agent; live →
-                              run_options_agent. Honors the credit ledger; logs to agent_scheduler.log.
+scripts/run_agent.py          Scheduled agent runner (Phase 2) — does what agent_mode says: off → nothing; paper →
+                              live exits-only pass + run_paper_agent; live → run_options_agent. Outside market
+                              hours only the crypto exit pass runs (`run_crypto_exits`, + paper's in paper mode;
+                              crypto trades 24/7). Honors the credit ledger; logs to agent_scheduler.log.
 run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
                               it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs —
                               REGISTERED (verified 2026-09-28). If ever deleted, re-register
                               (user action, real money in live mode):
-                              schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>
-un_agent_silent.vbs\""
+                              schtasks /Create /TN "Argus Options Agent" /TR
+                              "wscript.exe D:\CS\Projects\stock-advisor\run_agent_silent.vbs"
                               /SC MINUTE /MO 20 /F. Manage: schtasks /Query|/Run|/Change|/Delete /TN "…".
 market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
-                              `scripts/run_pipeline.py` (headless; writes today's cache); output appended to
+                              `scripts/run_pipeline.py --crypto` (headless; writes today's cache); output appended to
                               market_open.log (gitignored). It does NOT touch the agent mode (it used to arm
                               live every morning — removed 2026-09-28 so only the user switches real money on).
                               It used to call main.py, which prompts for a budget (hung forever hidden) and
@@ -391,7 +392,8 @@ pipeline_cache.json           Today's recommendations cache (written only via st
 ### Pipeline Flow
 1. `main.py` runs parallel ingestion via `ThreadPoolExecutor` (max_workers=5)
 2. `validation/scorer.py` scores each item by source weight
-3. Top 15 deduplicated stories (`MAX_STORIES`, analysis/claude_analyst.py) sent to Claude, plus per-ticker TECHNICAL INDICATORS
+3. Top 15 deduplicated stories (`MAX_STORIES`, analysis/claude_analyst.py; each extra asset class — ETFs, crypto —
+   ADDS `ADDON_STORIES` = 5, never taking stock slots) sent to Claude, plus per-ticker TECHNICAL INDICATORS
    (RSI/MACD/SMA50-200/52w/volume from ~1y of prices) and FUNDAMENTALS (valuation,
    growth, margins, debt, FCF) as confirmation/quality context, and the user's OPEN
    POSITIONS to exclude. Technicals/fundamentals are context the analyst reasons over —
@@ -814,8 +816,10 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
   + agentic-enabled, $1 market buy previews clean with ZERO fee, `rhs_account_number` == `account_number`.
   **Robinhood crypto is market-maker priced: bid/ask spread ~1.9% (BTC/DOGE/ETH)** — a round trip costs ~2%
   before any move. No account holds crypto today, so the POSITION row shape is unverified (parsed defensively;
-  confirm on the first real position). The agent trades it via alerts/agentic_crypto.py (K2 #71); K3 (pipeline
-  crypto recs, off-hours crypto exits, dashboard rows) is TODO. Dashboard Sync still skips crypto.
+  confirm on the first real position). The agent trades it via alerts/agentic_crypto.py (K2 #71). K3 (#72): the
+  6:30 pipeline runs with `--crypto` (+5 crypto stories on top of the 15 stock ones); off-hours the scheduler runs
+  only `run_crypto_exits` (free with no coins held); the Agent tab shows paper + real crypto with Sell now. The
+  sidebar Sync still skips crypto (the main account holds none today).
 - **Equity order rules (verified S0, 2026-09-27):** fractional / `dollar_amount` orders are `market` +
   `regular_hours` only (dollar min $1); `review_equity_order` is advisory — problems come back as a soft
   `data.order_checks.alertType`, not an error, and it doesn't catch every illegal shape. Details: TODO "Stock

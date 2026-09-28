@@ -1539,6 +1539,47 @@ def test_agent_mode_file(monkeypatch, tmp_path):
         agent_mode.set_mode("armed")
 
 
+def test_story_slots_keep_stocks_and_add_small_slices():
+    from analysis import claude_analyst as ca
+    items = ([{"title": f"s{i}", "source_type": "finnhub_company", "confidence_score": 0.9} for i in range(30)]
+             + [{"title": f"c{i}", "source_type": "crypto_rss", "confidence_score": 0.5} for i in range(30)])
+
+    def count(**flags):
+        out = ca._deduplicate_by_asset_type(items, **flags)
+        return (sum(1 for x in out if x["title"].startswith("s")), sum(1 for x in out if x["title"].startswith("c")))
+    assert count(include_stocks=True) == (15, 0)
+    assert count(include_stocks=True, include_crypto=True) == (15, 5)       # was 17 + 8 = 25 stories
+    assert count(include_stocks=False, include_crypto=True) == (0, 15)
+
+
+def test_run_agent_off_hours_runs_crypto_exits_only(monkeypatch, tmp_path):
+    import agent_mode
+    import config
+    from scripts import run_agent as ra
+    calls = []
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    monkeypatch.setattr(agent_mode, "MODE_FILE", str(tmp_path / "m.txt"))
+    monkeypatch.setattr(ra, "_LOG", str(tmp_path / "log.txt"))
+    monkeypatch.setattr(ra, "_market_open", lambda: False)
+    for name in ("run_options_agent", "run_paper_agent"):
+        monkeypatch.setattr(ra, name, lambda *a, _n=name, **k: calls.append(_n) or {})
+    monkeypatch.setattr(ra, "run_crypto_exits", lambda verbose: calls.append("crypto-live") or {})
+    monkeypatch.setattr(ra, "run_paper_crypto_exits", lambda verbose: calls.append("crypto-paper") or {})
+    for mode in ("off", "paper", "live"):
+        agent_mode.set_mode(mode)
+        ra.main()
+    assert calls == ["crypto-live", "crypto-paper", "crypto-live"]            # never a full cycle off-hours
+
+
+def test_crypto_exit_pass_is_free_without_coins(monkeypatch):
+    from alerts import agentic_options as ao
+
+    class Boom:
+        def __getattr__(self, name):
+            raise AssertionError(f"touched the broker ({name}) with no coins held")
+    assert ao.run_crypto_exits(verbose=False, broker=Boom()) == {"entries": [], "exits": []}
+
+
 def test_run_agent_follows_mode(monkeypatch, tmp_path):
     import agent_mode
     from scripts import run_agent as ra
