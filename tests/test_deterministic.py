@@ -1710,6 +1710,71 @@ def test_holding_review_fires_judges_and_logs(monkeypatch):
     assert review(pos, holdings={"F"}, regime={}) is None                  # same headline → no second review
 
 
+def test_judge_verdict_reuse():
+    from datetime import datetime, timedelta
+    from analysis.agent_judge import reusable_verdict
+    now = datetime(2026, 9, 28, 11, 0)
+    rec = {"id": "r1", "kind": "entry", "ticker": "LLY", "ts": (now - timedelta(minutes=40)).isoformat(),
+           "judge": {"decision": "wait", "size_multiplier": 0.0, "cost_usd": 0.012},
+           "context": {"price": {"now": 100.0}}}
+    got = reusable_verdict([rec], "LLY", 101.0, now)
+    assert got["decision"] == "wait" and got["reused_from"] == "r1" and got["cost_usd"] == 0.0
+    assert reusable_verdict([rec], "LLY", 102.0, now) is None                  # moved 2% > 1.5% → re-judge
+    assert reusable_verdict([rec], "LLY", 100.0, now + timedelta(hours=2)) is None   # too old
+    assert reusable_verdict([rec], "AMD", 100.0, now) is None
+    err = dict(rec, judge={"decision": "skip", "error": "judge call failed"})
+    assert reusable_verdict([err], "LLY", 100.0, now) is None                  # never reuse a failure
+
+
+def _closes(start_day, prices):
+    from datetime import date, timedelta
+    d0 = date.fromisoformat(start_day)
+    return [(d0 + timedelta(days=i), p) for i, p in enumerate(prices)]
+
+
+def test_forward_return_and_dedupe():
+    from datetime import date
+    from analysis.judge_scorecard import forward_return, first_per_day
+    closes = _closes("2026-09-28", [100, 102, 99, 105, 104, 110])
+    assert forward_return(closes, date(2026, 9, 28), 100.0, 1) == 2.0
+    assert forward_return(closes, date(2026, 9, 28), 100.0, 5) == 10.0
+    assert forward_return(closes, date(2026, 9, 28), None, 1) == 2.0          # falls back to that day's close
+    assert forward_return(closes, date(2026, 10, 2), 104.0, 5) is None         # not matured yet
+    recs = [{"kind": "entry", "ticker": "A", "ts": "2026-09-28T09:00", "judge": {"decision": "skip"}},
+            {"kind": "entry", "ticker": "A", "ts": "2026-09-28T09:20", "judge": {"decision": "enter"}},
+            {"kind": "entry", "ticker": "A", "ts": "2026-09-28T09:40",
+             "judge": {"decision": "skip", "reused_from": "x"}},
+            {"kind": "entry", "ticker": "B", "ts": "2026-09-28T09:00", "judge": {"decision": "skip", "error": "e"}}]
+    assert [r["ts"] for r in first_per_day(recs, "entry")] == ["2026-09-28T09:00"]
+
+
+def test_judge_scorecard_scoring_and_conclusion():
+    from analysis import judge_scorecard as js
+    closes = {"UP": _closes("2026-09-01", [100 + i for i in range(40)]),     # rises every day
+              "DN": _closes("2026-09-01", [100 - i for i in range(40)])}     # falls every day
+
+    def rec(t, day, decision, direction="buy"):
+        return {"kind": "entry", "ticker": t, "ts": f"2026-09-{day:02d}T10:00", "inputs": {"direction": direction},
+                "judge": {"decision": decision, "size_multiplier": 1.0 if decision == "enter" else 0.0}}
+    recs = [rec("UP", d, "enter") for d in range(1, 16)] + [rec("DN", d, "skip") for d in range(1, 16)]
+    s = js.entry_scores(recs, lambda t: closes[t])
+    assert s["enter"][5]["n"] == 15 and s["enter"][5]["avg"] > 0 and s["not_enter"][5]["avg"] < 0
+    c = js.conclusion(s, {"judge_enter": {"n": 0}, "judge_wait_or_skip": {"n": 0}})
+    assert c["ready"] and c["helps"] and c["edge_pp"] > js.HELPS_MARGIN_PP
+    # a bearish idea the judge entered is scored on the DROP (sign flipped)
+    short = js.entry_scores([rec("DN", 1, "enter", "short")], lambda t: closes[t])
+    assert short["enter"][1]["avg"] > 0
+    thin = js.conclusion(js.entry_scores(recs[:3], lambda t: closes[t]), {})
+    assert not thin["ready"] and "Not enough data" in thin["text"]
+    taken = js.taken_trade_scores([
+        {"id": "e1", "kind": "entry", "action": "placed", "judge": {"decision": "skip"}},
+        {"id": "x1", "kind": "exit", "action": "placed", "entry_id": "e1", "pnl_pct": -12.0}])
+    assert taken["judge_wait_or_skip"] == {"n": 1, "avg": -12.0, "win_rate": 0}
+    rv = js.review_scores([{"kind": "review", "ticker": "DN", "ts": "2026-09-02T10:00",
+                            "judge": {"action": "sell"}}], lambda t: closes[t])
+    assert rv["sell"]["n"] == 1 and rv["sell"]["avg"] < 0                      # a good sell precedes a drop
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 

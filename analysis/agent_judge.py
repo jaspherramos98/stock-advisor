@@ -194,11 +194,50 @@ def _call_model(briefing: str, plan: str, system: str = SYSTEM, tool: dict = TOO
     return None, usage
 
 
+REUSE_MINUTES = 120
+REUSE_MAX_MOVE_PCT = 1.5
+
+
+def reusable_verdict(records: list[dict], ticker: str, price: float | None, now) -> dict | None:
+    """Pure: the last good entry verdict for `ticker` if it's recent enough to reuse — within
+    REUSE_MINUTES and the price hasn't moved more than REUSE_MAX_MOVE_PCT since. A candidate that stays
+    eligible (a fired watch with the stock leg off, a buy with no affordable contract) otherwise got
+    re-judged every 20-min cycle: ~$0.23/day per ticker, and 19 duplicate samples in the scorecard."""
+    from datetime import datetime, timedelta
+    for r in reversed(records):
+        if r.get("kind") != "entry" or r.get("ticker") != ticker:
+            continue
+        v = r.get("judge") or {}
+        if not v.get("decision") or v.get("error"):
+            continue
+        try:
+            age = now - datetime.fromisoformat(r["ts"])
+        except (KeyError, ValueError, TypeError):
+            return None
+        if age > timedelta(minutes=REUSE_MINUTES):
+            return None
+        then = (((r.get("context") or {}).get("price")) or {}).get("now")
+        if price and then and abs(price - then) / then * 100 > REUSE_MAX_MOVE_PCT:
+            return None
+        return {**v, "reused_from": r.get("id"), "cost_usd": 0.0}
+    return None
+
+
 def judge_entry(ctx: dict, leg: str | None, stock_dollars: float | None = None) -> dict | None:
     """Verdict for one candidate, or None when the judge is off / has no briefing / no credit.
+    Reuses a recent verdict for the same ticker (reusable_verdict) instead of paying again.
     Never raises: an API failure returns a skip verdict tagged with the error."""
     if mode() == "off" or not ctx or "signal" not in ctx:
         return None
+    try:
+        from datetime import datetime
+        from storage import decision_log
+        cached = reusable_verdict(decision_log.read(mode=decision_log._mode()), ctx.get("ticker"),
+                                  (ctx.get("price") or {}).get("now"), datetime.now())
+        if cached:
+            return cached
+    except Exception as e:  # noqa: BLE001 — a cache miss just means a fresh call
+        print(f"agent_judge: verdict reuse check failed — {e}")
     import llm_budget
     from analysis.agent_context import render
     if not llm_budget.can_spend():

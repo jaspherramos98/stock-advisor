@@ -2,6 +2,22 @@
 
 ## Done
 
+### 62. Judge scorecard + verdict reuse (judgment plan J4 tooling, 2026-09-28) ✅
+J4 can't conclude yet (no shadow data — the judge went live today on a no-candidate day), so this builds the
+scoring so the J5 call rests on numbers. New `analysis/judge_scorecard.py`: entry verdicts → the underlying's return
+1/5 trading days after the verdict (sign-flipped for bearish), grouped enter vs wait/skip — counts every judged
+candidate, traded or not, so data accrues faster than round-trips; taken trades → realized P&L split by the
+judge's call; holding reviews → the move after sell/tighten vs keep. One sample per ticker per day; reused verdicts
+excluded. `conclusion()`: needs ≥15 per group; "helps" = enter beats wait/skip by ≥1 pp at 5 days and isn't worse
+on taken trades (the user decides J5). Caveat printed: the underlying's return is a proxy, not an option's P&L.
+`scripts/judge_review.py` (CLI) + Agent tab "⚖ Judge scorecard" (computed on click). Real run: 0 samples →
+"Not enough data … keep the judge in shadow".
+**Cost leak fixed (J2/J2b):** a candidate that stays eligible (a fired watch with the stock leg off, a buy with no
+affordable contract) was re-judged EVERY 20-min cycle (~$0.23/day per ticker, and 19 duplicate samples). New
+`agent_judge.reusable_verdict`: reuse the ticker's last good verdict for 2h unless price moved >1.5%.
++4 tests (144). Files: analysis/judge_scorecard.py (new), scripts/judge_review.py (new), analysis/agent_judge.py,
+dashboard/tabs/agent.py, tests.
+
 ### 61. Event-driven holding review, shadow (judgment plan J3, 2026-09-28) ✅
 New `analysis/holding_review.py`: on the HOLD path of both exit passes (option `_run_exits`, stock `run_exits`), a
 held position is reviewed only when an event fires — an unseen Finnhub headline, a move ≥1.5× its average daily
@@ -1039,8 +1055,9 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
   `llm_budget.record_cost` (only chat + the judge do), so "LLM credit left" overstates what's left.
 - ~~**J3 holding review**~~ — done #61 (the "invalidation level hit" trigger was dropped: the entry judge's
   invalidation is free text, not a parseable level — the review instead SHOWS it to the judge on every event).
-- **J4 shadow (2–4 weeks)** — judge runs and logs; mechanical rules still trade. Dashboard shows each decision +
-  reasoning. Review: P&L of trades the judge would have skipped vs taken; exits it would have taken early.
+- **J4 shadow (2–4 weeks from 2026-09-28)** — scoring tools BUILT (#62: `analysis/judge_scorecard.py`,
+  `scripts/judge_review.py`, Agent tab scorecard). Remaining: accumulate ≥15 judged 'enter' + ≥15 'wait/skip' with
+  5-day outcomes, then read the conclusion and decide J5. Data only accrues on days with candidates.
 - **J5 binding** — only if J4 shows the judge helps; its skips/shrinks/exits become real. Kill switch = config flag.
 - **J6 own ideas** — scanner candidates (`create_scan`/`run_scan`/`get_scanner_*`, real data) through the SAME judge
   + shadow, tagged `source: agent-scan` in the log so their results are measured separately from pipeline ideas.
