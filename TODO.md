@@ -2,6 +2,14 @@
 
 ## Done
 
+### 63. short_dte_momentum disabled until the judge is proven (2026-09-28) ✅
+The regime-bucket fix (#58) made `short_dte_momentum` reachable for the first time: weekly OTM options at 100% of
+available buying power on conviction ≥80 in a risk-on tape. User chose to keep it OFF until the shadow judge is
+proven (J4 → J5). New `options_strategies.DISABLED_STRATEGIES = {"short_dte_momentum"}`; `applicable_plans` skips
+disabled playbooks, so a hot risk-on signal falls through to `catalyst_momentum`. The playbook code is untouched —
+re-enabling = deleting the name. Test covers both disabled and re-enabled behavior (144). Files:
+analysis/options_strategies.py, tests.
+
 ### 62. Judge scorecard + verdict reuse (judgment plan J4 tooling, 2026-09-28) ✅
 J4 can't conclude yet (no shadow data — the judge went live today on a no-candidate day), so this builds the
 scoring so the J5 call rests on numbers. New `analysis/judge_scorecard.py`: entry verdicts → the underlying's return
@@ -1059,6 +1067,7 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
   `scripts/judge_review.py`, Agent tab scorecard). Remaining: accumulate ≥15 judged 'enter' + ≥15 'wait/skip' with
   5-day outcomes, then read the conclusion and decide J5. Data only accrues on days with candidates.
 - **J5 binding** — only if J4 shows the judge helps; its skips/shrinks/exits become real. Kill switch = config flag.
+  Also then decide whether to re-enable `short_dte_momentum` (disabled #63 until the judge is proven).
 - **J6 own ideas** — scanner candidates (`create_scan`/`run_scan`/`get_scanner_*`, real data) through the SAME judge
   + shadow, tagged `source: agent-scan` in the log so their results are measured separately from pipeline ideas.
 **Cost:** a few Sonnet calls/day, only when a candidate/event exists (~$0.02–0.05 each); credit ledger halts entries.

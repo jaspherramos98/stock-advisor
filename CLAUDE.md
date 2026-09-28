@@ -196,6 +196,8 @@ analysis/options_strategies.py Options strategy library (Phase 2) — 5 codified
                               pre_earnings_iv (lottery, -EV), post_earnings_momentum, short_dte_momentum,
                               mean_reversion (RSI), catalyst_momentum. applicable_plans (priority w/
                               fallback), size_contracts, option_exit_decision. Pure, unit-tested.
+                              `DISABLED_STRATEGIES = {"short_dte_momentum"}` — user switched it OFF until the
+                              shadow judge is proven (J4→J5); re-enable = delete the name.
 storage/peak_tracker.py       Option high-water-mark tracker (Phase 2) — records each contract's peak
                               mark (keyed by option_id, peaks.json gitignored) so option_exit_decision
                               can TRAIL: sell after a pullback from the peak instead of only a fixed

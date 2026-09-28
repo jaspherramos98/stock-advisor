@@ -676,11 +676,17 @@ def test_llm_budget_ledger(tmp_path, monkeypatch):
     assert lb.cost_of("claude-sonnet-4-6", 1_000_000, 0, cache_read_tokens=1_000_000) == 3.3
 
 
-def test_options_strategies_select_and_size():
+def test_options_strategies_select_and_size(monkeypatch):
+    from analysis import options_strategies as os_
     from analysis.options_strategies import (
         select_strategy, size_contracts, catalyst_momentum, short_dte_momentum)
-    # short_dte needs conviction>=80 + risk_on; wins over catalyst when both qualify.
     hot = {"direction": "buy", "conviction": 85}
+    # short_dte_momentum is DISABLED (user, until the judge is proven): a hot risk-on signal falls
+    # through to the catalyst swing.
+    assert "short_dte_momentum" in os_.DISABLED_STRATEGIES
+    assert select_strategy(hot, {"risk": "risk_on"})["strategy"] == "catalyst_momentum"
+    # Re-enabled, it needs conviction>=80 + risk_on and wins over catalyst when both qualify.
+    monkeypatch.setattr(os_, "DISABLED_STRATEGIES", set())
     plan = select_strategy(hot, {"risk": "risk_on"})
     assert plan["strategy"] == "short_dte_momentum" and plan["right"] == "call"
     # risk-off downgrades to catalyst_momentum (still fires on conviction>=70).
