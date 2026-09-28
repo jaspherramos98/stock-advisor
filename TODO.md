@@ -2,6 +2,20 @@
 
 ## Done
 
+### 57. Agent decision log (judgment plan J0, 2026-09-28) ✅
+New `storage/decision_log.py` → append-only `agent_decisions.jsonl` (gitignored). The entry loop logs EVERY
+candidate it considers — including the skips that were silent before (already held, not tradeable, PDT budget,
+no applicable strategy/affordable contract, below $1 / stock cap full, guard or broker-review rejection) — with a
+signal + context snapshot (conviction, source, exit plan, BP, stock room, regime). Option + share exits log the
+entry → exit prices, pnl_pct and `entry_id` (linked by key = option_id / "eq:TICKER"); protective stops and the
+LLM-credit halt are logged too. Agent tab: "🧾 Decision log" panel (live-only toggle). `tests/conftest.py`
+(new) redirects the log to a temp file for every test. Fixed on the way in `_run_exits` (options): the trailing
+peak was cleared BEFORE the sell was attempted, so a rejected close or a dry preview reset the trailing stop — now
+cleared only once the close is placed; and the exit reason was overwritten by the order-status text (now `detail`).
+Verified: headless dashboard renders the panel (0 exceptions); real DRY cycle clean. +2 tests (127).
+Files: storage/decision_log.py (new), tests/conftest.py (new), alerts/agentic_options.py, alerts/agentic_stocks.py,
+dashboard/tabs/agent.py, .gitignore, tests.
+
 ### 56. Market-open routine actually works: headless pipeline + shared cache writer (2026-09-28) ✅
 **Bug:** `market_open.bat` step 2 ran `main.py`, which (a) prompts `input("How much are you willing to invest
 today?")` — in the hidden scheduled window it hung forever, so step 3 (arm) never ran — and (b) never writes
@@ -957,8 +971,8 @@ SHRINK (≤1× planned size), TIGHTEN a stop or EXIT — never upsize or loosen.
 time), POSITION-AWARE and DATA-GROUNDED (every input from a live read, never model memory).
 **Decisions (user, 2026-09-28):** authority = skip/shrink/tighten/exit only; model = Sonnet (`config.CLAUDE_MODEL`);
 shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
-- **J0 decision log** — every candidate + exit decision → append-only `agent_decisions.jsonl` (gitignored): inputs
-  snapshot, mechanical action, judge action (later), reason, outcome back-filled on close. Foundation for measuring.
+- ~~**J0 decision log**~~ — done #57 (outcomes are linked, not back-filled: an exit record carries pnl_pct +
+  `entry_id`, keeping the file append-only).
 - **J1 context builder** (pure assembly + live reads) — per candidate: price now vs at rec time (move since 6:30),
   intraday volume vs avg, RSI/MACD (`get_equity_technical_indicators`), key levels + ATR (R24), days to earnings,
   company news since the pipeline ran (Finnhub), regime, current book + sector overlap, the agent's own record by

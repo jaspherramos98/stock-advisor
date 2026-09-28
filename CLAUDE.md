@@ -252,6 +252,13 @@ alerts/agentic_stocks.py      Stock (share) leg of the agent (S2) — `route` (H
                               'deferred' — never sell into shares a stop still holds), then market-sell all.
                               Holding = whole-share part rests on a GTC stop_market at entry × (1 − plan stop%).
                               An empty position read never wipes the book (fetch_positions returns [] on error).
+storage/decision_log.py       Agent decision log (judgment plan J0) — append-only agent_decisions.jsonl (gitignored):
+                              one record per decision {id, ts, mode live|dry, kind entry|exit|stop|halt, ticker,
+                              key, action, reason, inputs, …}. EVERY entry candidate is logged, incl. skips and why
+                              (held / not tradeable / PDT / no contract / below $1 / guard or review reject);
+                              exits carry pnl_pct + `entry_id` (linked via key: option_id or "eq:TICKER"). Never
+                              blocks trading. tests/conftest.py redirects it to a temp file for every test.
+                              Agent tab: "🧾 Decision log" (live-only by default).
 storage/agent_stock_book.py   Plan behind each agent share position (exit_condition, source, conviction, opened
                               date) → agent_stocks.json (gitignored). Written only on a LIVE placement; S3's exit
                               pass reads it (no record → STOCK_EXIT_DEFAULT).

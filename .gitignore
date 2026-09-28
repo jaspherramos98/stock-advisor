@@ -12,6 +12,7 @@ market_open.log
 paper_book.json
 peaks.json
 agent_stocks.json
+agent_decisions.jsonl
 stock_leg_test.pending
 pipeline_cache_backup.json
 positions.json
