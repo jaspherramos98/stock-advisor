@@ -1490,6 +1490,87 @@ def test_agent_context_build_and_render():
     assert "PRICE now $n/a" in bare and "No company headlines" in bare and "source pipeline" in bare
 
 
+def test_parse_verdict_clamps_and_rejects():
+    from analysis.agent_judge import parse_verdict as pv
+    ok = pv({"decision": "enter", "size_multiplier": 1.7, "instrument": "shares", "stop_pct": 3.456,
+             "confidence": 140, "thesis": "t", "invalidation": "below $10", "risks": ["a", "b", "c", "d"]})
+    assert ok["size_multiplier"] == 1.0 and ok["confidence"] == 100          # can never enlarge
+    assert ok["stop_pct"] == 3.46 and ok["risks"] == ["a", "b", "c"]
+    w = pv({"decision": "wait", "size_multiplier": 0.8, "instrument": "x", "confidence": 50})
+    assert w["size_multiplier"] == 0.0 and w["instrument"] == "either"       # wait/skip carry no size
+    assert pv({"decision": "enter", "size_multiplier": 0, "confidence": 60})["decision"] == "skip"
+    assert pv({"decision": "enter", "size_multiplier": "big", "stop_pct": "wide"})["decision"] == "skip"
+    bad = pv({"decision": "yolo"})
+    assert bad["decision"] == "skip" and bad["error"] == "malformed verdict"
+    assert pv(None)["decision"] == "skip"
+
+
+def _real_ctx():
+    from analysis.agent_context import build
+    return build({"ticker": "LLY", "direction": "buy", "conviction": 60}, history={"current_price": 100})
+
+
+def test_judge_entry_shadow_call_and_failure(monkeypatch):
+    import config
+    import llm_budget
+    from analysis import agent_judge as aj
+    spent = []
+    monkeypatch.setattr(llm_budget, "can_spend", lambda: True)
+    monkeypatch.setattr(llm_budget, "record_cost", spent.append)
+    monkeypatch.setattr(config, "AGENT_JUDGE", "shadow", raising=False)
+    seen = {}
+
+    def fake(briefing, plan):
+        seen.update(briefing=briefing, plan=plan)
+        return ({"decision": "wait", "size_multiplier": 0, "instrument": "shares", "confidence": 40,
+                 "thesis": "needs volume", "invalidation": "loses support"}, {"input_tokens": 1500,
+                                                                               "output_tokens": 300})
+    monkeypatch.setattr(aj, "_call_model", fake)
+    v = aj.judge_entry(_real_ctx(), "stock", 8.0)
+    assert v["decision"] == "wait" and v["mode"] == "shadow" and v["cost_usd"] == 0.0090
+    assert spent == [0.009] and "CANDIDATE LLY" in seen["briefing"] and "$8.00 of shares" in seen["plan"]
+
+    monkeypatch.setattr(aj, "_call_model", lambda *a: (_ for _ in ()).throw(RuntimeError("503")))
+    v = aj.judge_entry(_real_ctx(), "option")
+    assert v["decision"] == "skip" and "503" in v["error"]                   # never raises
+
+    monkeypatch.setattr(llm_budget, "can_spend", lambda: False)
+    assert "credit" in aj.judge_entry(_real_ctx(), "stock")["error"]
+    monkeypatch.setattr(config, "AGENT_JUDGE", "off", raising=False)
+    assert aj.judge_entry(_real_ctx(), "stock") is None
+    monkeypatch.setattr(config, "AGENT_JUDGE", "binding", raising=False)     # not implemented until J5
+    assert aj.judge_entry(_real_ctx(), "stock") is None and aj.mode() == "off"
+    assert aj.judge_entry({"stub": True}, "stock") is None                  # no briefing → no call
+
+
+def test_shadow_judge_never_changes_the_trade(monkeypatch):
+    from alerts import agentic_options as ao
+    from alerts import agentic_stocks as stk
+    from analysis import agent_context, agent_judge
+    from storage import decision_log as dl
+    monkeypatch.setattr(ao, "_signals", lambda: [{"ticker": "CORE", "direction": "buy", "conviction": 60,
+                                                   "risk_level": "medium"}])
+    monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: set())
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral", "detail": {}})
+    monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
+    monkeypatch.setattr(stk, "budget_cap", lambda: None)
+    monkeypatch.setattr(agent_context, "gather", lambda *a, **k: _real_ctx())
+    monkeypatch.setattr(agent_judge, "judge_entry", lambda *a, **k: {"decision": "skip", "size_multiplier": 0.0,
+                                                                      "thesis": "priced in"})
+    placed = []
+
+    class FakeMcp:
+        def place_order(self, intent, state, buying_power, account_number):
+            placed.append(intent.ticker)
+            return {"status": "dry_run", "reason": ""}
+
+    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None, stocks=True)
+    assert placed == ["CORE"]                                               # judge said skip; rules still traded
+    rec = dl.read()[-1]
+    assert rec["action"] == "dry_run" and rec["judge"]["decision"] == "skip"
+    assert rec["context"]["ticker"] == "LLY"                                # the briefing rides along
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 

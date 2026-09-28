@@ -300,6 +300,17 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             break
 
         ctx = briefing(sig)
+        # J2 entry judge. SHADOW: the verdict is logged beside the rules' decision and changes
+        # nothing below — the J4 review scores it before it's ever allowed to bind.
+        verdict = None
+        try:
+            from analysis.agent_judge import judge_entry
+            verdict = judge_entry(ctx, leg, stock_dollars.get(ticker))
+            if verdict and verbose:
+                print(f"  judge {ticker}: {verdict['decision']} ×{verdict.get('size_multiplier')} — "
+                      f"{verdict.get('thesis') or verdict.get('error', '')}")
+        except Exception as e:  # noqa: BLE001 — the judge must never break a cycle
+            print(f"agentic_options: judge failed for {ticker} — {e}")
         row, spent, why = None, 0.0, []
         if leg == "option":
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
@@ -312,7 +323,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             if row is None:
                 why.append("shares: size below the $1 minimum or stock cap full")
         if row is None:
-            log(sig, "skip", "; ".join(why) or "no leg produced an order", leg=leg, context=ctx)
+            log(sig, "skip", "; ".join(why) or "no leg produced an order", leg=leg, context=ctx, judge=verdict)
             continue
         results.append(row)
         key = row.get("option_id") or f"eq:{ticker}"
@@ -321,7 +332,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             key=key, leg=row.get("leg"), order={k: row.get(k) for k in
                                                 ("strategy", "qty", "contract", "dollars", "premium")
                                                 if row.get(k) is not None}, status=row["status"],
-            context=ctx)
+            context=ctx, judge=verdict)
         if spent:
             avail -= spent   # reserve so later entries don't oversize
             held.add(ticker)

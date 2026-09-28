@@ -2,6 +2,21 @@
 
 ## Done
 
+### 59. Sonnet entry judge, shadow mode (judgment plan J2, 2026-09-28) ✅
+New `analysis/agent_judge.py`: for each candidate that reaches a decision, one Sonnet call reads the J1 briefing +
+the rules' plan and answers through a FORCED tool call (`record_verdict`): enter|wait|skip, size_multiplier,
+instrument, stop, confidence, thesis, invalidation, ≤3 risks. `parse_verdict` clamps size to [0,1] (the judge can
+only SHRINK, never enlarge) and turns anything malformed into an explicit skip; an API failure / credit at reserve
+also → a tagged skip, never an exception. System prompt: data-only (no facts from memory), skeptical by default,
+weighs priced-in move, volume confirmation, reward:risk, earnings, headlines, regime, sector overlap, instrument,
+own record. `config.AGENT_JUDGE = "shadow"` → verdict logged as `judge` on the decision record and changes NOTHING
+(test proves a "skip" verdict still lets the rules trade); "off" disables. Cost → llm_budget. Agent tab decision log
+gained Judge / Judge-why columns. Live check (real Sonnet, ~$0.012 + ~10s each): LLY → skip (trigger unmet, volume
+0.64×, R:R 0.2); AMZN → skip (~$10 under its close-above trigger, R:R 1.25, cited today's UK antitrust headline).
+Also: the judge loads .env itself (the scheduler only had the key via a side-effect import). tests/conftest.py stubs
+`_call_model`. +3 tests (134). Files: analysis/agent_judge.py (new), alerts/agentic_options.py, config.py,
+dashboard/tabs/agent.py, tests/conftest.py, tests.
+
 ### 58. Per-candidate briefing (judgment plan J1) + regime-bucket fix (2026-09-28) ✅
 New `analysis/agent_context.py`: `gather()` (live, never raises, ~7s per candidate) → `build()` (pure) a briefing
 of what's knowable RIGHT NOW: price vs the pipeline's (move since the rec), RSI/MACD/SMA/52w, volume PACE (today's
@@ -990,11 +1005,12 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
 - ~~**J0 decision log**~~ — done #57 (outcomes are linked, not back-filled: an exit record carries pnl_pct +
   `entry_id`, keeping the file append-only).
 - ~~**J1 context builder**~~ — done #58.
-- **J2 entry judge** — one Sonnet call per candidate, strict JSON: `enter | wait | skip`, instrument preference,
-  size_multiplier ∈ [0, 1], exit tweaks within bounds, thesis, invalidation level, confidence; validated + clamped
-  before use (malformed → skip). Watch triggers (drafted `alerts/agentic_watch.py`: conviction ≥50 or pinned, ±3%
-  band, "close" triggers only in the last 30 min, shares-only) become judge candidates here — the judge weighs the
-  qualitative parts ("on volume", "stabilization candle") that a price check can't see.
+- ~~**J2 entry judge**~~ — done #59 (shadow).
+- **J2b watch triggers → judge candidates** — drafted `alerts/agentic_watch.py` (conviction ≥50 or pinned, ±3% band,
+  "close" triggers only in the last 30 min, shares-only) feeding the SAME judge, so it weighs the qualitative parts
+  ("on volume", "stabilization candle") a price check can't see.
+- **Pipeline LLM cost isn't in the credit ledger** — `claude_analyst.run_analysis` never calls
+  `llm_budget.record_cost` (only chat + the judge do), so "LLM credit left" overstates what's left.
 - **J3 holding review** — event-driven only (new headline on a held ticker, move > ~1.5× ATR, earnings ≤2 days,
   invalidation level hit): `keep | sell | tighten stop`. Risk-reducing actions only.
 - **J4 shadow (2–4 weeks)** — judge runs and logs; mechanical rules still trade. Dashboard shows each decision +
