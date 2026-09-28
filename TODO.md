@@ -2,6 +2,20 @@
 
 ## Done
 
+### 53. Agent stock leg — exits (S3, 2026-09-27) ✅
+`agentic_stocks.run_exits`, called every cycle from `run_options_agent` right after the options exits (even with
+`AGENT_TRADE_STOCKS` off, so turning it off can't strand a position; zero reads when the agent owns no shares).
+Manages ONLY positions in the agent's stock book — hand-bought shares in the agentic account are never touched.
+Each is judged by `decide_exit` = `equity_exit_decision` against the plan it was opened on (recorded
+exit_condition, days held) with a trailing peak (`peak_tracker` key `eq:TICKER`). Close: cancel the resting stop
+first and WAIT until the broker confirms it's no longer working (`_cancel_and_wait`, 8s) — otherwise the row is
+`deferred` and nothing is sold (the stop still reserves the shares); then a market sell of the whole position; a
+live close forgets the plan + peak. Holding: the whole-share part rests on a GTC `stop_market` at entry × (1 −
+plan stop%) for PC-off protection (fractional remainder = poll only, broker rule). An empty position read never
+wipes the book. Exit rows use the options `{"close": T}` shape so anti-churn covers both legs. +3 tests incl. the
+live cancel→sell order and the deferred path (121). Files: alerts/agentic_stocks.py, storage/agent_stock_book.py,
+alerts/agentic_options.py, tests.
+
 ### 52. Agent ignores stale signals (2026-09-27) ✅
 `agentic_options._signals` read `pipeline_cache.json` and chat suggestions with NO age check — the cache is only
 overwritten when the pipeline runs, so with no scheduled morning run a Friday recommendation (e.g. today's NKE short
@@ -933,8 +947,8 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   the rec's exit_condition + a `peak_tracker` key like `eq:TICKER`); ~~shared day-trade counter guard~~ (done #48 — stock entries in S2 must share `_entry_budget`). Unit tests.
 - ~~**S2 routing + entries (DRY_RUN)**~~ — done #51 (all share buys = dollar market orders, not whole-share limits:
   an unfilled resting limit would read as un-held next cycle and invite a duplicate buy).
-- **S3 exits:** every cycle poll exits for all stock positions; whole shares also hold a GTC stop (agentic_stops);
-  cancel the resting stop before a poll-based sell (open sell orders hold the shares).
+- ~~**S3 exits**~~ — done #53 (agent-opened positions only; resting stop at the PLAN's stop from entry, not the
+  ATR-from-current stop that `agentic_stops.sync_protective_stops` computes — that script stays manual-only).
 - **S4 dashboard:** Agent tab — stock positions, exit decision, Close-now, P&L.
 - **S5 tiny live (user runs it):** one ~$5 fractional buy → confirm fill → confirm the agent's exit sells it in
   the app. Only then add the stock leg to the scheduled cycle.

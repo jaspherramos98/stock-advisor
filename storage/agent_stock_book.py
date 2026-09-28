@@ -49,6 +49,11 @@ def get_entry(ticker: str) -> dict | None:
     return _load().get(ticker.upper())
 
 
+def all_entries() -> dict:
+    """{TICKER: entry} for every position the agent believes it opened."""
+    return _load()
+
+
 def forget(ticker: str) -> None:
     """Drop a record once the position is closed (a later re-entry starts a fresh plan)."""
     book = _load()
