@@ -17,6 +17,7 @@ agent_stocks.json
 agent_decisions.jsonl
 holding_review.json
 pipeline_cache_backup.json
+pipeline_history/
 positions.json
 positions_backup_*.json
 entry_watch.json

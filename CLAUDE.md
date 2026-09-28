@@ -358,7 +358,9 @@ scripts/run_pipeline.py       Headless "Run pipeline": ingestion → analysis �
                               Skips NYSE holidays/weekends (no LLM spend) unless --force; exit 1 on failure.
 storage/pipeline_cache.py     ONE writer/reader of pipeline_cache.json (+ backup) for the dashboard button, the
                               headless run, and chat context; `load_today()` never returns another day's cache
-                              (the agent's `_signals` applies the same rule to the same file).
+                              (the agent's `_signals` applies the same rule to the same file). Every save is
+                              ALSO appended to pipeline_history/<date>.jsonl (gitignored; `read_history(since,
+                              until)`) — the only record of past recommendations (the cache is overwritten).
 scripts/bench_dashboard.py    Click-latency benchmark — runs dashboard/app.py headless (Streamlit AppTest):
                               cold load + N warm reruns (a warm rerun = what a click costs) + exceptions.
                               Live data (needs network + MCP token), so NOT in CI. Use for before/after.

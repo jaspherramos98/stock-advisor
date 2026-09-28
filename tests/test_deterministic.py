@@ -1383,6 +1383,23 @@ def test_pipeline_cache_roundtrip_and_today_only(monkeypatch, tmp_path):
     assert [s["ticker"] for s in ao._signals()] == ["C"]
 
 
+def test_pipeline_history_keeps_every_run(monkeypatch, tmp_path):
+    from datetime import date, timedelta
+    from storage import pipeline_cache as pc
+    monkeypatch.setattr(pc, "CACHE_FILE", str(tmp_path / "c.json"))
+    monkeypatch.setattr(pc, "CACHE_BACKUP_FILE", str(tmp_path / "b.json"))
+    pc.save([{"ticker": "A"}], {}, "06:31")
+    pc.save([{"ticker": "B"}], {}, "09:10")                                 # overwrites the cache, not history
+    runs = pc.read_history()
+    assert [r["recommendations"][0]["ticker"] for r in runs] == ["A", "B"] and all("archived_at" in r for r in runs)
+    (tmp_path / "pipeline_history" / "2020-01-02.jsonl").write_text('{"date": "2020-01-02"}\nnot json\n')
+    assert [r["date"] for r in pc.read_history(until=date(2020, 12, 31))] == ["2020-01-02"]
+    assert len(pc.read_history(since=date.today() - timedelta(days=1))) == 2
+    monkeypatch.setattr(pc, "HISTORY_DIR", str(tmp_path / "c.json"))        # unwritable (a file) → cache still saved
+    pc.save([{"ticker": "C"}], {}, "x")
+    assert pc.load_today()[0]["recommendations"] == [{"ticker": "C"}]
+
+
 def test_run_pipeline_skips_closed_days():
     import datetime as dt
     from scripts.run_pipeline import is_trading_day
