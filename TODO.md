@@ -945,6 +945,40 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
+### Agent judgment — PLAN (approved 2026-09-28, not built)
+**Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
+batch: buy/short recs → route by conviction (≥75 options, else shares, short → puts) → first matching playbook
+(options_strategies) → pyramid/caps/PDT sizing; exits = fixed option_exit_decision / equity_exit_decision. Watches
+are ignored; news on held positions is never read; the broker review only blocks broker-level problems. Versus the
+user following the recs by hand, it adds execution discipline (20-min exits, no early closes), option expression
+and sizing math — NOT judgment. Pipeline track record: 41 closed, 51% win, avg +0.8%.
+**Principle:** hard safety stays mechanical (trading_guards, caps, PDT, broker review). The judge may only SKIP,
+SHRINK (≤1× planned size), TIGHTEN a stop or EXIT — never upsize or loosen. Judgment must be FRESH (at decision
+time), POSITION-AWARE and DATA-GROUNDED (every input from a live read, never model memory).
+**Decisions (user, 2026-09-28):** authority = skip/shrink/tighten/exit only; model = Sonnet (`config.CLAUDE_MODEL`);
+shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
+- **J0 decision log** — every candidate + exit decision → append-only `agent_decisions.jsonl` (gitignored): inputs
+  snapshot, mechanical action, judge action (later), reason, outcome back-filled on close. Foundation for measuring.
+- **J1 context builder** (pure assembly + live reads) — per candidate: price now vs at rec time (move since 6:30),
+  intraday volume vs avg, RSI/MACD (`get_equity_technical_indicators`), key levels + ATR (R24), days to earnings,
+  company news since the pipeline ran (Finnhub), regime, current book + sector overlap, the agent's own record by
+  playbook/source (from J0).
+- **J2 entry judge** — one Sonnet call per candidate, strict JSON: `enter | wait | skip`, instrument preference,
+  size_multiplier ∈ [0, 1], exit tweaks within bounds, thesis, invalidation level, confidence; validated + clamped
+  before use (malformed → skip). Watch triggers (drafted `alerts/agentic_watch.py`: conviction ≥50 or pinned, ±3%
+  band, "close" triggers only in the last 30 min, shares-only) become judge candidates here — the judge weighs the
+  qualitative parts ("on volume", "stabilization candle") that a price check can't see.
+- **J3 holding review** — event-driven only (new headline on a held ticker, move > ~1.5× ATR, earnings ≤2 days,
+  invalidation level hit): `keep | sell | tighten stop`. Risk-reducing actions only.
+- **J4 shadow (2–4 weeks)** — judge runs and logs; mechanical rules still trade. Dashboard shows each decision +
+  reasoning. Review: P&L of trades the judge would have skipped vs taken; exits it would have taken early.
+- **J5 binding** — only if J4 shows the judge helps; its skips/shrinks/exits become real. Kill switch = config flag.
+- **J6 own ideas** — scanner candidates (`create_scan`/`run_scan`/`get_scanner_*`, real data) through the SAME judge
+  + shadow, tagged `source: agent-scan` in the log so their results are measured separately from pipeline ideas.
+**Cost:** a few Sonnet calls/day, only when a candidate/event exists (~$0.02–0.05 each); credit ledger halts entries.
+**Honest bar:** expect the judge to mostly SKIP. If shadow data shows its skips were no better than its takes,
+turn it off.
+
 ### Stock trading for the agent — PLAN (approved 2026-09-27, not built)
 Goal: the autonomous agent also trades SHARES on the agentic account, alongside options.
 **Decisions (user):** route by conviction — highly_recommended or conviction ≥75 → options (aggressive leg),

@@ -281,10 +281,11 @@ market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: 
                               (echo armed > agent_live.arm); output appended to market_open.log (gitignored).
                               It used to call main.py, which prompts for a budget (hung forever hidden, so
                               it never armed) and never wrote the cache (the agent never saw its signals).
-                              run_market_open_silent.vbs runs it hidden. Task "Argus Market Open" — register
-                              (user action): schtasks /Create /TN "Argus Market Open" /TR "wscript.exe
-                              \"D:\CS\Projects\stock-advisor\run_market_open_silent.vbs\"" /SC WEEKLY
-                              /D MON,TUE,WED,THU,FRI /ST 06:30 /F
+                              run_market_open_silent.vbs runs it hidden. Task "Argus Market Open" REGISTERED
+                              2026-09-28 (weekdays 06:30; verified first run). Re-register if ever needed (no
+                              inner quotes — PowerShell mangles `\"`): schtasks /Create /TN "Argus Market Open"
+                              /TR "wscript.exe D:\CS\Projects\stock-advisor\run_market_open_silent.vbs"
+                              /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 06:30 /F
 scripts/run_pipeline.py       Headless "Run pipeline": ingestion → analysis → prices → storage.pipeline_cache.save.
                               Skips NYSE holidays/weekends (no LLM spend) unless --force; exit 1 on failure.
 storage/pipeline_cache.py     ONE writer/reader of pipeline_cache.json (+ backup) for the dashboard button, the
