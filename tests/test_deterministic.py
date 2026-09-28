@@ -840,14 +840,17 @@ def test_agent_signals_merge_chat_buys(tmp_path, monkeypatch):
     import json as _json
     from alerts import agentic_options as ao
     from storage import entry_watch as ew
+    from datetime import date
+    today = date.today().isoformat()   # stale (other-day) cache / chat are ignored — see test below
     # pipeline cache: RDDT only a watch, plus one real buy
     cache = tmp_path / "pipeline_cache.json"
-    cache.write_text(_json.dumps({"recommendations": [
+    cache.write_text(_json.dumps({"date": today, "recommendations": [
         {"ticker": "RDDT", "direction": "watch", "conviction": 55},
         {"ticker": "NVDA", "direction": "buy", "conviction": 80}]}), encoding="utf-8")
     monkeypatch.setattr(ao, "_CACHE", str(cache))
     monkeypatch.setattr(ew, "get_chat_suggestions", lambda: [
-        {"ticker": "RDDT", "action": "buy"}, {"ticker": "MSFT", "action": "watch"}])
+        {"ticker": "RDDT", "action": "buy", "created_at": today},
+        {"ticker": "MSFT", "action": "watch", "created_at": today}])
     sigs = {s["ticker"]: s for s in ao._signals()}
     assert sigs["NVDA"]["direction"] == "buy" and sigs["NVDA"]["conviction"] == 80   # pipeline buy
     assert sigs["RDDT"]["direction"] == "buy" and sigs["RDDT"]["source"] == "chat"   # chat upgraded the watch
@@ -1108,6 +1111,27 @@ def test_entries_stop_when_pdt_budget_exhausted(monkeypatch):
     monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral"})
     out = ao._run_entries(mcp=None, acct="A", buying_power=100.0, verbose=False, max_new=0)
     assert out == [{"ticker": "AAA", "status": "skipped", "reason": "PDT day-trade budget exhausted"}]
+
+
+def test_agent_signals_ignore_stale_cache_and_chat(monkeypatch, tmp_path):
+    import json as _json
+    from datetime import date, timedelta
+    from alerts import agentic_options as ao
+    from storage import entry_watch
+    today, old = date.today().isoformat(), (date.today() - timedelta(days=2)).isoformat()
+    cache = tmp_path / "pipeline_cache.json"
+    monkeypatch.setattr(ao, "_CACHE", str(cache))
+    monkeypatch.setattr(entry_watch, "get_chat_suggestions", lambda: [
+        {"ticker": "NEW", "action": "buy", "created_at": f"{today}T09:00:00"},
+        {"ticker": "OLDC", "action": "buy", "created_at": f"{old}T09:00:00"},
+        {"ticker": "NODATE", "action": "buy"}])
+    rec = {"ticker": "REC", "direction": "buy", "conviction": 70}
+
+    cache.write_text(_json.dumps({"date": old, "recommendations": [rec]}), encoding="utf-8")
+    assert [s["ticker"] for s in ao._signals()] == ["NEW"]          # Friday's cache ignored on Monday
+    cache.write_text(_json.dumps({"date": today, "recommendations": [rec]}), encoding="utf-8")
+    assert [s["ticker"] for s in ao._signals()] == ["REC", "NEW"]
+    assert ao._is_today(None) is False and ao._is_today("garbage") is False
 
 
 def test_stock_routing():

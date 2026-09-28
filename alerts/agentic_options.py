@@ -84,15 +84,26 @@ def _chat_direction(sugg: dict) -> str | None:
     return None  # sell (exit) / watch / hold → not an agent entry
 
 
+def _is_today(stamp: str | None) -> bool:
+    """True when an ISO date/datetime string is from today (local date — the same clock the pipeline
+    and chat use when they stamp it). Missing/garbled → False (fail closed: no trade on unknown age)."""
+    from datetime import date
+    return bool(stamp) and str(stamp)[:10] == date.today().isoformat()
+
+
 def _signals() -> list[dict]:
-    """Directional entry signals for the agent, deduped by ticker:
-      1. buy/short recommendations from today's pipeline cache (real conviction), then
+    """Directional entry signals for the agent, deduped by ticker — TODAY's only:
+      1. buy/short recommendations from the pipeline cache (real conviction), then
       2. Argus chat's last 'Buy' suggestions (get_chat_suggestions) for tickers the pipeline
-         didn't already flag buy/short — this is choice B: let the chat's calls reach the agent."""
+         didn't already flag buy/short — this is choice B: let the chat's calls reach the agent.
+    A cache or chat suggestion from an earlier day is ignored: the pipeline only overwrites the cache
+    when it runs, so without this a Friday recommendation would still open positions on Monday
+    (the dashboard already applies the same today-only rule to the cache)."""
     out, seen = [], set()
     try:
         with open(_CACHE, encoding="utf-8") as f:
-            recs = (json.load(f) or {}).get("recommendations", []) or []
+            cache = json.load(f) or {}
+        recs = (cache.get("recommendations", []) or []) if _is_today(cache.get("date")) else []
     except (OSError, ValueError):
         recs = []
     for r in recs:
@@ -104,6 +115,8 @@ def _signals() -> list[dict]:
     try:
         from storage.entry_watch import get_chat_suggestions
         for s in get_chat_suggestions():
+            if not _is_today(s.get("created_at")):
+                continue
             t = (s.get("ticker") or "").upper()
             direction = _chat_direction(s)
             if t and t not in seen and direction:

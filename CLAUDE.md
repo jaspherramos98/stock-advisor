@@ -215,7 +215,9 @@ ingestion/signal_context.py   Signal enrichment (Phase 2) — latest RSI (get_eq
                               + earnings context (get_earnings_results → days_to/since_earnings, last_beat)
                               per ticker, so the technical/earnings strategies have their inputs. Pure
                               parsers unit-tested; enrich() called in the agent's entry loop.
-alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_signals`): pipeline buys/
+alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_signals`, TODAY's only —
+                              `_is_today` drops a cache whose `date` or a chat suggestion whose `created_at` is
+                              from an earlier day, so Friday's recs can't open Monday positions): pipeline buys/
                               shorts + chat suggestions (`_chat_direction` maps buy→call, short/"(short)"
                               text→put, sell/watch→ignored) + affordable_scout, deduped by ticker, priority
                               pipeline>chat>scout. ENTRIES: signal→enrich(RSI/earnings)→first applicable

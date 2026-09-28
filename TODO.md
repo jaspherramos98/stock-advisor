@@ -2,6 +2,14 @@
 
 ## Done
 
+### 52. Agent ignores stale signals (2026-09-27) ✅
+`agentic_options._signals` read `pipeline_cache.json` and chat suggestions with NO age check — the cache is only
+overwritten when the pipeline runs, so with no scheduled morning run a Friday recommendation (e.g. today's NKE short
+from 2026-09-25) would still drive Monday entries, as would a week-old chat "Buy". New `_is_today` keeps only a
+cache whose `date` and chat suggestions whose `created_at` are from today (local date, the clock both are stamped
+with); missing/garbled stamps fail closed. Matches the dashboard's existing today-only cache rule. +1 test (118).
+Files: alerts/agentic_options.py, tests.
+
 ### 51. Agent stock leg — routing + entries, DRY_RUN (S2, 2026-09-27) ✅
 New `alerts/agentic_stocks.py`: `route` (HR / conviction ≥75 → options; other buys → shares; shorts → puts;
 crypto never shares), `rank` (best idea first by conviction across both legs), `size_buys` (Argus pyramid over all
