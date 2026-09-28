@@ -218,9 +218,10 @@ storage/paper_book.py         Paper-trading book v2 — virtual account, BOTH le
 alerts/paper_broker.py        PaperBroker — the paper backend for the agent: same call surface the agent uses on
                               robinhood_mcp (buying power, positions, option positions, PDT budget, place_order,
                               place_option_order). SAME trading_guards + order-shape checks, then fills into
-                              paper_book at live prices (options at the ask/bid the agent sends; shares at the
-                              last price, no spread). No review, no resting stops (the poll's hard stop covers
-                              paper shares). Market data stays live via the MCP.
+                              paper_book at live prices (options at the ask/bid the agent sends; shares buy at
+                              the ask / sell at the bid — `fill_price`, quotes now carry bid/ask). No review, no
+                              resting stops (same as live for fractional shares; the poll's hard stop covers
+                              paper). Market data stays live via the MCP.
 ingestion/affordable_scout.py Affordable-universe scout (Phase 2) — when every pipeline idea is too
                               expensive for the pilot, scans a preset of liquid CHEAP underlyings and
                               emits technical buy/short signals from RSI (source='scout', ranked LAST so
@@ -250,6 +251,9 @@ alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_sig
                               ONE shared BP pool; an options-routed buy with no affordable contract falls back
                               to shares (the stock leg is always on). `run_options_agent(entries=False)` = exits
                               only (what paper mode runs against real positions).
+                              ONE option-position read per cycle (`_read_option_positions`) feeds both the exit
+                              pass and the entry pass's held check; buying power is re-read only after a close
+                              was actually sent (#69).
                               PDT: entries stop once the day-trade budget (`_entry_budget`, read AFTER
                               exits) is spent; an unreadable fill history → 0 entries (fail CLOSED).
                               EXITS: open positions→trailing exit policy (peak_tracker)→close. BROKER: every

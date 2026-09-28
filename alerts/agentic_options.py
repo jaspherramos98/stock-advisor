@@ -229,10 +229,12 @@ def _try_option_entry(mcp, acct, sig: dict, regime: dict, avail: float, state,
     return row, (intent.premium if res["status"] in ("placed", "dry_run") else 0.0)
 
 
-def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None) -> list[dict]:
+def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None,
+                 held_options: set[str] | None = None) -> list[dict]:
     """Entries across both legs, best idea first, from ONE shared buying-power pool. Each signal is
     routed (agentic_stocks.route) to options or shares; an options-routed buy with no affordable
-    contract falls back to shares."""
+    contract falls back to shares. `held_options` = underlyings already held as options (the cycle
+    passes the exit pass's read; None → read it here)."""
     from alerts import agentic_stocks as stk
     from storage.agent_stock_book import invested
 
@@ -248,7 +250,8 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     # `exclude` = underlyings we closed THIS cycle. Exits run before entries, so a just-sold
     # position no longer shows as held — without this the same signal would re-buy it the same
     # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
-    held = _held_underlyings(mcp, acct) | stk.held_tickers(mcp, acct) | (exclude or set())
+    opts = _held_underlyings(mcp, acct) if held_options is None else held_options
+    held = opts | stk.held_tickers(mcp, acct) | (exclude or set())
     # config.AGENT_STOCK_BUDGET_CAP limits the TOTAL entry cost the agent holds in shares. The
     # pyramid sizes on the smaller of buying power and the cap, so a $20 cap still spreads
     # across several names (40% single-name cap → ≥3 positions to deploy it all).
@@ -346,14 +349,25 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     return results
 
 
-def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
+def _read_option_positions(mcp, acct) -> list[dict] | None:
+    """One read of the open option positions per cycle (shared by the exit pass and the entry pass's
+    held check). None = the read failed."""
+    try:
+        return mcp.fetch_option_positions(acct)
+    except Exception as e:  # noqa: BLE001
+        print(f"agentic_options: option positions read failed — {e}")
+        return None
+
+
+def _run_exits(mcp, acct, buying_power, verbose, rows: list[dict] | None = None) -> list[dict]:
+    """Exit pass over open option positions. `rows` = this cycle's position read (None → read now;
+    a failed read skips the pass)."""
     from ingestion import options_data as od
     from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
 
-    try:
-        rows = mcp.fetch_option_positions(acct)
-    except Exception as e:  # noqa: BLE001
-        print(f"agentic_options: exit read failed — {e}")
+    if rows is None:
+        rows = _read_option_positions(mcp, acct)
+    if rows is None:
         return []
 
     state = GuardState(start_equity=buying_power)
@@ -461,7 +475,8 @@ def run_options_agent(verbose: bool = True, entries: bool = True, broker=None) -
         print(f"== Autonomous agent ==  {label} | buying power ${bp:.2f}\n-- exits --")
     # Exits always run (token-free, capital-protecting) — options, then any share positions the agent
     # opened (it's a no-op without reads when the agent owns no shares).
-    exits = _run_exits(mcp, acct, bp, verbose)
+    opt_rows = _read_option_positions(mcp, acct)   # one read, shared by the exit + entry passes
+    exits = _run_exits(mcp, acct, bp, verbose, rows=opt_rows)
     try:
         from alerts import agentic_stocks as _stk
         exits += _stk.run_exits(mcp, acct, bp, verbose)
@@ -469,7 +484,12 @@ def run_options_agent(verbose: bool = True, entries: bool = True, broker=None) -
         print(f"agentic_options: stock exit pass failed — {e}")
     if not entries:
         return {"entries": [], "exits": exits}
-    bp = mcp.fetch_buying_power(acct) or bp  # refresh after any closes
+    if any(x.get("status") == "placed" for x in exits):
+        bp = mcp.fetch_buying_power(acct) or bp  # a close was sent → re-read the freed cash
+    # Underlyings held as options, from the pre-exit read: anything closed this cycle is also in
+    # `exclude`, and a close that didn't go through is still held — so the pre-exit set is right.
+    held_opts = None if opt_rows is None else {
+        (p.get("chain_symbol") or p.get("symbol") or "").upper() for p in opt_rows}
 
     # Entries depend on fresh Argus signals (which cost tokens). Halt NEW entries when the LLM
     # credit ledger is at/under its reserve, so the user has leeway to top up (per request:
@@ -492,5 +512,5 @@ def run_options_agent(verbose: bool = True, entries: bool = True, broker=None) -
         print("-- entries --")
     # Budget is read AFTER exits so this cycle's same-day closes are already counted.
     entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits),
-                           max_new=_entry_budget(mcp, acct, bp, verbose))
+                           max_new=_entry_budget(mcp, acct, bp, verbose), held_options=held_opts)
     return {"entries": entries, "exits": exits}

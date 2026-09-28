@@ -809,8 +809,14 @@ def test_paper_cycle_runs_the_live_entry_loop(monkeypatch, tmp_path):
          "exit_condition": "target 8% gain, stop loss at 4%"}])
     monkeypatch.setattr(stk, "budget_cap", lambda: 20.0)
     monkeypatch.setattr("market_hours.recent_trading_days", lambda n, today=None: [])
+    reads = {"opt": 0, "bp": 0}
+    PB = paper_broker.PaperBroker
+    for name, key in (("fetch_option_positions", "opt"), ("fetch_buying_power", "bp")):
+        orig = getattr(PB, name)
+        monkeypatch.setattr(PB, name, lambda self, *a, _o=orig, _k=key, **k: reads.__setitem__(_k, reads[_k] + 1) or _o(self, *a, **k))
 
     out = ao.run_paper_agent(verbose=False)
+    assert reads == {"opt": 1, "bp": 1}                    # one position read + one BP read when nothing closed
     assert out["mode"] == "paper" and [(e["ticker"], e["leg"], e["status"]) for e in out["entries"]] == \
         [("CORE", "stock", "placed")]
     bk = pb.get_book()
@@ -828,6 +834,14 @@ def test_paper_cycle_runs_the_live_entry_loop(monkeypatch, tmp_path):
     out = ao.run_paper_agent(verbose=False)
     assert [(x["close"], x["status"]) for x in out["exits"]] == [("CORE", "placed")]
     assert pb.get_book()["shares"] == {} and pb.get_book()["closed"][-1]["pnl"] > 0
+
+
+def test_paper_fill_price_crosses_the_spread():
+    from alerts.paper_broker import fill_price
+    q = {"price": 12.41, "bid": 12.40, "ask": 12.42}
+    assert fill_price(q, "buy") == 12.42 and fill_price(q, "sell") == 12.40
+    assert fill_price({"price": 12.41, "bid": 0.0, "ask": 0.0}, "buy") == 12.41     # no book → last price
+    assert fill_price(None, "sell") is None
 
 
 def test_paper_broker_guards_and_order_types(monkeypatch, tmp_path):
