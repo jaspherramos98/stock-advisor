@@ -83,6 +83,17 @@ class GuardResult:
     reason: str
 
 
+def buy_cost(intent: OrderIntent) -> float | None:
+    """Worst-case cash a BUY commits: its dollar amount, or shares × limit price (a limit buy can't
+    fill above it). None when unknowable — a market buy by share count has no price bound, so the
+    caps can't be checked; size market buys in dollars instead."""
+    if intent.dollars is not None:
+        return intent.dollars
+    if intent.quantity is not None and intent.limit_price is not None:
+        return round(intent.quantity * intent.limit_price, 2)
+    return None
+
+
 def check_order(intent: OrderIntent, state: GuardState, buying_power: float) -> GuardResult:
     """Return whether `intent` may be placed given today's state and live buying power.
 
@@ -104,13 +115,14 @@ def check_order(intent: OrderIntent, state: GuardState, buying_power: float) -> 
         return GuardResult(False, f"daily loss limit hit ({DAILY_LOSS_LIMIT_PCT:.0%})")
 
     if intent.side == "buy":
-        if intent.dollars is None or intent.dollars <= 0:
-            return GuardResult(False, "buy intent missing a positive dollar amount")
+        cost = buy_cost(intent)
+        if cost is None or cost <= 0:
+            return GuardResult(False, "buy needs a positive dollar amount, or a share quantity with a limit price")
         if buying_power < MIN_BUYING_POWER:
             return GuardResult(False, f"buying power < ${MIN_BUYING_POWER:.0f}")
-        if intent.dollars > buying_power:
+        if cost > buying_power:
             return GuardResult(False, "order exceeds available buying power")
-        if state.start_equity > 0 and intent.dollars > MAX_SINGLE_ORDER_FRACTION * state.start_equity:
+        if state.start_equity > 0 and cost > MAX_SINGLE_ORDER_FRACTION * state.start_equity:
             return GuardResult(False, f"order exceeds single-name cap {MAX_SINGLE_ORDER_FRACTION:.0%}")
     elif intent.side == "sell":
         if intent.quantity is None or intent.quantity <= 0:

@@ -485,6 +485,18 @@ def test_guard_sell_allowed_regardless_of_buying_power():
     assert check_order(_sell(1.5), st, buying_power=0.0).allowed
 
 
+def test_guard_prices_whole_share_limit_buys():
+    from trading_guards import buy_cost
+    st = GuardState(start_equity=1000.0)
+    limit_buy = OrderIntent(ticker="F", side="buy", quantity=3, order_type="limit", limit_price=12.5)
+    assert buy_cost(limit_buy) == 37.5 and check_order(limit_buy, st, buying_power=100.0).allowed
+    assert not check_order(limit_buy, st, buying_power=30.0).allowed              # 37.50 > BP
+    big = OrderIntent(ticker="F", side="buy", quantity=40, order_type="limit", limit_price=12.5)
+    assert "single-name cap" in check_order(big, st, buying_power=1000.0).reason  # 500 > 40%
+    qty_market = OrderIntent(ticker="F", side="buy", quantity=3)                  # no price bound
+    assert buy_cost(qty_market) is None and not check_order(qty_market, st, 1000.0).allowed
+
+
 def test_record_placed_increments_and_tracks():
     st = GuardState(start_equity=1000.0)
     record_placed(_buy(10.0, client_id="a"), st)
@@ -517,13 +529,50 @@ def test_mcp_reads_degrade_when_enabled_but_no_session(monkeypatch):
     assert mcp.fetch_quotes(["AAPL"]) == {}
 
 
-def test_mcp_dry_run_order_logs_not_sends(monkeypatch):
+def _fake_equity_review(monkeypatch, alert_type=None):
+    """DRY_RUN + a fake MCP whose review returns `alert_type` (None = clean). Records every call."""
     import config
     from ingestion import robinhood_mcp as mcp
     monkeypatch.setattr(config, "DRY_RUN", True, raising=False)
+    calls = []
+    checks = {"alertType": alert_type} if alert_type else {}
+    def fake(name, args=None):
+        calls.append(name)
+        return {"data": {"order_checks": checks}}
+    monkeypatch.setattr(mcp, "_call_tool", fake)
+    return mcp, calls
+
+
+def test_mcp_dry_run_order_logs_not_sends(monkeypatch):
+    mcp, calls = _fake_equity_review(monkeypatch)
     st = GuardState(start_equity=1000.0)
-    res = mcp.place_order(_buy(100.0, client_id="d1"), st, buying_power=500.0)
+    res = mcp.place_order(_buy(100.0, client_id="d1"), st, buying_power=500.0, account_number="A")
     assert res["status"] == "dry_run" and st.orders_today == 1
+    assert calls == ["review_equity_order"]                          # previewed, never placed
+
+
+def test_equity_review_alert_blocks_buy_not_sell(monkeypatch):
+    mcp, calls = _fake_equity_review(monkeypatch, "EQUITY_EXTREMELY_UNMARKETABLE_LIMIT_PRICE")
+    st = GuardState(start_equity=1000.0)
+    buy = mcp.place_order(_buy(100.0, client_id="b"), st, buying_power=500.0, account_number="A")
+    assert buy["status"] == "rejected" and "UNMARKETABLE" in buy["reason"] and st.orders_today == 0
+    sell = mcp.place_order(_sell(1, client_id="s"), st, buying_power=500.0, account_number="A")
+    assert sell["status"] == "dry_run"                              # exits are never trapped
+
+
+def test_equity_review_failure_does_not_place(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as mcp
+    monkeypatch.setattr(config, "DRY_RUN", False, raising=False)   # even LIVE: nothing sent
+    sent = []
+    def fake(name, args=None):
+        if name.startswith("review_"):
+            raise mcp.MCPToolError("review down")
+        sent.append(name)
+    monkeypatch.setattr(mcp, "_call_tool", fake)
+    res = mcp.place_order(_sell(1, client_id="rf"), GuardState(start_equity=1000.0),
+                          buying_power=500.0, account_number="A")
+    assert res["status"] == "review_failed" and sent == []
 
 
 def test_mcp_rejected_order_not_counted(monkeypatch):

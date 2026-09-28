@@ -395,17 +395,37 @@ def day_trade_budget(account_number: str, account_equity: float) -> int | None:
 # --- orders: guarded, DRY_RUN-safe -----------------------------------------------------
 
 def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
-                account_number: str | None = None) -> dict:
-    """Vet an order through trading_guards, then either DRY_RUN-log it or (live) send it to
-    the AGENTIC account. Returns {status, reason, intent, dry_run}: 'rejected' (a guard
-    blocked it), 'dry_run' (allowed + logged, not sent), or 'placed'. Never raises on a guard
-    rejection; a live-send failure propagates so the caller can halt."""
+                account_number: str | None = None, review: bool = True) -> dict:
+    """Vet an equity order (shape + trading_guards), preview it with review_equity_order, then either
+    DRY_RUN-log it or (live) send it to the AGENTIC account. Returns {status, reason, intent, dry_run}
+    with status 'rejected' | 'review_failed' | 'dry_run' | 'placed'. Never raises on a guard/review
+    rejection; a live-send failure propagates so the caller can halt.
+
+    Review policy (same as options): a broker alert BLOCKS a buy (don't add risk the broker flags);
+    a sell proceeds with the alert logged (never trap an exit — the broker hard-rejects illegal ones)."""
     shape_error = _order_shape_error(intent)
     verdict = check_order(intent, state, buying_power)
     reason = shape_error or (None if verdict.allowed else verdict.reason)
     if reason:
         print(f"[ORDER REJECTED] {intent.side} {intent.ticker} — {reason}")
         return {"status": "rejected", "reason": reason, "intent": intent, "dry_run": config.DRY_RUN}
+
+    acct = account_number
+    if review:
+        tag = f"{intent.side} {intent.ticker} {intent.order_type}"
+        try:
+            acct = acct or agentic_account_number()
+            if not acct:
+                raise MCPNotWired("no agentic account to review against")
+            preview = _call_tool(_TOOL_REVIEW_ORDER, _order_args(intent, acct))
+        except Exception as e:  # noqa: BLE001 — a failed review must not place the order
+            print(f"[REVIEW FAILED] {tag} — {e}")
+            return {"status": "review_failed", "reason": str(e), "intent": intent, "dry_run": config.DRY_RUN}
+        alert = _order_alert(preview)
+        print(f"[REVIEW] {tag} — checks: {alert or 'none'}")
+        if alert and intent.side == "buy":
+            return {"status": "rejected", "reason": f"broker pre-trade alert: {alert}",
+                    "intent": intent, "dry_run": config.DRY_RUN}
 
     if config.DRY_RUN:
         record_placed(intent, state)
@@ -418,7 +438,7 @@ def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
 
     # Live path — orders only go to the agentic account. record_placed only after a confirmed
     # send so the idempotency/counter state can't run ahead of reality.
-    acct = account_number or agentic_account_number()
+    acct = acct or agentic_account_number()
     if not acct:
         raise MCPNotWired("no agentic account available to place orders")
     ref_id = _new_ref_id()

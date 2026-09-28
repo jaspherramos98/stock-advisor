@@ -24,7 +24,7 @@ from alerts.agentic_stops import sync_protective_stops
 
 def main() -> int:
     print(f"== Agentic protective stops ==  (DRY_RUN={config.DRY_RUN})\n")
-    results = sync_protective_stops(verbose=True)
+    results = sync_protective_stops()
     print("\nResults:")
     for r in results:
         print(f"  {r}")
