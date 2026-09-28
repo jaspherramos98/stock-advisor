@@ -2,6 +2,22 @@
 
 ## Done
 
+### 61. Event-driven holding review, shadow (judgment plan J3, 2026-09-28) ✅
+New `analysis/holding_review.py`: on the HOLD path of both exit passes (option `_run_exits`, stock `run_exits`), a
+held position is reviewed only when an event fires — an unseen Finnhub headline, a move ≥1.5× its average daily
+range since the last reference price (reference resets after each review), or earnings ≤2 days (once a day). News
+has a 2-hour per-ticker cooldown: live testing showed Finnhub tags market-roundup pieces to big names (NVDA got 5
+"news" hits, 4 of them roundups), which would otherwise buy a ~$0.01 review per roundup; headlines arriving in the
+cooldown stay unseen and batch into the next review. New `agent_judge.judge_holding` (+ `HOLD_SYSTEM`,
+`record_holding_verdict`, `parse_holding_verdict`): keep | sell | tighten_stop — tighten only for shares and only to a
+stop above the current one and below price (else → keep with an error); failures/no credit → keep. The judge sees the
+J1 briefing plus entry→now, the plan, and the ORIGINAL thesis + invalidation from the linked entry record. Logged as a
+`review` record; under shadow nothing changes. State in holding_review.json (gitignored). Agent tab decision log
+shows review verdicts (keep / sell / tighten @ $X). New `decision_log.get(id)`. Live simulation (synthetic NVDA
+holding, real data): picked the one relevant headline ($150B buyback) out of 5, verdict KEEP, $0.009.
++3 tests (141). Files: analysis/holding_review.py (new), analysis/agent_judge.py, alerts/agentic_options.py,
+alerts/agentic_stocks.py, storage/decision_log.py, dashboard/tabs/agent.py, tests/conftest.py, .gitignore, tests.
+
 ### 60. Watch triggers become agent candidates (judgment plan J2b, 2026-09-28) ✅
 New `alerts/agentic_watch.py`: today's watch recs with conviction ≥50 plus ALL pinned watches (a pin wins for its
 ticker) are checked every cycle; a trigger FIRES when entry_checker's parser says the level is hit AND the price is
@@ -1021,8 +1037,8 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
 - ~~**J2b watch triggers → judge candidates**~~ — done #60.
 - **Pipeline LLM cost isn't in the credit ledger** — `claude_analyst.run_analysis` never calls
   `llm_budget.record_cost` (only chat + the judge do), so "LLM credit left" overstates what's left.
-- **J3 holding review** — event-driven only (new headline on a held ticker, move > ~1.5× ATR, earnings ≤2 days,
-  invalidation level hit): `keep | sell | tighten stop`. Risk-reducing actions only.
+- ~~**J3 holding review**~~ — done #61 (the "invalidation level hit" trigger was dropped: the entry judge's
+  invalidation is free text, not a parseable level — the review instead SHOWS it to the judge on every event).
 - **J4 shadow (2–4 weeks)** — judge runs and logs; mechanical rules still trade. Dashboard shows each decision +
   reasoning. Review: P&L of trades the judge would have skipped vs taken; exits it would have taken early.
 - **J5 binding** — only if J4 shows the judge helps; its skips/shrinks/exits become real. Kill switch = config flag.

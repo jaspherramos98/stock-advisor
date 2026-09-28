@@ -256,10 +256,22 @@ def run_exits(mcp, acct, equity: float, verbose: bool) -> list[dict]:
             if action == "close":
                 results.append(close_position(mcp, acct, p, equity, reason, state=state, stops=stops))
                 continue
-            # Holding: make sure the whole-share part rests on a GTC stop at the plan's stop.
             whole = math.floor(p["shares"])
             stop_pct = parse_stop_pct(entry)
             stop_px = protective_stop_price(p.get("avg_cost"), stop_pct)
+            # J3: the rules hold — if news / an unusual move / imminent earnings fired, have the judge
+            # review the thesis (SHADOW: logged only, the position is untouched).
+            from datetime import datetime
+            from analysis.holding_review import review
+            from storage.agent_stock_book import days_held
+            opened = (entry or {}).get("opened")
+            review({"ticker": t, "key": f"eq:{t}", "kind": "stock", "price": p.get("current_price"),
+                    "entry": p.get("avg_cost"), "now": p.get("current_price"), "pnl_pct": p.get("pnl_pct"),
+                    "days_held": days_held(entry, today), "plan": (entry or {}).get("exit_condition"),
+                    "current_stop": stop_px, "peak": peak,
+                    "opened_at": datetime.fromisoformat(opened) if opened else None},
+                   holdings={x["ticker"].upper() for x in positions}, verbose=verbose)
+            # Holding: make sure the whole-share part rests on a GTC stop at the plan's stop.
             if whole >= 1 and stop_px and t not in stops and stop_px < (p.get("current_price") or 0):
                 intent = OrderIntent(ticker=t, side="sell", quantity=whole, order_type="stop",
                                      stop_price=stop_px, time_in_force="gtc",

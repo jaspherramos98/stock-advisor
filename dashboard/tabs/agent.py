@@ -338,11 +338,14 @@ def render() -> None:
                     "Kind": r.get("kind"), "Ticker": r.get("ticker") or "—",
                     "Action": r.get("action"), "Why": r.get("reason"),
                     "Conv": (r.get("inputs") or {}).get("conviction"),
-                    "Judge (shadow)": (f"{r['judge']['decision']}"
-                                       + (f" ×{r['judge']['size_multiplier']:g}"
-                                          if r["judge"].get("decision") == "enter" else "")
-                                       if r.get("judge") else "—"),
+                    # Entry verdicts carry `decision` (+ size); holding reviews (J3) carry `action`.
+                    "Judge (shadow)": (
+                        (r["judge"].get("decision") or r["judge"].get("action") or "?")
+                        + (f" ×{r['judge']['size_multiplier']:g}" if r["judge"].get("decision") == "enter" else "")
+                        + (f" @ ${r['judge']['new_stop_price']:g}" if r["judge"].get("new_stop_price") else "")
+                        if r.get("judge") else "—"),
                     "Judge why": ((r.get("judge") or {}).get("thesis")
+                                  or (r.get("judge") or {}).get("reasoning")
                                   or (r.get("judge") or {}).get("error") or ""),
                     "P&L %": r.get("pnl_pct"),
                 } for r in reversed(_recs)]), use_container_width=True, hide_index=True)

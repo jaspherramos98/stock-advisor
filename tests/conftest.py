@@ -26,6 +26,17 @@ def _no_live_watch_scan(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_holding_review(monkeypatch, tmp_path):
+    """Exit passes run an event-driven holding review (analysis/holding_review.review: news, price
+    history, earnings, the judge). Stub it; keep its state file off the real one. Tests of the review
+    call holding_review._review_impl directly."""
+    from analysis import holding_review
+    monkeypatch.setattr(holding_review, "_FILE", str(tmp_path / "holding_review.json"))
+    monkeypatch.setattr(holding_review, "_review_impl", holding_review.review, raising=False)
+    monkeypatch.setattr(holding_review, "review", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_live_judge(monkeypatch):
     """The entry judge calls Claude — never from tests. Its pure parts are tested directly; the
     model call itself is replaced where a test needs a verdict."""

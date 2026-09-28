@@ -1646,6 +1646,70 @@ def test_fired_watch_is_judged_even_with_stock_leg_off(monkeypatch):
     assert placed == [("LLY", "market")]                                       # stock leg on → a share buy
 
 
+def test_holding_review_events():
+    from analysis.holding_review import events, mark_reviewed, headline_id
+    st = {"anchor_price": 100.0, "adr_pct": 2.0, "days_to_earnings": 5, "seen": [headline_id("Old news")]}
+    h = [{"title": "Old news"}, {"title": "FDA rejects drug"}]
+    assert events(st, 101.0, h, "2026-09-28") == ["news: FDA rejects drug"]          # seen headline ignored
+    assert events(st, 97.0, [], "2026-09-28") == ["move -3.0% since $100 (≥1.5× its 2% daily range)"]
+    assert events(st, 102.9, [], "2026-09-28") == []                                   # 2.9% < 3% (1.5×2%)
+    st2 = dict(st, days_to_earnings=1)
+    assert events(st2, 100.0, [], "2026-09-28") == ["earnings in 1 day(s)"]
+    after = mark_reviewed(st2, 97.0, h, "2026-09-28", ["earnings in 1 day(s)"])
+    assert after["anchor_price"] == 97.0 and after["earnings_flagged"] == "2026-09-28"
+    assert events(after, 97.0, h, "2026-09-28") == []                                  # nothing re-fires today
+    assert events({}, 50.0, [], "2026-09-28") == []                                    # no reference yet
+    # News cooldown: within 2h of a review, new headlines wait (still unseen → batched later);
+    # a big move still fires immediately.
+    from datetime import datetime, timedelta
+    now = datetime(2026, 9, 28, 11, 0)
+    cool = mark_reviewed(st, 100.0, [], "2026-09-28", [], now=now - timedelta(minutes=30))
+    assert events(cool, 100.0, h, "2026-09-28", now) == []
+    assert events(cool, 96.0, h, "2026-09-28", now) == ["move -4.0% since $100 (≥1.5× its 2% daily range)"]
+    assert events(cool, 100.0, h, "2026-09-28", now + timedelta(hours=2)) == ["news: FDA rejects drug"]
+
+
+def test_parse_holding_verdict():
+    from analysis.agent_judge import parse_holding_verdict as ph
+    t = ph({"action": "tighten_stop", "new_stop_price": 98.456, "confidence": 70,
+            "what_changed": "downgrade", "reasoning": "lock gains"}, price=105.0, current_stop=96.0)
+    assert t["action"] == "tighten_stop" and t["new_stop_price"] == 98.46
+    loosen = ph({"action": "tighten_stop", "new_stop_price": 95.0, "confidence": 70}, price=105.0, current_stop=96.0)
+    assert loosen["action"] == "keep" and "invalid tighten" in loosen["error"]          # can't loosen
+    above = ph({"action": "tighten_stop", "new_stop_price": 106.0}, price=105.0, current_stop=96.0)
+    assert above["action"] == "keep"                                                   # stop above price
+    opt = ph({"action": "tighten_stop", "new_stop_price": 1.0}, price=5.0, current_stop=None, allow_tighten=False)
+    assert opt["action"] == "keep"                                                     # options: keep|sell only
+    assert ph({"action": "sell", "confidence": 90})["action"] == "sell"
+    assert ph({"action": "panic"})["action"] == "keep" and ph(None)["error"] == "malformed verdict"
+
+
+def test_holding_review_fires_judges_and_logs(monkeypatch):
+    from analysis import agent_context, agent_judge, holding_review as hr
+    from storage import decision_log as dl
+    review = hr._review_impl
+    monkeypatch.setattr(hr, "_daily_reads", lambda t, st, today: {**st, "adr_pct": 2.0, "days_to_earnings": 20})
+    monkeypatch.setattr(agent_context, "_news_since", lambda t, since: [{"title": "Company cuts guidance"}])
+    monkeypatch.setattr(agent_context, "gather", lambda *a, **k: _real_ctx())
+    seen = {}
+
+    def fake_judge(ctx, text, **kw):
+        seen.update(text=text, **kw)
+        return {"action": "sell", "reasoning": "guidance cut breaks the growth thesis"}
+    monkeypatch.setattr(agent_judge, "judge_holding", fake_judge)
+    e = dl.record("entry", "F", "placed", "stock entry", key="eq:F",
+                  judge={"thesis": "EV demand", "invalidation": "below $11"})
+    pos = {"ticker": "F", "key": "eq:F", "kind": "stock", "price": 12.0, "entry": 12.5, "now": 12.0,
+           "pnl_pct": -4.0, "days_held": 3, "plan": "target 8% gain, stop loss at 4%", "current_stop": 11.9}
+    out = review(pos, holdings={"F", "T"}, regime={"regime": "risk-on"})
+    assert out["events"] == ["news: Company cuts guidance"] and out["judge"]["action"] == "sell"
+    assert "Original thesis: EV demand" in seen["text"] and "RULES' ACTION: hold" in seen["text"]
+    assert seen["allow_tighten"] is True and seen["current_stop"] == 11.9
+    rec = dl.read()[-1]
+    assert rec["kind"] == "review" and rec["action"] == "hold" and rec["entry_id"] == e
+    assert review(pos, holdings={"F"}, regime={}) is None                  # same headline → no second review
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 
