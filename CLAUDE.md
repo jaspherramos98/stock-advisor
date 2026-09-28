@@ -127,7 +127,7 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
                               header badge, chatbot context, and exit_checker. Also `recent_trading_days`
                               (PDT window) + `et_date` (ISO timestamp → Eastern trading date)
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
-                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_TRADE_STOCKS +
+                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_TRADE_STOCKS/AGENT_JUDGE +
                               AGENT_STOCK_BUDGET_CAP (max total $ entry cost the agent holds in shares;
                               20.0 for the S5 test — set None to remove the cap) + ROBINHOOD_MCP_URL (R25) —
                               single source of truth
@@ -260,6 +260,13 @@ analysis/agent_context.py     Fresh per-candidate briefing (judgment plan J1): p
                               build()/render()/track_record() pure; gather() live (~7s/candidate, never raises).
                               The entry loop stores it as `context` on each decided candidate's log record;
                               render() is what the J2 judge will read. Tests stub gather() (tests/conftest.py).
+analysis/agent_judge.py       Entry judge (judgment plan J2): one Sonnet call per candidate reaching a decision —
+                              forced tool call `record_verdict` → enter|wait|skip, size_multiplier, instrument,
+                              stop, confidence, thesis, invalidation, risks; `parse_verdict` clamps size to [0,1]
+                              (can only SHRINK) and turns anything malformed/failed into an explicit skip.
+                              config.AGENT_JUDGE = "shadow" (logged as `judge` on the decision record, changes
+                              NOTHING) | "off". ~$0.012 + ~10s per call; cost → llm_budget; skipped at the credit
+                              reserve; loads .env itself. Tests stub `_call_model` (tests/conftest.py).
 storage/decision_log.py       Agent decision log (judgment plan J0) — append-only agent_decisions.jsonl (gitignored):
                               one record per decision {id, ts, mode live|dry, kind entry|exit|stop|halt, ticker,
                               key, action, reason, inputs, …}. EVERY entry candidate is logged, incl. skips and why

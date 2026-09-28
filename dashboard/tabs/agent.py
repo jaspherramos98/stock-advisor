@@ -338,8 +338,16 @@ def render() -> None:
                     "Kind": r.get("kind"), "Ticker": r.get("ticker") or "—",
                     "Action": r.get("action"), "Why": r.get("reason"),
                     "Conv": (r.get("inputs") or {}).get("conviction"),
+                    "Judge (shadow)": (f"{r['judge']['decision']}"
+                                       + (f" ×{r['judge']['size_multiplier']:g}"
+                                          if r["judge"].get("decision") == "enter" else "")
+                                       if r.get("judge") else "—"),
+                    "Judge why": ((r.get("judge") or {}).get("thesis")
+                                  or (r.get("judge") or {}).get("error") or ""),
                     "P&L %": r.get("pnl_pct"),
                 } for r in reversed(_recs)]), use_container_width=True, hide_index=True)
+                st.caption("Judge = the Sonnet entry review (plan J2), SHADOW mode: logged only — the rules "
+                           "still decide every trade until the J4 review shows the judge helps.")
             else:
                 st.caption("No decisions logged yet — they appear after the agent's next cycle with a signal.")
 

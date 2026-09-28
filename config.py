@@ -44,4 +44,8 @@ DRY_RUN = True
 MCP_PERSISTENT_SESSION = True
 AGENT_TRADE_STOCKS = False
 AGENT_STOCK_BUDGET_CAP = 20.0
+# Entry judge (analysis/agent_judge.py, plan J2): "shadow" = a Sonnet call reviews each candidate and its
+# verdict is LOGGED beside the rules' decision but changes NOTHING (the J4 review compares them);
+# "off" = no judge calls. (A binding mode arrives only in J5, if the shadow data shows it helps.)
+AGENT_JUDGE = "shadow"
 ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading"
