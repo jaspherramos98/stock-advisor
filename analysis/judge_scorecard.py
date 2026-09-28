@@ -153,10 +153,12 @@ def live_closes(ticker: str) -> list[tuple]:
     return _CLOSES[ticker]
 
 
-def scorecard(mode: str = "live") -> dict:
-    """The full J4 scorecard from the decision log (default: live cycles only — dry previews repeat)."""
+def scorecard(mode: str | tuple | None = "acting") -> dict:
+    """The full J4 scorecard from the decision log. Default "acting" = live + paper cycles (dry previews
+    repeat decisions); None = every record. Paper verdicts count: the judge saw the same live data —
+    only the fills were virtual."""
     from storage import decision_log
-    records = decision_log.read(mode=mode)
+    records = decision_log.read(mode=decision_log.ACTING_MODES if mode == "acting" else mode)
     entries = entry_scores(records, live_closes)
     taken = taken_trade_scores(records)
     judged = [r for r in records if (r.get("judge") or {}) and not (r.get("judge") or {}).get("reused_from")]

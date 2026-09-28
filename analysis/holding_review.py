@@ -25,6 +25,8 @@ import json
 import os
 from datetime import date, datetime, timedelta
 
+from agent_mode import state_file
+
 _FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "holding_review.json")
 
 MOVE_ATR_MULT = 1.5
@@ -38,7 +40,7 @@ NEWS_COOLDOWN_MINUTES = 120
 
 def _load() -> dict:
     try:
-        with open(_FILE, encoding="utf-8") as f:
+        with open(state_file(_FILE), encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -47,7 +49,7 @@ def _load() -> dict:
 
 def _save(state: dict) -> None:
     try:
-        with open(_FILE, "w", encoding="utf-8") as f:
+        with open(state_file(_FILE), "w", encoding="utf-8") as f:
             json.dump(state, f, indent=1)
     except OSError as e:
         print(f"holding_review: could not save state — {e}")

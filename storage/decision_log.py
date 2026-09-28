@@ -3,7 +3,7 @@ Agent decision log — every decision the autonomous agent makes, with the input
 
 Append-only JSON Lines at agent_decisions.jsonl (repo root, gitignored). One record per decision:
 
-    {"id", "ts", "mode": "live"|"dry", "kind": "entry"|"exit"|"stop"|"halt",
+    {"id", "ts", "mode": "live"|"paper"|"dry", "kind": "entry"|"exit"|"stop"|"halt",
      "ticker", "key", "action", "reason", "inputs": {...}, ...extra}
 
   - kind "entry": EVERY candidate the entry loop considers — taken ("placed"/"dry_run") or not
@@ -29,8 +29,15 @@ from datetime import datetime
 _FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent_decisions.jsonl")
 
 
+# Cycles that act on a book — real money or paper — as opposed to "dry" previews that repeat decisions.
+ACTING_MODES = ("live", "paper")
+
+
 def _mode() -> str:
+    import agent_mode
     import config
+    if agent_mode.in_paper():
+        return "paper"
     return "dry" if getattr(config, "DRY_RUN", True) else "live"
 
 
@@ -48,8 +55,10 @@ def record(kind: str, ticker: str | None, action: str, reason: str = "", key: st
     return rec["id"]
 
 
-def read(limit: int | None = None, mode: str | None = None) -> list[dict]:
-    """Records oldest → newest (the last `limit` if given), optionally only one mode. Skips bad lines."""
+def read(limit: int | None = None, mode: str | tuple | None = None) -> list[dict]:
+    """Records oldest → newest (the last `limit` if given), optionally only one mode (or a tuple of
+    modes, e.g. ACTING_MODES). Skips bad lines."""
+    modes = (mode,) if isinstance(mode, str) else mode
     out: list[dict] = []
     try:
         with open(_FILE, encoding="utf-8") as f:
@@ -58,7 +67,7 @@ def read(limit: int | None = None, mode: str | None = None) -> list[dict]:
                     rec = json.loads(line)
                 except ValueError:
                     continue
-                if mode is None or rec.get("mode") == mode:
+                if modes is None or rec.get("mode") in modes:
                     out.append(rec)
     except OSError:
         return []

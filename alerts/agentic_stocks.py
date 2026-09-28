@@ -119,7 +119,8 @@ def enter(mcp, acct, sig: dict, dollars: float, avail: float, state, verbose: bo
           room: float = float("inf")) -> tuple[dict | None, float]:
     """Place (or dry-run) one share buy. Returns (result row | None if nothing to place, $ committed).
     `avail` = buying power left this cycle (what the order guard checks); `room` = what the stock
-    budget cap still allows. A LIVE placement records the entry's plan + cost in agent_stock_book."""
+    budget cap still allows. A placement records the entry's plan + cost in agent_stock_book (the paper
+    copy inside a paper cycle)."""
     intent = plan_buy(sig, dollars, min(avail, room))
     if intent is None:
         if verbose:
@@ -156,9 +157,16 @@ def decide_exit(pos: dict, entry: dict | None, peak: float | None, today=None) -
                                 peak_price=peak, days_held=days_held(entry, today))
 
 
+def _is_paper(mcp) -> bool:
+    return getattr(mcp, "PAPER", False)
+
+
 def _open_sell_stops(mcp, acct) -> dict[str, dict]:
-    """{TICKER: {order_id, tif}} for working stop sells on the agentic account ({} if unreadable)."""
+    """{TICKER: {order_id, tif}} for working stop sells on the agentic account ({} if unreadable, and
+    always {} for the paper broker — paper has no resting orders)."""
     from alerts.agentic_stops import _open_stops
+    if _is_paper(mcp):
+        return {}
     try:
         return {t.upper(): s for t, s in _open_stops(mcp._call_tool("get_equity_orders", {
             "account_number": acct})).items()}
@@ -191,7 +199,7 @@ def _cancel_and_wait(mcp, acct, order_id: str) -> bool:
 def close_position(mcp, acct, pos: dict, equity: float, reason: str, state=None,
                    stops: dict | None = None) -> dict:
     """Sell ONE share position in full: cancel its resting stop and wait for the broker to confirm
-    (else 'deferred' — the stop still reserves the shares), then a market sell. A live close forgets
+    (else 'deferred' — the stop still reserves the shares), then a market sell. A placed close forgets
     the agent's plan + peak. Shared by the exit pass and the dashboard's Close-now button."""
     from datetime import date
     from storage import agent_stock_book as book, peak_tracker
@@ -265,8 +273,10 @@ def run_exits(mcp, acct, equity: float, verbose: bool) -> list[dict]:
                     "current_stop": stop_px, "peak": peak,
                     "opened_at": datetime.fromisoformat(opened) if opened else None},
                    holdings={x["ticker"].upper() for x in positions}, verbose=verbose)
-            # Holding: make sure the whole-share part rests on a GTC stop at the plan's stop.
-            if whole >= 1 and stop_px and t not in stops and stop_px < (p.get("current_price") or 0):
+            # Holding: make sure the whole-share part rests on a GTC stop at the plan's stop (live only —
+            # paper has no resting orders; the poll's hard stop above covers it).
+            if (not _is_paper(mcp) and whole >= 1 and stop_px and t not in stops
+                    and stop_px < (p.get("current_price") or 0)):
                 intent = OrderIntent(ticker=t, side="sell", quantity=whole, order_type="stop",
                                      stop_price=stop_px, time_in_force="gtc",
                                      reason=f"protective stop {stop_pct:g}% under entry",

@@ -1,16 +1,19 @@
 """
-Paper-trading book for the options agent — validate the strategies with ZERO money at risk.
+Paper-trading book — the agent's virtual account (zero money at risk).
 
-A virtual account: starts with a cash balance (mirrors the real pilot by default), the agent
-"buys" option contracts against it, each cycle marks open positions to the live option mark and
-closes them per the exit policy, tracking realized + unrealized P&L. This is how you judge
-whether the agent actually makes money BEFORE arming real orders.
+The paper cycle runs the SAME agent code as live (alerts/agentic_options.run_options_agent) against
+alerts/paper_broker.PaperBroker, which fills orders here at live prices instead of sending them to
+Robinhood. Both legs: option contracts and (fractional) shares.
 
-Persisted to paper_book.json (repo root, gitignored). P&L math is pure + unit-tested; the live
-marking happens in the agent loop (alerts/agentic_options.py, mode='paper').
+Book (paper_book.json, repo root, gitignored):
+    {"version": 2, "cash", "start",
+     "options": [{option_id, ticker, right, strike, expiration, qty, entry_price, cost, opened_at}],
+     "shares":  {TICKER: {shares, avg_cost, cost, opened_at}},
+     "closed":  [{leg, ticker, entry_price, exit_price, qty, pnl, pnl_pct, reason, opened_at, closed_at, ...}],
+     "fills":   [{key, effect, qty, ts}]}          ← PDT day-trade counting, same rule as live
 
-A long option's P&L: (exit_price − entry_price) × 100 × contracts. entry/exit are per-share
-option prices (e.g. 0.18); ×100 = dollars per contract.
+Option P&L: (exit − entry) × 100 × contracts (prices are per share, e.g. 0.18). Share P&L:
+(exit − avg_cost) × shares. File I/O + pure math only; no network.
 """
 from __future__ import annotations
 
@@ -22,26 +25,44 @@ _FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_START = 25.0
 
 
+def _fresh(start: float) -> dict:
+    start = round(float(start), 2)
+    return {"version": 2, "cash": start, "start": start, "options": [], "shares": {}, "closed": [], "fills": []}
+
+
 def _load() -> dict:
     try:
         with open(_FILE, encoding="utf-8") as f:
             d = json.load(f) or {}
     except (OSError, ValueError):
         d = {}
-    d.setdefault("cash", DEFAULT_START)
-    d.setdefault("start", d["cash"])
-    d.setdefault("open", [])
-    d.setdefault("closed", [])
-    return d
+    if not isinstance(d, dict):
+        d = {}
+    if "version" not in d:                       # v1 (options-only): its open list becomes "options"
+        d["options"] = d.pop("open", d.get("options", []))
+    base = _fresh(d.get("cash", DEFAULT_START))
+    base.update(d)
+    base.setdefault("start", base["cash"])
+    base["version"] = 2
+    return base
 
 
 def _save(d: dict) -> None:
     with open(_FILE, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=2)
+        json.dump(d, f, indent=1)
+
+
+def _now() -> str:
+    return _dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _fill(d: dict, key: str, effect: str, qty: float) -> None:
+    d["fills"].append({"key": key, "effect": effect, "qty": qty,
+                       "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")})
 
 
 def reset(start: float = DEFAULT_START) -> dict:
-    d = {"cash": round(float(start), 2), "start": round(float(start), 2), "open": [], "closed": []}
+    d = _fresh(start)
     _save(d)
     return d
 
@@ -54,90 +75,130 @@ def cash() -> float:
     return round(_load()["cash"], 2)
 
 
-def open_tickers() -> set:
-    return {(p.get("ticker") or "").upper() for p in _load()["open"]}
+# --- options ------------------------------------------------------------------------------
 
-
-def open_position(pos: dict) -> bool:
-    """Buy a paper contract: deduct premium from cash, append to open. Rejects if unaffordable
-    or a duplicate option_id. `pos` needs option_id/ticker/right/strike/expiration/strategy/qty/
-    entry_price."""
+def open_option(pos: dict) -> str | None:
+    """Buy paper contracts at pos['entry_price']. Returns None on success, else why it was refused."""
     d = _load()
     oid = pos.get("option_id")
-    if not oid or oid in {p.get("option_id") for p in d["open"]}:
-        return False
+    if not oid:
+        return "missing option_id"
+    if oid in {p.get("option_id") for p in d["options"]}:
+        return "already hold this contract"
     qty = int(pos.get("qty") or 1)
     entry = float(pos.get("entry_price") or 0)
     cost = round(entry * 100 * qty, 2)
     if cost <= 0 or cost > d["cash"]:
-        return False
+        return f"premium ${cost:.2f} exceeds paper cash ${d['cash']:.2f}"
     d["cash"] = round(d["cash"] - cost, 2)
-    d["open"].append({
-        "option_id": oid, "ticker": (pos.get("ticker") or "").upper(),
-        "right": pos.get("right"), "strike": pos.get("strike"),
-        "expiration": pos.get("expiration"), "strategy": pos.get("strategy"),
-        "qty": qty, "entry_price": entry, "cost": cost,
-        "opened_at": _dt.datetime.now().isoformat(timespec="seconds"),
-    })
+    d["options"].append({"option_id": oid, "ticker": (pos.get("ticker") or "").upper(),
+                         "right": pos.get("right"), "strike": pos.get("strike"),
+                         "expiration": pos.get("expiration"), "strategy": pos.get("strategy"),
+                         "qty": qty, "entry_price": entry, "cost": cost, "opened_at": _now()})
+    _fill(d, f"opt:{oid}", "open", qty)
     _save(d)
-    return True
+    return None
 
 
-def close_position(option_id: str, exit_price: float, reason: str = "") -> dict | None:
-    """Sell a paper contract at exit_price: add proceeds to cash, move to closed with realized
-    P&L. Returns the closed record or None if not found."""
+def close_option(option_id: str, exit_price: float, reason: str = "") -> dict | None:
+    """Sell a paper contract at exit_price. Returns the closed record, or None if not held."""
     d = _load()
-    pos = next((p for p in d["open"] if p.get("option_id") == option_id), None)
+    pos = next((p for p in d["options"] if p.get("option_id") == option_id), None)
     if not pos:
         return None
-    d["open"] = [p for p in d["open"] if p.get("option_id") != option_id]
-    qty, entry = int(pos["qty"]), float(pos["entry_price"])
-    exit_price = float(exit_price)
-    proceeds = round(exit_price * 100 * qty, 2)
-    pnl = round((exit_price - entry) * 100 * qty, 2)
-    d["cash"] = round(d["cash"] + proceeds, 2)
-    rec = {**pos, "exit_price": exit_price, "reason": reason, "pnl": pnl,
-           "pnl_pct": round((exit_price - entry) / entry * 100, 1) if entry else 0.0,
-           "closed_at": _dt.datetime.now().isoformat(timespec="seconds")}
+    d["options"] = [p for p in d["options"] if p.get("option_id") != option_id]
+    qty, entry, exit_price = int(pos["qty"]), float(pos["entry_price"]), float(exit_price)
+    d["cash"] = round(d["cash"] + exit_price * 100 * qty, 2)
+    pnl, pct = position_pnl(entry, exit_price, qty)
+    rec = {**pos, "leg": "option", "exit_price": exit_price, "reason": reason, "pnl": pnl, "pnl_pct": pct,
+           "closed_at": _now()}
     d["closed"].append(rec)
+    _fill(d, f"opt:{option_id}", "close", qty)
     _save(d)
     return rec
 
 
-def get_open() -> list[dict]:
-    return _load()["open"]
+# --- shares -------------------------------------------------------------------------------
+
+def buy_shares(ticker: str, dollars: float, price: float) -> str | None:
+    """Dollar-based paper buy at `price` (fractional). Adds to an existing position at a blended
+    average. Returns None on success, else why it was refused."""
+    t = (ticker or "").upper()
+    dollars, price = round(float(dollars or 0), 2), float(price or 0)
+    if not t or dollars <= 0 or price <= 0:
+        return "needs a ticker, a positive dollar amount and a live price"
+    d = _load()
+    if dollars > d["cash"]:
+        return f"${dollars:.2f} exceeds paper cash ${d['cash']:.2f}"
+    qty = dollars / price
+    held = d["shares"].get(t) or {"shares": 0.0, "cost": 0.0, "opened_at": _now()}
+    held["shares"] = held["shares"] + qty
+    held["cost"] = round(held["cost"] + dollars, 2)
+    held["avg_cost"] = held["cost"] / held["shares"]
+    d["shares"][t] = held
+    d["cash"] = round(d["cash"] - dollars, 2)
+    _fill(d, f"eq:{t}", "open", qty)
+    _save(d)
+    return None
 
 
-# --- pure P&L helpers (unit-tested) ---------------------------------------------------
+def sell_shares(ticker: str, qty: float, price: float, reason: str = "") -> dict | None:
+    """Sell `qty` paper shares (capped at what's held) at `price`. Returns the closed record, or None
+    if nothing is held."""
+    t = (ticker or "").upper()
+    d = _load()
+    held = d["shares"].get(t)
+    if not held or not price or price <= 0:
+        return None
+    qty = min(float(qty or 0), held["shares"])
+    if qty <= 0:
+        return None
+    avg = held["avg_cost"]
+    d["cash"] = round(d["cash"] + qty * price, 2)
+    rest = held["shares"] - qty
+    if rest <= 1e-9:
+        d["shares"].pop(t)
+    else:
+        d["shares"][t] = {**held, "shares": rest, "cost": round(avg * rest, 2)}
+    rec = {"leg": "stock", "ticker": t, "qty": qty, "entry_price": avg, "exit_price": float(price),
+           "pnl": round((price - avg) * qty, 2), "pnl_pct": round((price - avg) / avg * 100, 1) if avg else 0.0,
+           "reason": reason, "opened_at": held.get("opened_at"), "closed_at": _now()}
+    d["closed"].append(rec)
+    _fill(d, f"eq:{t}", "close", qty)
+    _save(d)
+    return rec
+
+
+# --- pure helpers (unit-tested) -------------------------------------------------------------
 
 def position_pnl(entry_price: float, mark: float, qty: int) -> tuple[float, float]:
-    """(unrealized $ , unrealized %) for a long option marked at `mark`."""
+    """(unrealized $, unrealized %) for a long option marked at `mark`."""
     if not entry_price:
         return (0.0, 0.0)
     return (round((mark - entry_price) * 100 * qty, 2),
             round((mark - entry_price) / entry_price * 100, 1))
 
 
-def summarize(book: dict, marks: dict[str, float]) -> dict:
-    """Portfolio stats given current option marks {option_id: mark}. equity = cash + open value;
-    realized = sum closed pnl; win_rate over closed trades."""
-    cash_ = book.get("cash", 0.0)
-    open_val, unreal = 0.0, 0.0
-    for p in book.get("open", []):
-        mk = float(marks.get(p["option_id"], p["entry_price"]))
+def summarize(book: dict, option_marks: dict[str, float], share_prices: dict[str, float] | None = None) -> dict:
+    """Account stats given option marks {option_id: mark} and share prices {TICKER: price} (a missing
+    price marks at cost). equity = cash + open value; realized = Σ closed pnl; win rate over closed."""
+    share_prices = share_prices or {}
+    open_val = unreal = 0.0
+    for p in book.get("options", []):
+        mk = float(option_marks.get(p["option_id"], p["entry_price"]))
         open_val += mk * 100 * p["qty"]
         unreal += (mk - p["entry_price"]) * 100 * p["qty"]
+    for t, h in (book.get("shares") or {}).items():
+        px = float(share_prices.get(t) or h["avg_cost"])
+        open_val += px * h["shares"]
+        unreal += (px - h["avg_cost"]) * h["shares"]
     closed = book.get("closed", [])
-    realized = sum(c.get("pnl", 0.0) for c in closed)
     wins = sum(1 for c in closed if c.get("pnl", 0) > 0)
-    start = book.get("start", DEFAULT_START)
+    cash_, start = book.get("cash", 0.0), book.get("start", DEFAULT_START)
     equity = cash_ + open_val
-    return {
-        "cash": round(cash_, 2), "open_value": round(open_val, 2),
-        "unrealized": round(unreal, 2), "realized": round(realized, 2),
-        "equity": round(equity, 2), "start": round(start, 2),
-        "total_pnl": round(equity - start, 2),
-        "total_pnl_pct": round((equity - start) / start * 100, 1) if start else 0.0,
-        "n_open": len(book.get("open", [])), "n_closed": len(closed),
-        "win_rate": round(wins / len(closed) * 100, 0) if closed else None,
-    }
+    return {"cash": round(cash_, 2), "open_value": round(open_val, 2), "unrealized": round(unreal, 2),
+            "realized": round(sum(c.get("pnl", 0.0) for c in closed), 2), "equity": round(equity, 2),
+            "start": round(start, 2), "total_pnl": round(equity - start, 2),
+            "total_pnl_pct": round((equity - start) / start * 100, 1) if start else 0.0,
+            "n_open": len(book.get("options", [])) + len(book.get("shares") or {}), "n_closed": len(closed),
+            "win_rate": round(wins / len(closed) * 100, 0) if closed else None}

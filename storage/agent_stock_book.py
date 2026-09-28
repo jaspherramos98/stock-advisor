@@ -8,7 +8,8 @@ condition the entry signal carried ("target 8% gain, stop loss at 4%") or when t
 by hand) falls back to STOCK_EXIT_DEFAULT.
 
 Keyed by ticker (one agent position per name — the entry loop never stacks). Persisted to
-agent_stocks.json (repo root, gitignored). Only LIVE placements are recorded; a dry run changes nothing.
+agent_stocks.json (repo root, gitignored). Only placements are recorded (a dry run changes nothing);
+a paper cycle's placements go to paper_agent_stocks.json (agent_mode.paper_scope).
 """
 from __future__ import annotations
 
@@ -16,12 +17,14 @@ import json
 import os
 from datetime import date
 
+from agent_mode import state_file
+
 _FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent_stocks.json")
 
 
 def _load() -> dict:
     try:
-        with open(_FILE, encoding="utf-8") as f:
+        with open(state_file(_FILE), encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -30,7 +33,7 @@ def _load() -> dict:
 
 def _save(book: dict) -> None:
     try:
-        with open(_FILE, "w", encoding="utf-8") as f:
+        with open(state_file(_FILE), "w", encoding="utf-8") as f:
             json.dump(book, f, indent=1)
     except OSError as e:
         print(f"agent_stock_book: could not save — {e}")

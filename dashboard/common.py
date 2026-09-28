@@ -104,9 +104,8 @@ def _c_agentic_bp(acct):
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _c_option_positions(acct):
-    from ingestion import robinhood_mcp as _m, mcp_auth as _a
-    d = _m._data(_m._unwrap_tool_result(_a.call_tool("get_option_positions", {"account_number": acct, "nonzero": True})))
-    return d.get("positions", []) if isinstance(d, dict) else []
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_option_positions(acct)
 
 
 @st.cache_data(ttl=30, show_spinner=False)

@@ -1,8 +1,8 @@
 """
 Print the judge scorecard (judgment plan J4) — does the shadow judge beat the rules?
 
-    venv\\Scripts\\python.exe scripts\\judge_review.py          # live cycles (default)
-    venv\\Scripts\\python.exe scripts\\judge_review.py --all    # include dry previews
+    venv\\Scripts\\python.exe scripts\\judge_review.py          # live + paper cycles (default)
+    venv\\Scripts\\python.exe scripts\\judge_review.py --all    # include dry runs
 
 Read-only: reads agent_decisions.jsonl + yfinance closes. See analysis/judge_scorecard.py.
 """
@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def main() -> int:
     from analysis.judge_scorecard import HORIZONS, scorecard
-    sc = scorecard(mode=None if "--all" in sys.argv else "live")
+    sc = scorecard(mode=None if "--all" in sys.argv else "acting")
     print("== Judge scorecard (J4) ==")
     print(f"Judge calls: {sc['judge_calls']} | cost ${sc['judge_cost_usd']:.4f}\n")
     print("Entry verdicts → underlying return after:")

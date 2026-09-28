@@ -5,7 +5,7 @@ Extracted verbatim from dashboard/app.py (tab 6); rendered via render().
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from dashboard.common import (_c_agentic_bp, _c_agentic_equity, _c_day_trade_budget, _c_option_orders,
+from dashboard.common import (_cached_prices, _c_agentic_bp, _c_agentic_equity, _c_day_trade_budget, _c_option_orders,
                               _c_option_positions, _c_option_quote)
 
 
@@ -70,20 +70,23 @@ def render() -> None:
             st.warning("Agentic account not connected (USE_MCP off or not logged in). "
                            "Run scripts/mcp_login.py.")
 
-        # --- Paper trading (simulation) ---
+        # --- Paper trading: the SAME agent code as live, fills are virtual ---
         st.markdown("### 📊 Paper trading — simulated, zero money at risk")
-        st.caption("The agent trades a VIRTUAL account against live option prices so you can "
-                       "judge the strategies before going Live. The scheduler runs this every "
-                       "cycle in Paper mode.")
+        st.caption("In Paper mode the scheduler runs the exact live agent (options AND shares, the \\$20 stock cap, "
+                   "PDT, the shadow judge, the decision log) but fills orders here at live prices instead of "
+                   "sending them. Shares fill at the last price; options at the ask/bid the agent sends.")
+        _book = {}
         try:
             from storage import paper_book as _pb
-            from ingestion import options_data as _pod2
             _book = _pb.get_book()
             _marks = {}
-            for _pp in _book.get("open", []):
+            for _pp in _book["options"]:
                 _q = _c_option_quote(_pp["option_id"])
                 _marks[_pp["option_id"]] = float(_q.get("mark_price") or _q.get("bid_price") or _pp["entry_price"])
-            _ps = _pb.summarize(_book, _marks)
+            _held_sh = _book["shares"]
+            _quotes = _cached_prices(tuple(sorted(_held_sh))) if _held_sh else {}
+            _px = {t: (_quotes.get(t) or {}).get("price") for t in _held_sh}
+            _ps = _pb.summarize(_book, _marks, _px)
 
             pm1, pm2, pm3, pm4 = st.columns(4)
             pm1.metric("Paper equity", f"\\${_ps['equity']:,.2f}",
@@ -95,13 +98,16 @@ def render() -> None:
 
             _pc1, _pc2, _pc3 = st.columns([1, 1, 1])
             with _pc1:
-                if st.button("▶ Run paper cycle now", use_container_width=True, key="paper_run"):
+                if st.button("▶ Run paper cycle now", use_container_width=True, key="paper_run",
+                             disabled=_cur == "off"):
                     from alerts.agentic_options import run_paper_agent
                     st.session_state["paper_result"] = run_paper_agent(verbose=False)
                     st.rerun()
             with _pc2:
-                _pstart = st.number_input("Reset with $", min_value=1.0, value=float(_book.get("start", 25.0)),
-                                          step=25.0, key="paper_reset_amt")
+                _pstart = st.number_input("Reset with $", min_value=1.0, step=5.0, key="paper_reset_amt",
+                                          value=float(round(_agbp, 2)) if _agbp else float(_book["start"]),
+                                          help="Defaults to the real agentic buying power, so paper mirrors "
+                                               "what live would do.")
             with _pc3:
                 st.write("")
                 if st.button("↺ Reset paper book", use_container_width=True, key="paper_reset"):
@@ -110,24 +116,27 @@ def render() -> None:
             if st.session_state.get("paper_result"):
                 st.caption(f"Last paper cycle: {st.session_state['paper_result']}")
 
-            if _book.get("open"):
+            _rows = [{"Ticker": p["ticker"], "Holding": f"{p['strike']:g}{(p['right'] or '?')[0].upper()} "
+                                                        f"{p['expiration']} ×{p['qty']}",
+                      "Entry": f"${p['entry_price']:.2f}", "Now": f"${_marks[p['option_id']]:.2f}",
+                      "Unreal %": f"{_pb.position_pnl(p['entry_price'], _marks[p['option_id']], p['qty'])[1]:+.0f}%"}
+                     for p in _book["options"]]
+            _rows += [{"Ticker": t, "Holding": f"{h['shares']:.4f} sh (${h['cost']:.2f})",
+                       "Entry": f"${h['avg_cost']:.2f}", "Now": f"${_px.get(t) or h['avg_cost']:.2f}",
+                       "Unreal %": f"{((_px.get(t) or h['avg_cost']) - h['avg_cost']) / h['avg_cost'] * 100:+.1f}%"}
+                      for t, h in _held_sh.items()]
+            if _rows:
                 st.markdown("**Open (paper)**")
-                st.dataframe(pd.DataFrame([{
-                    "Ticker": p["ticker"], "Contract": f"{p['strike']:g}{p['right'][0].upper()} {p['expiration']}",
-                    "Strategy": p["strategy"], "Qty": p["qty"], "Entry": f"${p['entry_price']:.2f}",
-                    "Mark": f"${_marks.get(p['option_id'], p['entry_price']):.2f}",
-                    "Unreal $": f"{_pb.position_pnl(p['entry_price'], _marks.get(p['option_id'], p['entry_price']), p['qty'])[0]:+.2f}",
-                    "Unreal %": f"{_pb.position_pnl(p['entry_price'], _marks.get(p['option_id'], p['entry_price']), p['qty'])[1]:+.0f}%",
-                } for p in _book["open"]]), use_container_width=True, hide_index=True)
-            if _book.get("closed"):
+                st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+            if _book["closed"]:
                 st.markdown("**Closed (paper)**")
                 st.dataframe(pd.DataFrame([{
-                    "Ticker": c["ticker"], "Contract": f"{c['strike']:g}{c['right'][0].upper()}",
+                    "Ticker": c["ticker"], "Leg": c.get("leg", "option"),
                     "Entry→Exit": f"${c['entry_price']:.2f}→${c['exit_price']:.2f}",
-                    "P&L $": f"{c['pnl']:+.2f}", "P&L %": f"{c['pnl_pct']:+.0f}%", "Why": c["reason"],
+                    "P&L $": f"{c['pnl']:+.2f}", "P&L %": f"{c['pnl_pct']:+.1f}%", "Why": c.get("reason", ""),
                 } for c in reversed(_book["closed"][-20:])]), use_container_width=True, hide_index=True)
-            if not _book.get("open") and not _book.get("closed"):
-                st.caption("No paper trades yet — run a cycle (needs an affordable buy signal, e.g. F/NIO/SNAP).")
+            if not _rows and not _book["closed"]:
+                st.caption("No paper trades yet — they appear after a cycle with a signal (market hours).")
         except Exception as _e:  # noqa: BLE001
             st.caption(f"Paper book unavailable: {_e}")
 
@@ -135,7 +144,7 @@ def render() -> None:
         st.markdown("### 🕯 Live chart")
         try:
             import datetime as _cdt
-            _open_ticks = sorted({p["ticker"] for p in _book.get("open", [])}) if "_book" in dir() else []
+            _open_ticks = sorted({p["ticker"] for p in _book.get("options", [])} | set(_book.get("shares") or {}))
             _chart_ticks = _open_ticks + [t for t in ("F", "NIO", "SNAP", "SPY") if t not in _open_ticks]
             _csel1, _csel2, _csel3 = st.columns([2, 1, 1])
             with _csel1:
@@ -183,22 +192,25 @@ def render() -> None:
                     _prior = _df[_df["t"] <= _tt]
                     return float(_prior.iloc[-1]["close_price"]) if len(_prior) else None
 
+                _paper_buys = [(p["opened_at"], f"BUY {p['qty']}× {p['strike']:g}{(p['right'] or '?')[0].upper()} "
+                                                f"{p.get('expiration', '')} @ ${p['entry_price']:.2f}")
+                               for p in _book.get("options", []) if p["ticker"] == _csym]
+                _h = (_book.get("shares") or {}).get(_csym)
+                if _h:
+                    _paper_buys.append((_h.get("opened_at"), f"BUY {_h['shares']:.4f} sh @ ${_h['avg_cost']:.2f}"))
                 _bx, _by, _bl = [], [], []
-                for p in _book.get("open", []):
-                    if p["ticker"] == _csym and p.get("opened_at"):
-                        _y = _price_at(p["opened_at"])
-                        if _y is not None:
-                            _bx.append(pd.to_datetime(p["opened_at"])); _by.append(_y)
-                            _bl.append(f"BUY {p['qty']}× {p['strike']:g}{p['right'][0].upper()} "
-                                           f"{p.get('expiration','')} @ ${p['entry_price']:.2f} ({p.get('strategy','')})")
+                for _ts, _lbl in _paper_buys:
+                    _y = _price_at(_ts) if _ts else None
+                    if _y is not None:
+                        _bx.append(pd.to_datetime(_ts)); _by.append(_y); _bl.append(_lbl)
                 _sx, _sy, _sl = [], [], []
                 for c in _book.get("closed", []):
                     if c["ticker"] == _csym and c.get("closed_at"):
                         _y = _price_at(c["closed_at"])
                         if _y is not None:
                             _sx.append(pd.to_datetime(c["closed_at"])); _sy.append(_y)
-                            _sl.append(f"SELL {c['strike']:g}{c['right'][0].upper()} · "
-                                           f"{c['pnl']:+.2f} ({c['pnl_pct']:+.0f}%) · {c.get('reason','')}")
+                            _sl.append(f"SELL {c.get('leg', 'option')} · {c['pnl']:+.2f} "
+                                       f"({c['pnl_pct']:+.1f}%) · {c.get('reason', '')}")
                 if _bx:
                     figc.add_trace(go.Scatter(
                         x=_bx, y=_by, mode="markers", name="BUY (paper)", text=_bl,
@@ -284,18 +296,6 @@ def render() -> None:
                 st.error("⛔ Credit at/under reserve — new agent entries + chat are halted. "
                              "Top up, then update the balance above.")
 
-        # --- controls ---
-        st.markdown("### 🎛 Controls")
-        if st.button("🔮 Preview cycle (dry run — places nothing)", use_container_width=True,
-                     disabled=not _acct or _cur == "off"):
-            _old = _cfg.DRY_RUN
-            _cfg.DRY_RUN = True
-            try:
-                st.session_state["agent_preview"] = run_options_agent(verbose=False)
-            finally:
-                _cfg.DRY_RUN = _old
-            st.rerun()
-
         # LIVE run now — only in Live mode; explicit, guarded, scoped (never flips DRY_RUN process-wide).
         with st.expander("🔴 Run a LIVE cycle now (places REAL orders)"):
             st.warning("Real orders on the agentic account — options (uncapped size) and shares (capped by "
@@ -310,9 +310,6 @@ def render() -> None:
                     _cfg.DRY_RUN = _old
                 st.rerun()
 
-        if st.session_state.get("agent_preview"):
-            st.markdown("#### 🔮 Preview result (dry run)")
-            st.json(st.session_state["agent_preview"])
         if st.session_state.get("agent_live_result"):
             st.markdown("#### 🔴 Last LIVE cycle result")
             st.json(st.session_state["agent_live_result"])
@@ -320,8 +317,8 @@ def render() -> None:
         # --- decision log (plan J0): every candidate/exit the agent considered + why ---
         with st.expander("🧾 Decision log — what the agent considered and why"):
             from storage import decision_log as _dl
-            _only_live = st.checkbox("Live cycles only (hide dry previews)", value=True, key="agent_dlog_live")
-            _recs = _dl.read(limit=60, mode="live" if _only_live else None)
+            _dl_mode = st.radio("Show", ("live + paper", "live", "paper"), horizontal=True, key="agent_dlog_mode")
+            _recs = _dl.read(limit=60, mode=_dl.ACTING_MODES if _dl_mode == "live + paper" else _dl_mode)
             if _recs:
                 st.dataframe(pd.DataFrame([{
                     "Time": r.get("ts", "").replace("T", " "), "Mode": r.get("mode"),

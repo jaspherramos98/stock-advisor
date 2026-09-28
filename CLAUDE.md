@@ -132,7 +132,9 @@ config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL
                               20.0 while the stock leg is new — set None to remove the cap) + ROBINHOOD_MCP_URL
                               (R25) — single source of truth. Whether the agent trades is NOT here: agent_mode.py
 agent_mode.py                 THE agent control: off | paper | live, in agent_mode.txt (gitignored), set only from
-                              the Agent tab radio. No file → paper; garbled → off. Replaced the arm file, the kill
+                              the Agent tab radio. No file → paper; garbled → off. Also `paper_scope()` (a
+                              ContextVar): inside it agent state files use paper_* twins (`state_file`) and
+                              decision-log records are tagged "paper". Replaced the arm file, the kill
                               switch file, config.AGENT_TRADE_STOCKS and the one-shot $20 test script (2026-09-28).
                               off = nothing runs (exits too); paper = paper cycle + live EXITS of any real positions
                               left from live; live = full real cycle (options + shares).
@@ -207,10 +209,16 @@ storage/peak_tracker.py       Option high-water-mark tracker (Phase 2) — recor
                               mark (keyed by option_id, peaks.json gitignored) so option_exit_decision
                               can TRAIL: sell after a pullback from the peak instead of only a fixed
                               target. Shared by the paper + live exit paths. clear_peak on close.
-storage/paper_book.py         Paper-trading book (Phase 2) — virtual cash account the agent trades
-                              against live option prices (zero money): open/close positions, realized +
-                              unrealized P&L, summarize(). Persisted paper_book.json (gitignored). Pure
-                              P&L helpers unit-tested. Agent 'paper' mode = run_paper_agent().
+storage/paper_book.py         Paper-trading book v2 — virtual account, BOTH legs: option contracts + fractional
+                              shares (`open_option/close_option`, `buy_shares/sell_shares`), cash, closed trades,
+                              and PDT `fills`. v1 (options-only "open" list) migrates on load. summarize() pure.
+                              paper_book.json (gitignored). Reset from the Agent tab (default = real agentic BP).
+alerts/paper_broker.py        PaperBroker — the paper backend for the agent: same call surface the agent uses on
+                              robinhood_mcp (buying power, positions, option positions, PDT budget, place_order,
+                              place_option_order). SAME trading_guards + order-shape checks, then fills into
+                              paper_book at live prices (options at the ask/bid the agent sends; shares at the
+                              last price, no spread). No review, no resting stops (the poll's hard stop covers
+                              paper shares). Market data stays live via the MCP.
 ingestion/affordable_scout.py Affordable-universe scout (Phase 2) — when every pipeline idea is too
                               expensive for the pilot, scans a preset of liquid CHEAP underlyings and
                               emits technical buy/short signals from RSI (source='scout', ranked LAST so
@@ -242,8 +250,11 @@ alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_sig
                               only (what paper mode runs against real positions).
                               PDT: entries stop once the day-trade budget (`_entry_budget`, read AFTER
                               exits) is spent; an unreadable fill history → 0 entries (fail CLOSED).
-                              EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
-                              (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
+                              EXITS: open positions→trailing exit policy (peak_tracker)→close. BROKER: every
+                              account read/order goes through the `mcp` backend — robinhood_mcp, or PaperBroker:
+                              `run_paper_agent` = `run_options_agent(broker=PaperBroker())` inside
+                              agent_mode.paper_scope() → paper runs THIS code (the old separate paper loop was
+                              deleted #65). DRY_RUN-safe, review-first, guarded,
                               market-hours gated, agent_mode "off" halts, LLM-credit halt on entries.
                               AGENTIC account only. Position size uncapped (pilot).
 alerts/agentic_stocks.py      Stock (share) leg of the agent (S2) — `route` (HR / conviction ≥75 → options;
@@ -298,14 +309,16 @@ analysis/holding_review.py    Event-driven holding review (J3) — on the HOLD p
                               entry record. Logged as a `review` record; SHADOW → nothing changes. State:
                               holding_review.json (gitignored). Tests stub `review` (conftest → `_review_impl`).
 storage/decision_log.py       Agent decision log (judgment plan J0) — append-only agent_decisions.jsonl (gitignored):
-                              one record per decision {id, ts, mode live|dry, kind entry|exit|stop|halt, ticker,
+                              one record per decision {id, ts, mode live|paper|dry, kind entry|exit|stop|halt, ticker,
                               key, action, reason, inputs, …}. EVERY entry candidate is logged, incl. skips and why
                               (held / not tradeable / PDT / no contract / below $1 / guard or review reject);
                               exits carry pnl_pct + `entry_id` (linked via key: option_id or "eq:TICKER"). Never
                               blocks trading. tests/conftest.py redirects it to a temp file for every test.
-                              Agent tab: "🧾 Decision log" (live-only by default).
+                              Agent tab: "🧾 Decision log" (live + paper by default; `ACTING_MODES`). The J4
+                              scorecard counts live + paper verdicts (same live data, virtual fills).
 storage/agent_stock_book.py   Plan behind each agent share position (exit_condition, source, conviction, opened
-                              date) → agent_stocks.json (gitignored). Written only on a LIVE placement; S3's exit
+                              date) → agent_stocks.json (gitignored). Written only on a placement (paper cycles write
+                              paper_agent_stocks.json — as do peak_tracker/holding_review: agent_mode.state_file); S3's exit
                               pass reads it (no record → STOCK_EXIT_DEFAULT).
 alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
                               stop_market per AGENTIC-account position (set-and-forget; Robinhood
@@ -749,14 +762,15 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
    was ~0.2–0.4s of EVERY click (all tabs rerun on each interaction).
 6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
    Top: the **Agent mode** radio (Off / Paper / Live → `agent_mode.set_mode`; switching to Live needs a
-   confirm checkbox). **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
-   equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset buttons.
+   confirm checkbox). **📊 Paper trading**: the paper book (options + shares) the Paper-mode agent trades —
+   equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset (default = real
+   agentic BP) buttons. (The dry-run Preview button was removed #65 — paper replaces it.)
    **🕯 Live chart**: plotly candlesticks (get_equity_historicals) per ticker/interval with paper BUY/SELL
    markers + refresh. Then: status metrics (agentic buying power, LLM credit
    left, **New entries (PDT)** = remaining day-trade budget, `_c_day_trade_budget` 60s);
-   **LLM credit ledger** control (set balance/reserve — `llm_budget`); **Preview cycle** (dry run, places
-   nothing, both legs) and a guarded **Run LIVE cycle now** (real orders, confirm-checkbox, market-hours only,
-   enabled in Live mode only) — both scope `config.DRY_RUN` only around the call, never process-wide;
+   **LLM credit ledger** control (set balance/reserve — `llm_budget`); a guarded **Run LIVE cycle now** (real orders,
+   confirm-checkbox, market-hours only, enabled in Live mode only) — scopes `config.DRY_RUN` only around the
+   call, never process-wide;
    **agentic share positions** + a **🔄 Sync positions** refresh — each
    row says whether it's agent-managed (plan, opened date, the agent's hold/close decision via
    `agentic_stocks.decide_exit`) or hand-bought (never touched), with a **Sell now** override that reuses
