@@ -277,9 +277,19 @@ run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; r
                               schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>un_agent_silent.vbs\""
                               /SC MINUTE /MO 20 /F. Manage: schtasks /Query|/Run|/Change|/Delete /TN "…".
 market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
-                              run pipeline (fresh signals) → arm the agent (echo armed > agent_live.arm).
-                              run_market_open_silent.vbs runs it hidden; Windows task "Argus Market Open"
-                              (daily 06:30) calls it — currently deleted by the user = manual mornings.
+                              `scripts/run_pipeline.py` (headless; writes today's cache) → arm the agent
+                              (echo armed > agent_live.arm); output appended to market_open.log (gitignored).
+                              It used to call main.py, which prompts for a budget (hung forever hidden, so
+                              it never armed) and never wrote the cache (the agent never saw its signals).
+                              run_market_open_silent.vbs runs it hidden. Task "Argus Market Open" — register
+                              (user action): schtasks /Create /TN "Argus Market Open" /TR "wscript.exe
+                              \"D:\CS\Projects\stock-advisor\run_market_open_silent.vbs\"" /SC WEEKLY
+                              /D MON,TUE,WED,THU,FRI /ST 06:30 /F
+scripts/run_pipeline.py       Headless "Run pipeline": ingestion → analysis → prices → storage.pipeline_cache.save.
+                              Skips NYSE holidays/weekends (no LLM spend) unless --force; exit 1 on failure.
+storage/pipeline_cache.py     ONE writer/reader of pipeline_cache.json (+ backup) for the dashboard button, the
+                              headless run, and chat context; `load_today()` never returns another day's cache
+                              (the agent's `_signals` applies the same rule to the same file).
 scripts/stock_leg_test.py     S5 live test of the stock leg: 2-3 small share positions (today's share signals,
                               padded with SPY/QQQ/IWM) splitting the stock cap EQUALLY, via the agent's own
                               review-first path + stock book, then managed by the normal cycle. Default DRY;
@@ -292,8 +302,10 @@ scripts/scan_affordable.py    Read-only screener — which tickers have a ~30-DT
                               agentic buying power (+ = affordable). Argv or auto (recs+chat+cheap preset).
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
-main.py                       Pipeline orchestrator
-pipeline_cache.json           Today's recommendations cache
+main.py                       Pipeline orchestrator (`run_ingestion_and_analysis`; its __main__ is an interactive
+                              CLI that prompts for a budget and does NOT write the cache — schedule
+                              scripts/run_pipeline.py instead)
+pipeline_cache.json           Today's recommendations cache (written only via storage/pipeline_cache.py)
 ```
 
 ## Architecture

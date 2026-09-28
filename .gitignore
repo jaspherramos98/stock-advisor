@@ -8,6 +8,7 @@ credit_ledger.json
 agentic_halt.flag
 agent_live.arm
 agent_scheduler.log
+market_open.log
 paper_book.json
 peaks.json
 agent_stocks.json
