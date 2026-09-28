@@ -1428,6 +1428,68 @@ def test_entry_loop_logs_every_candidate(monkeypatch):
     assert all(r["kind"] == "entry" and r["inputs"]["buying_power"] == 40.0 for r in by.values())
 
 
+def test_risk_bucket_matches_strategy_expectations():
+    from alerts.agentic_options import _risk_bucket
+    from analysis.options_strategies import short_dte_momentum
+    assert _risk_bucket("risk-on (favorable for longs)") == "risk_on"      # was 'risk_on (favorable…)'
+    assert _risk_bucket("risk-off (defensive)") == "risk_off"
+    assert _risk_bucket("neutral / mixed") == "neutral" and _risk_bucket(None) == "neutral"
+    sig = {"ticker": "X", "direction": "buy", "conviction": 85}
+    assert short_dte_momentum(sig, {"risk": _risk_bucket("risk-on (favorable for longs)")}) is not None
+
+
+def test_agent_context_helpers():
+    from datetime import datetime
+    from analysis.agent_context import pct_move, session_elapsed, volume_pace
+    assert pct_move(105, 100) == 5.0 and pct_move(None, 100) is None and pct_move(1, 0) is None
+    assert session_elapsed(datetime(2026, 9, 28, 9, 30)) == 0.0
+    assert session_elapsed(datetime(2026, 9, 28, 12, 45)) == 0.5            # 195 of 390 min
+    assert session_elapsed(datetime(2026, 9, 28, 17, 0)) == 1.0
+    assert session_elapsed(datetime(2026, 11, 27, 11, 15), half_day=True) == 0.5
+    assert volume_pace(0.5, 0.5) == 1.0          # half the avg volume by mid-day = a normal day's pace
+    assert volume_pace(0.5, 0.01) is None and volume_pace(None, 0.5) is None
+
+
+def test_agent_track_record_links_exits_to_entries():
+    from analysis.agent_context import track_record
+    recs = [
+        {"id": "e1", "kind": "entry", "action": "placed", "inputs": {"source": "pipeline"},
+         "order": {"strategy": "catalyst_momentum"}},
+        {"id": "e2", "kind": "entry", "action": "placed", "inputs": {"source": "chat"}, "leg": "stock"},
+        {"id": "x1", "kind": "exit", "action": "placed", "entry_id": "e1", "pnl_pct": 40.0},
+        {"id": "x2", "kind": "exit", "action": "placed", "entry_id": "e2", "pnl_pct": -4.0},
+        {"id": "x3", "kind": "exit", "action": "rejected", "entry_id": "e2", "pnl_pct": -9.0},   # not a close
+        {"id": "x4", "kind": "exit", "action": "placed", "entry_id": "gone", "pnl_pct": 99.0},  # unlinked
+    ]
+    r = track_record(recs)
+    assert r["overall"] == {"n": 2, "win_rate": 50, "avg_pnl": 18.0}
+    assert r["by_source"]["chat"] == {"n": 1, "win_rate": 0, "avg_pnl": -4.0}
+    assert set(r["by_strategy"]) == {"catalyst_momentum", "stock"}
+    assert track_record([]) == {"overall": {"n": 0}, "by_source": {}, "by_strategy": {}}
+
+
+def test_agent_context_build_and_render():
+    from analysis.agent_context import build, render
+    sig = {"ticker": "lly", "direction": "buy", "conviction": 52, "source": "watch",
+           "entry_rationale": "GLP-1 demand", "trigger_fired": "broke above $1210.7 (now $1215)"}
+    hist = {"current_price": 1215.0, "pct_change_14d": 5.3, "trend_14d": "uptrend", "rsi_14": 58.1,
+            "macd_state": "bullish", "vol_vs_avg": 0.9, "avg_daily_range_pct": 2.1,
+            "key_levels": {"nearest_support": 1150.0, "nearest_resistance": None, "atr_abs": 25.5,
+                           "stop_pct_atr": 3.7, "target_pct_resist": None, "reward_risk": None}}
+    ctx = build(sig, history=hist, rec_price=1190.0, news=[{"title": "Lilly beats", "source": "RTRS",
+                                                           "published": "10:05"}],
+                earnings={"days_to_earnings": 30}, sector="Healthcare",
+                regime={"regime": "risk-on (favorable for longs)", "vix": 16.1, "vix_state": "normal"},
+                holdings={"MRK": "Healthcare", "F": "Consumer Cyclical"}, elapsed=0.5)
+    assert ctx["ticker"] == "LLY" and ctx["price"]["move_since_rec_pct"] == 2.1
+    assert ctx["tape"]["volume_pace"] == 1.8 and ctx["book"]["same_sector"] == ["MRK"]
+    text = render(ctx)
+    assert "CANDIDATE LLY" in text and "(2.1% since)" in text and "[FIRED: broke above" in text
+    assert "SAME SECTOR already held: MRK" in text and "Lilly beats" in text and "AGENT RECORD 0 closed" in text
+    bare = render(build({"ticker": "X", "direction": "buy"}))            # every piece missing → n/a, no crash
+    assert "PRICE now $n/a" in bare and "No company headlines" in bare and "source pipeline" in bare
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 

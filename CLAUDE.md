@@ -252,6 +252,14 @@ alerts/agentic_stocks.py      Stock (share) leg of the agent (S2) — `route` (H
                               'deferred' — never sell into shares a stop still holds), then market-sell all.
                               Holding = whole-share part rests on a GTC stop_market at entry × (1 − plan stop%).
                               An empty position read never wipes the book (fetch_positions returns [] on error).
+analysis/agent_context.py     Fresh per-candidate briefing (judgment plan J1): price now vs the pipeline's (move
+                              since the rec), RSI/MACD/SMA/52w, volume PACE (today's partial volume ÷ session
+                              elapsed — raw vol_vs_avg reads every stock "quiet" before the close), R24 structure,
+                              days to earnings, Finnhub headlines since the pipeline ran, regime, the agent's
+                              holdings + same-sector overlap, and its own record from the decision log.
+                              build()/render()/track_record() pure; gather() live (~7s/candidate, never raises).
+                              The entry loop stores it as `context` on each decided candidate's log record;
+                              render() is what the J2 judge will read. Tests stub gather() (tests/conftest.py).
 storage/decision_log.py       Agent decision log (judgment plan J0) — append-only agent_decisions.jsonl (gitignored):
                               one record per decision {id, ts, mode live|dry, kind entry|exit|stop|halt, ticker,
                               key, action, reason, inputs, …}. EVERY entry candidate is logged, incl. skips and why

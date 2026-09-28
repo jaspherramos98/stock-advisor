@@ -43,15 +43,23 @@ def _market_open() -> bool:
         return True
 
 
+def _risk_bucket(regime_text: str | None) -> str:
+    """'risk-on (favorable for longs)' → 'risk_on'; 'risk-off (defensive)' → 'risk_off'; else 'neutral'.
+    (The old mapping kept the parenthetical — 'risk_on (favorable for longs)' — so the strategies'
+    == 'risk_on' check never matched and short_dte_momentum could never fire.)"""
+    t = (regime_text or "").lower()
+    return "risk_on" if t.startswith("risk-on") else "risk_off" if t.startswith("risk-off") else "neutral"
+
+
 def _regime() -> dict:
+    """{'risk': bucket for the strategies, 'detail': the full fetch_market_regime dict (J1 briefing)}."""
     try:
         from ingestion.prices import fetch_market_regime
         r = fetch_market_regime() or {}
-        risk = r.get("risk") or r.get("overall") or r.get("regime") or "neutral"
-        return {"risk": str(risk).lower().replace("-", "_")}
+        return {"risk": _risk_bucket(r.get("regime")), "detail": r}
     except Exception as e:  # noqa: BLE001
         print(f"agentic_options: regime lookup failed — {e}")
-        return {"risk": "neutral"}
+        return {"risk": "neutral", "detail": {}}
 
 
 # Argus chat is the sharper, more-decisive brain (it upgrades pipeline 'watch' ideas to real
@@ -259,6 +267,16 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             "stock_room": None if stock_left == float("inf") else round(stock_left, 2),
             "regime": regime.get("risk"), "stocks_enabled": use_stocks}, **extra)
 
+    def briefing(sig) -> dict | None:
+        # J1: the fresh per-candidate context the J2 judge will read; logged with the decision now
+        # so the shadow review can see what was knowable at that moment. Never blocks an entry.
+        try:
+            from analysis.agent_context import gather
+            return gather(sig, regime=regime.get("detail"), holdings=set(held))
+        except Exception as e:  # noqa: BLE001
+            print(f"agentic_options: briefing failed for {sig.get('ticker')} — {e}")
+            return None
+
     for i, sig in enumerate(signals):
         ticker = (sig.get("ticker") or "").upper()
         leg = stk.route(sig, use_stocks)
@@ -281,6 +299,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
                     log(rest, "skip", "PDT day-trade budget exhausted")
             break
 
+        ctx = briefing(sig)
         row, spent, why = None, 0.0, []
         if leg == "option":
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
@@ -293,7 +312,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             if row is None:
                 why.append("shares: size below the $1 minimum or stock cap full")
         if row is None:
-            log(sig, "skip", "; ".join(why) or "no leg produced an order", leg=leg)
+            log(sig, "skip", "; ".join(why) or "no leg produced an order", leg=leg, context=ctx)
             continue
         results.append(row)
         key = row.get("option_id") or f"eq:{ticker}"
@@ -301,7 +320,8 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             row.get("reason") if row["status"] not in ("placed", "dry_run") else f"{row['leg']} entry",
             key=key, leg=row.get("leg"), order={k: row.get(k) for k in
                                                 ("strategy", "qty", "contract", "dollars", "premium")
-                                                if row.get(k) is not None}, status=row["status"])
+                                                if row.get(k) is not None}, status=row["status"],
+            context=ctx)
         if spent:
             avail -= spent   # reserve so later entries don't oversize
             held.add(ticker)

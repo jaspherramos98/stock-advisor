@@ -2,6 +2,22 @@
 
 ## Done
 
+### 58. Per-candidate briefing (judgment plan J1) + regime-bucket fix (2026-09-28) ✅
+New `analysis/agent_context.py`: `gather()` (live, never raises, ~7s per candidate) → `build()` (pure) a briefing
+of what's knowable RIGHT NOW: price vs the pipeline's (move since the rec), RSI/MACD/SMA/52w, volume PACE (today's
+partial volume scaled by session elapsed — raw vol_vs_avg makes every stock look quiet before the close), R24
+structure, days to earnings, Finnhub headlines published since the pipeline ran, regime, the agent's holdings +
+same-sector overlap, and its own realized record by source/strategy (`track_record` over the decision log).
+`render()` = the text block the J2 judge will read. The entry loop stores the briefing as `context` on every
+candidate that reaches a decision. Live check (LLY): +1.0% since the rec, still under its $1,210.70 breakout
+trigger, volume pace 0.65×, reward:risk 0.1 — the "on volume" half of the trigger visibly unmet.
+**Bug fixed:** `agentic_options._regime` turned "risk-on (favorable for longs)" into "risk_on (favorable for
+longs)", but `short_dte_momentum` checks `== "risk_on"` — that playbook could NEVER fire. New `_risk_bucket` maps to
+risk_on/risk_off/neutral. ⚠ Behavior change: in risk-on markets (today) short_dte_momentum is now reachable for
+conviction ≥80 signals — the most aggressive playbook (weekly OTM, alloc 100% of available BP).
+tests/conftest.py now also stubs `gather` (no network in tests). +4 tests (131). Files: analysis/agent_context.py
+(new), alerts/agentic_options.py, tests/conftest.py, tests.
+
 ### 57. Agent decision log (judgment plan J0, 2026-09-28) ✅
 New `storage/decision_log.py` → append-only `agent_decisions.jsonl` (gitignored). The entry loop logs EVERY
 candidate it considers — including the skips that were silent before (already held, not tradeable, PDT budget,
@@ -973,10 +989,7 @@ time), POSITION-AWARE and DATA-GROUNDED (every input from a live read, never mod
 shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
 - ~~**J0 decision log**~~ — done #57 (outcomes are linked, not back-filled: an exit record carries pnl_pct +
   `entry_id`, keeping the file append-only).
-- **J1 context builder** (pure assembly + live reads) — per candidate: price now vs at rec time (move since 6:30),
-  intraday volume vs avg, RSI/MACD (`get_equity_technical_indicators`), key levels + ATR (R24), days to earnings,
-  company news since the pipeline ran (Finnhub), regime, current book + sector overlap, the agent's own record by
-  playbook/source (from J0).
+- ~~**J1 context builder**~~ — done #58.
 - **J2 entry judge** — one Sonnet call per candidate, strict JSON: `enter | wait | skip`, instrument preference,
   size_multiplier ∈ [0, 1], exit tweaks within bounds, thesis, invalidation level, confidence; validated + clamped
   before use (malformed → skip). Watch triggers (drafted `alerts/agentic_watch.py`: conviction ≥50 or pinned, ±3%
