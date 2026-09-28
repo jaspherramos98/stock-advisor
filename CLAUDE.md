@@ -687,8 +687,11 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
    **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
    (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
    **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`
-   only around the call, never process-wide; **agentic equity positions** + a **🔄 Sync positions**
-   refresh; **open option positions** with live P&L + the agent's exit decision (hold/close + reason)
+   only around the call, never process-wide; the Preview has an **Include the stock leg** toggle (dry only —
+   LIVE follows config.AGENT_TRADE_STOCKS); **agentic share positions** + a **🔄 Sync positions** refresh — each
+   row says whether it's agent-managed (plan, opened date, the agent's hold/close decision via
+   `agentic_stocks.decide_exit`) or hand-bought (never touched), with a **Sell now** override that reuses
+   `agentic_stocks.close_position` (cancel resting stop → confirm → market sell); **open option positions** with live P&L + the agent's exit decision (hold/close + reason)
    and a per-position **Close now** override. **Exit policy (`option_exit_decision`, poll-based each
    cycle, not a resting stop):** hard stop −50% → **trailing take-profit** (once up ≥`trail_activate`
    25%, sell if it gives back `trail_giveback` 20% from the peak — `storage/peak_tracker`) → +80% hard

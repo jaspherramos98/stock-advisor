@@ -2,6 +2,15 @@
 
 ## Done
 
+### 54. Agent tab — share positions, decisions, Sell now, stock-leg preview (S4, 2026-09-27) ✅
+Agentic share positions now render one row each: shares / avg → price / P&L / equity, and either the agent's plan
+(exit_condition, opened date) + live hold/close decision (`agentic_stocks.decide_exit`, peak from peak_tracker) or
+"not agent-managed — never touched". **Sell now** per row reuses the extracted `agentic_stocks.close_position`
+(cancel resting stop → wait for confirm → market sell; live close forgets the plan) — the exit pass uses the same
+function, so there's one sell path. Preview cycle gained an **Include the stock leg** toggle (dry only; LIVE
+follows `config.AGENT_TRADE_STOCKS`, shown in the LIVE expander). Verified headless (AppTest) with synthetic
+positions: both row kinds render, 0 exceptions. Files: dashboard/tabs/agent.py, alerts/agentic_stocks.py.
+
 ### 53. Agent stock leg — exits (S3, 2026-09-27) ✅
 `agentic_stocks.run_exits`, called every cycle from `run_options_agent` right after the options exits (even with
 `AGENT_TRADE_STOCKS` off, so turning it off can't strand a position; zero reads when the agent owns no shares).
@@ -949,7 +958,7 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   an unfilled resting limit would read as un-held next cycle and invite a duplicate buy).
 - ~~**S3 exits**~~ — done #53 (agent-opened positions only; resting stop at the PLAN's stop from entry, not the
   ATR-from-current stop that `agentic_stops.sync_protective_stops` computes — that script stays manual-only).
-- **S4 dashboard:** Agent tab — stock positions, exit decision, Close-now, P&L.
+- ~~**S4 dashboard**~~ — done #54.
 - **S5 tiny live (user runs it):** one ~$5 fractional buy → confirm fill → confirm the agent's exit sells it in
   the app. Only then add the stock leg to the scheduled cycle.
 
