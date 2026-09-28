@@ -27,12 +27,11 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 #   MCP_PERSISTENT_SESSION — when True, MCP tool calls share ONE open connection per process
 #              (ingestion/mcp_session.py) instead of a ~1.2s handshake per call. Reads retry once
 #              on a broken connection; order placement never retries. False = per-call sessions.
-#   AGENT_TRADE_STOCKS — when True, the autonomous agent also buys SHARES on the agentic account
-#              (alerts/agentic_stocks.py routing: HR / conviction ≥75 → options, other buys → shares).
-#              False = options-only, exactly as before. A dry preview can pass stocks=True.
-#   AGENT_STOCK_BUDGET_CAP — max TOTAL $ (entry cost) the agent may hold in shares at once, e.g. 20.0
-#              for the S5 live test. None = no cap (the pyramid sizes on the full agentic buying
-#              power). ← set None to take the training wheels off.
+#   AGENT_STOCK_BUDGET_CAP — max TOTAL $ (entry cost) the agent may hold in SHARES at once (the stock
+#              leg is always on; routing in alerts/agentic_stocks.py: HR / conviction ≥75 → options,
+#              other buys → shares). 20.0 while the stock leg is new. None = no cap (the pyramid sizes
+#              on the full agentic buying power). ← set None to take the training wheels off.
+#   Whether the agent trades at all (off / paper / live) is NOT here — see agent_mode.py (Agent tab).
 #
 # USE_MCP=True: the dashboard/pipeline read account data via the official MCP (OAuth refresh
 # tokens → no 429), defaulting to the MAIN account. Requires `mcp[cli]` in the venv + a stored
@@ -42,7 +41,6 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 USE_MCP = True
 DRY_RUN = True
 MCP_PERSISTENT_SESSION = True
-AGENT_TRADE_STOCKS = False
 AGENT_STOCK_BUDGET_CAP = 20.0
 # Entry judge (analysis/agent_judge.py, plan J2): "shadow" = a Sonnet call reviews each candidate and its
 # verdict is LOGGED beside the rules' decision but changes NOTHING (the J4 review compares them);

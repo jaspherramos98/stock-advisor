@@ -1,20 +1,21 @@
 """
-Scheduled runner for the autonomous options agent (Phase 2).
+Scheduled runner for the autonomous agent (Phase 2).
 
 Called every ~20 min by the "Argus Options Agent" task (via run_agent_silent.vbs, hidden).
 Safe to run around the clock — it self-gates on US market hours and exits quietly off-hours.
 
-LIVE vs DRY is decided by an ARM flag, NOT by editing code:
-  - agent_live.arm present  → LIVE (real option orders).  ← you create this to "let it fly"
-  - agent_live.arm absent   → DRY_RUN (logs what it would trade, places nothing).  ← default
-Kill switch: agentic_halt.flag present → halt immediately (checked inside run_options_agent).
+What it does is decided by the agent MODE (agent_mode.py — set from the dashboard Agent tab):
+  - off   → nothing (not even exits).
+  - paper → a paper-book cycle (no money), plus live EXITS for any real positions the agent still
+            holds from an earlier live period (so switching to paper never strands them).
+  - live  → a real cycle: exits, then options + share entries (shares capped by
+            config.AGENT_STOCK_BUDGET_CAP).
 Credit: entries also halt when the LLM ledger hits its reserve (llm_budget).
 
-Logs actions to agent_scheduler.log (UTF-8). Routine "nothing happened" cycles are not logged,
-so the file stays readable.
+Logs actions to agent_scheduler.log (UTF-8). Routine "nothing happened" cycles log one heartbeat
+line, so the file stays readable.
 
-Manual test (DRY):   venv\\Scripts\\python.exe scripts\\run_agent.py
-Arm LIVE:            echo armed > agent_live.arm      (delete the file to disarm)
+Manual run:   venv\\Scripts\\python.exe scripts\\run_agent.py   (acts per the current mode)
 """
 import datetime as _dt
 import os
@@ -24,14 +25,11 @@ os.environ.setdefault("PYTHONUTF8", "1")
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
+import agent_mode
 import config
 from alerts.agentic_options import run_options_agent, run_paper_agent
 
-_ARM = os.path.join(_REPO, "agent_live.arm")
 _LOG = os.path.join(_REPO, "agent_scheduler.log")
-# One-shot S5 stock-leg test (scripts/stock_leg_test.py): present → run it ONCE, LIVE, on the first
-# armed in-hours cycle. The marker is deleted BEFORE buying so a crash can never repeat the buys.
-_STOCK_TEST = os.path.join(_REPO, "stock_leg_test.pending")
 
 
 def _log(msg: str) -> None:
@@ -64,41 +62,36 @@ def _market_open() -> bool:
         return False
 
 
-def main() -> int:
-    armed = os.path.exists(_ARM)
-    mode = "LIVE" if armed else "PAPER"
-
-    # Heartbeat every cycle so the log always exists + ticks (visible liveness). Off-hours we
-    # don't run (option prices move in-session) — just a one-line skip.
-    if not _market_open():
-        _log(f"[{mode}] heartbeat — market closed, skip")
-        return 0
-
-    # UNARMED → paper simulation (tracks P&L, no money). ARMED → real orders.
-    if armed:
-        config.DRY_RUN = False
-        if os.path.exists(_STOCK_TEST):
-            try:
-                os.remove(_STOCK_TEST)
-                from scripts.stock_leg_test import run_test
-                _log(f"[LIVE] stock-leg test: {run_test(live=True, verbose=False)}")
-            except Exception as e:  # noqa: BLE001 — the test must never block the normal cycle
-                _log(f"[LIVE] stock-leg test FAILED: {e}")
-        out = run_options_agent(verbose=False)
-    else:
-        out = run_paper_agent(verbose=False)
-
+def _report(tag: str, out: dict) -> None:
     status = out.get("status")
     if status:  # halted / no-account / market-closed-live
-        _log(f"[{mode}] {status}: {out.get('reason', '')}")
-        return 0
-
+        _log(f"[{tag}] {status}: {out.get('reason', '')}")
+        return
     entries, exits = out.get("entries", []), out.get("exits", [])
     halted = out.get("entries_halted")
     if entries or exits or halted:
-        _log(f"[{mode}] entries={entries} exits={exits}" + (f" [{halted}]" if halted else ""))
+        _log(f"[{tag}] entries={entries} exits={exits}" + (f" [{halted}]" if halted else ""))
+    elif tag != "LIVE-EXITS":   # the paper-mode exit pass is silent unless it did something
+        _log(f"[{tag}] market open — no actionable signal this cycle")
+
+
+def main() -> int:
+    mode = agent_mode.get_mode()
+    tag = mode.upper()
+    if mode == "off":
+        _log(f"[{tag}] agent is off — skip")
+        return 0
+    # Off-hours we don't run (prices move in-session) — just a one-line heartbeat.
+    if not _market_open():
+        _log(f"[{tag}] heartbeat — market closed, skip")
+        return 0
+
+    config.DRY_RUN = False   # this process only exists to run the cycle the mode asked for
+    if mode == "live":
+        _report(tag, run_options_agent(verbose=False))
     else:
-        _log(f"[{mode}] market open — no actionable signal this cycle")
+        _report("LIVE-EXITS", run_options_agent(verbose=False, entries=False))
+        _report(tag, run_paper_agent(verbose=False))
     return 0
 
 

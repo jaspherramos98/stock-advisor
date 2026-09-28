@@ -16,8 +16,7 @@ weighs the parts of the trigger a price check can't see ("on volume", "stabiliza
   CLOSE       a trigger that says "close"/"closes" (a daily-close condition) only counts in the last
               CLOSE_WINDOW_MINUTES of the session — the nearest a 20-min poll gets to a real close,
               instead of buying an intraday wick.
-  SHARES ONLY signals are marked shares_only: agentic_stocks.route never sends them to options, and the
-              rules skip them while config.AGENT_TRADE_STOCKS is off (the shadow judge still reviews them).
+  SHARES ONLY signals are marked shares_only: agentic_stocks.route never sends them to options.
               They ride the stock budget cap and the PDT guard; the exit plan is the watch's exit_condition.
 """
 from __future__ import annotations

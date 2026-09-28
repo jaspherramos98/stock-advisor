@@ -1148,11 +1148,8 @@ def test_stock_routing():
     short = {"ticker": "D", "direction": "short", "conviction": 50}
     coin = {"ticker": "BTC", "direction": "buy", "conviction": 60, "asset_type": "crypto"}
     watch = {"ticker": "E", "direction": "watch"}
-    assert [route(s, True) for s in (hr, strong, core, short, coin, watch)] == \
+    assert [route(s) for s in (hr, strong, core, short, coin, watch)] == \
         ["option", "option", "stock", "option", None, None]
-    # stock leg off → everything tradeable goes to options (behavior before S2)
-    assert [route(s, False) for s in (hr, core, short, coin, watch)] == \
-        ["option", "option", "option", "option", None]
 
 
 def test_stock_rank_and_plan():
@@ -1211,7 +1208,7 @@ def test_combined_entries_route_and_share_one_pool(monkeypatch):
     from storage import agent_stock_book as book
     monkeypatch.setattr(book, "_FILE", str(__import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "b.json"))
     monkeypatch.setattr(stk, "budget_cap", lambda: None)            # uncapped for this routing test
-    out = ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=2, stocks=True)
+    out = ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=2)
     # best idea first: HOT (85, option) → NOCON (80, option → falls back to shares) → CORE blocked by PDT
     assert order[0] == ("opt", "HOT", 40.0)
     assert order[1] == ("opt", "NOCON", 30.0)              # pool shrank by HOT's premium
@@ -1243,7 +1240,7 @@ def test_stock_budget_cap(monkeypatch, tmp_path):
             bought.append((intent.dollars, buying_power))
             return {"status": "dry_run", "reason": ""}
 
-    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None, stocks=True)
+    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None)
     assert round(sum(d for d, _ in bought), 2) <= 14.0              # $20 cap − $6 already held
     assert all(bp >= 10 for _, bp in bought)                        # guard sees real BP, not cap room
 
@@ -1278,15 +1275,35 @@ def test_run_pipeline_skips_closed_days():
     assert is_trading_day(dt.date(2026, 11, 26)) is False        # Thanksgiving
 
 
-def test_stock_leg_test_helpers():
-    from scripts.stock_leg_test import pick, split_evenly
-    sigs = [{"ticker": "LOW", "direction": "buy", "conviction": 60},
-            {"ticker": "HI", "direction": "buy", "conviction": 70},
-            {"ticker": "BTC", "direction": "buy", "conviction": 90, "asset_type": "crypto"}]
-    assert [s["ticker"] for s in pick(sigs, held={"LOW"}, n=3)] == ["HI", "SPY", "QQQ"]
-    assert [s["ticker"] for s in pick([], held=set(), n=2)] == ["SPY", "QQQ"]
-    assert pick([], set(), 2)[0]["exit_condition"] == "target 8% gain, stop loss at 4%"
-    assert split_evenly(20.0, 3) == 6.66 and split_evenly(20.0, 0) == 0.0 and split_evenly(0, 3) == 0.0
+def test_agent_mode_file(monkeypatch, tmp_path):
+    import agent_mode
+    import pytest
+    monkeypatch.setattr(agent_mode, "MODE_FILE", str(tmp_path / "agent_mode.txt"))
+    assert agent_mode.get_mode() == "paper"                    # no file → paper, never real money
+    agent_mode.set_mode("live")
+    assert agent_mode.get_mode() == "live"
+    (tmp_path / "agent_mode.txt").write_text("LIVE!!\n")
+    assert agent_mode.get_mode() == "off"                      # garbled → off (fail safe)
+    with pytest.raises(ValueError):
+        agent_mode.set_mode("armed")
+
+
+def test_run_agent_follows_mode(monkeypatch, tmp_path):
+    import agent_mode
+    from scripts import run_agent as ra
+    import config
+    calls = []
+    monkeypatch.setattr(config, "DRY_RUN", True)               # main() flips it; restore after the test
+    monkeypatch.setattr(agent_mode, "MODE_FILE", str(tmp_path / "m.txt"))
+    monkeypatch.setattr(ra, "_LOG", str(tmp_path / "log.txt"))
+    monkeypatch.setattr(ra, "_market_open", lambda: True)
+    monkeypatch.setattr(ra, "run_options_agent", lambda verbose, entries=True: calls.append(("live", entries)) or {})
+    monkeypatch.setattr(ra, "run_paper_agent", lambda verbose: calls.append(("paper",)) or {})
+    for mode in ("off", "paper", "live"):
+        agent_mode.set_mode(mode)
+        ra.main()
+    # off → nothing; paper → live EXITS only + a paper cycle; live → a full live cycle
+    assert calls == [("live", False), ("paper",), ("live", True)]
 
 
 def test_stock_exit_helpers():
@@ -1424,7 +1441,7 @@ def test_entry_loop_logs_every_candidate(monkeypatch):
     monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
     monkeypatch.setattr(stk, "budget_cap", lambda: 0.0)                     # stock cap full → shares decline too
     monkeypatch.setattr(ao, "_try_option_entry", lambda *a, **k: (None, 0.0))
-    ao._run_entries(mcp=None, acct="A", buying_power=40.0, verbose=False, max_new=None, stocks=True)
+    ao._run_entries(mcp=None, acct="A", buying_power=40.0, verbose=False, max_new=None)
     by = {r["ticker"]: r for r in dl.read()}
     assert by["HELD"]["reason"].startswith("already held")
     assert by["BTC"]["action"] == "skip" and "not tradeable" in by["BTC"]["reason"]
@@ -1570,7 +1587,7 @@ def test_shadow_judge_never_changes_the_trade(monkeypatch):
             placed.append(intent.ticker)
             return {"status": "dry_run", "reason": ""}
 
-    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None, stocks=True)
+    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None)
     assert placed == ["CORE"]                                               # judge said skip; rules still traded
     rec = dl.read()[-1]
     assert rec["action"] == "dry_run" and rec["judge"]["decision"] == "skip"
@@ -1615,11 +1632,11 @@ def test_watch_candidates_and_shares_only_route():
     assert set(got) == {"LLY", "AMD"}                                          # low-conv AMD only via its pin
     assert got["AMD"]["source"] == "pinned-watch" and got["AMD"]["entry_trigger"] == "pullback to $500"
     sig = {"ticker": "LLY", "direction": "buy", "conviction": 90, "shares_only": True}
-    assert route(sig, True) == "stock"                                         # even at conv ≥75: never options
-    assert route(sig, False) is None
+    assert route(sig) == "stock"                                               # even at conv ≥75: never options
+    assert route(dict(sig, asset_type="crypto")) is None                       # crypto can't be held as shares
 
 
-def test_fired_watch_is_judged_even_with_stock_leg_off(monkeypatch):
+def test_fired_watch_is_judged_and_bought_as_shares(monkeypatch):
     from alerts import agentic_options as ao
     from alerts import agentic_stocks as stk
     from alerts import agentic_watch
@@ -1636,11 +1653,6 @@ def test_fired_watch_is_judged_even_with_stock_leg_off(monkeypatch):
     monkeypatch.setattr(agent_context, "gather", lambda *a, **k: _real_ctx())
     monkeypatch.setattr(agent_judge, "judge_entry", lambda *a, **k: {"decision": "wait", "size_multiplier": 0.0})
 
-    ao._run_entries(mcp=None, acct="A", buying_power=40.0, verbose=False, max_new=None, stocks=False)
-    rec = dl.read()[-1]
-    assert rec["ticker"] == "LLY" and rec["action"] == "skip" and rec["judge"]["decision"] == "wait"
-    assert rec["inputs"]["source"] == "watch"
-
     placed = []
 
     class FakeMcp:
@@ -1648,8 +1660,11 @@ def test_fired_watch_is_judged_even_with_stock_leg_off(monkeypatch):
             placed.append((intent.ticker, intent.order_type))
             return {"status": "dry_run", "reason": ""}
 
-    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None, stocks=True)
-    assert placed == [("LLY", "market")]                                       # stock leg on → a share buy
+    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None)
+    assert placed == [("LLY", "market")]                                       # a share buy, never an option
+    rec = dl.read()[-1]                                                        # shadow judge: logged, not binding
+    assert rec["ticker"] == "LLY" and rec["action"] == "dry_run" and rec["judge"]["decision"] == "wait"
+    assert rec["inputs"]["source"] == "watch"
 
 
 def test_holding_review_events():

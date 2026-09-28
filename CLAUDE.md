@@ -127,10 +127,15 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
                               header badge, chatbot context, and exit_checker. Also `recent_trading_days`
                               (PDT window) + `et_date` (ISO timestamp → Eastern trading date)
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
-                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_TRADE_STOCKS/AGENT_JUDGE +
+                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_JUDGE +
                               AGENT_STOCK_BUDGET_CAP (max total $ entry cost the agent holds in shares;
-                              20.0 for the S5 test — set None to remove the cap) + ROBINHOOD_MCP_URL (R25) —
-                              single source of truth
+                              20.0 while the stock leg is new — set None to remove the cap) + ROBINHOOD_MCP_URL
+                              (R25) — single source of truth. Whether the agent trades is NOT here: agent_mode.py
+agent_mode.py                 THE agent control: off | paper | live, in agent_mode.txt (gitignored), set only from
+                              the Agent tab radio. No file → paper; garbled → off. Replaced the arm file, the kill
+                              switch file, config.AGENT_TRADE_STOCKS and the one-shot $20 test script (2026-09-28).
+                              off = nothing runs (exits too); paper = paper cycle + live EXITS of any real positions
+                              left from live; live = full real cycle (options + shares).
 llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
                               console balance, record_cost decrements per call, can_spend() halts new
                               agent entries + chat when remaining ≤ reserve (default $0.50). Persists to
@@ -233,21 +238,21 @@ alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_sig
                               ENTRY LOOP (`_run_entries`): signals ranked best-first, each routed to the
                               options leg (`_try_option_entry`) or the stock leg (agentic_stocks.enter) from
                               ONE shared BP pool; an options-routed buy with no affordable contract falls back
-                              to shares when the stock leg is on. `run_options_agent(stocks=…)` overrides
-                              config.AGENT_TRADE_STOCKS for one cycle (dry previews).
+                              to shares (the stock leg is always on). `run_options_agent(entries=False)` = exits
+                              only (what paper mode runs against real positions).
                               PDT: entries stop once the day-trade budget (`_entry_budget`, read AFTER
                               exits) is spent; an unreadable fill history → 0 entries (fail CLOSED).
                               EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
                               (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
-                              market-hours gated, kill switch `agentic_halt.flag`, LLM-credit halt on entries.
+                              market-hours gated, agent_mode "off" halts, LLM-credit halt on entries.
                               AGENTIC account only. Position size uncapped (pilot).
 alerts/agentic_stocks.py      Stock (share) leg of the agent (S2) — `route` (HR / conviction ≥75 → options;
-                              other buys → shares; shorts → puts; crypto never shares; flag off → all options),
+                              other buys → shares; shorts → puts; crypto never shares),
                               `rank` (best idea first, conviction desc), `size_buys` (Argus pyramid over ALL
                               the cycle's buys on AGENTIC BP, clamped to the guard's floored 40% cap), `enter`
                               (dollar-based MARKET buy — a resting limit could miss and invite a duplicate buy
-                              next cycle). Off unless config.AGENT_TRADE_STOCKS (default False until S5).
-                              EXITS (S3, `run_exits`, every cycle even with the flag off): ONLY positions in the
+                              next cycle). Always on; total share cost capped by AGENT_STOCK_BUDGET_CAP.
+                              EXITS (S3, `run_exits`, every live cycle + paper mode's exit pass): ONLY positions in the
                               agent's stock book (hand-bought shares are never touched) → `decide_exit`
                               (equity_exit_decision vs the recorded plan + peak_tracker "eq:TICKER"). Close =
                               cancel the resting stop, WAIT for the broker to confirm (`_cancel_and_wait`, else
@@ -266,8 +271,7 @@ alerts/agentic_watch.py       Watch triggers → agent candidates (J2b). Today's
                               pinned watches (pin wins per ticker); FIRED = entry_checker's parser + price still
                               within 3% of the level (no chasing a run / buying a crash through support); a trigger
                               saying "close" only counts in the last 30 min of the session. Signals are
-                              `shares_only` (route → shares, never options; skipped by the rules while
-                              AGENT_TRADE_STOCKS is off, but still briefed + JUDGED so the shadow record covers them).
+                              `shares_only` (route → shares, never options), briefed + JUDGED like any candidate.
 analysis/agent_judge.py       Entry judge (judgment plan J2): one Sonnet call per candidate reaching a decision —
                               forced tool call `record_verdict` → enter|wait|skip, size_multiplier, instrument,
                               stop, confidence, thesis, invalidation, risks; `parse_verdict` clamps size to [0,1]
@@ -314,21 +318,21 @@ scripts/agentic_stops.py      Run agentic_stops.sync_protective_stops() (DRY_RUN
 scripts/mcp_login.py          Interactive MCP login (R25) — browser auth, stores tokens, prints the tool
                               list + schemas. Run once, and again only when the refresh token expires
                               (reads raise a clean NotAuthenticated). Needs `pip install "mcp[cli]"`.
-scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — market-hours gated; DRY unless
-                              ARM flag `agent_live.arm` exists (then LIVE); honors kill switch
-                              (`agentic_halt.flag`) + credit ledger; logs actions to agent_scheduler.log.
+scripts/run_agent.py          Scheduled agent runner (Phase 2) — market-hours gated; does what agent_mode says:
+                              off → nothing; paper → live exits-only pass + run_paper_agent; live →
+                              run_options_agent. Honors the credit ledger; logs to agent_scheduler.log.
 run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
                               it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs —
-                              REGISTERED (verified 2026-09-28). run_agent.py also runs the one-shot
-                              stock-leg test when `stock_leg_test.pending` exists. If ever deleted, re-register
-                              (user action, real money when armed):
+                              REGISTERED (verified 2026-09-28). If ever deleted, re-register
+                              (user action, real money in live mode):
                               schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>un_agent_silent.vbs\""
                               /SC MINUTE /MO 20 /F. Manage: schtasks /Query|/Run|/Change|/Delete /TN "…".
 market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
-                              `scripts/run_pipeline.py` (headless; writes today's cache) → arm the agent
-                              (echo armed > agent_live.arm); output appended to market_open.log (gitignored).
-                              It used to call main.py, which prompts for a budget (hung forever hidden, so
-                              it never armed) and never wrote the cache (the agent never saw its signals).
+                              `scripts/run_pipeline.py` (headless; writes today's cache); output appended to
+                              market_open.log (gitignored). It does NOT touch the agent mode (it used to arm
+                              live every morning — removed 2026-09-28 so only the user switches real money on).
+                              It used to call main.py, which prompts for a budget (hung forever hidden) and
+                              never wrote the cache (the agent never saw its signals).
                               run_market_open_silent.vbs runs it hidden. Task "Argus Market Open" REGISTERED
                               2026-09-28 (weekdays 06:30; verified first run). Re-register if ever needed (no
                               inner quotes — PowerShell mangles `\"`): schtasks /Create /TN "Argus Market Open"
@@ -339,11 +343,6 @@ scripts/run_pipeline.py       Headless "Run pipeline": ingestion → analysis �
 storage/pipeline_cache.py     ONE writer/reader of pipeline_cache.json (+ backup) for the dashboard button, the
                               headless run, and chat context; `load_today()` never returns another day's cache
                               (the agent's `_signals` applies the same rule to the same file).
-scripts/stock_leg_test.py     S5 live test of the stock leg: 2-3 small share positions (today's share signals,
-                              padded with SPY/QQQ/IWM) splitting the stock cap EQUALLY, via the agent's own
-                              review-first path + stock book, then managed by the normal cycle. Default DRY;
-                              `--live` real; `--verify` read-only report. One-shot at the next open: create
-                              `stock_leg_test.pending` → run_agent.py runs it once LIVE (marker deleted first).
 scripts/bench_dashboard.py    Click-latency benchmark — runs dashboard/app.py headless (Streamlit AppTest):
                               cold load + N warm reruns (a warm rerun = what a click costs) + exceptions.
                               Live data (needs network + MCP token), so NOT in CI. Use for before/after.
@@ -602,7 +601,7 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   quotes and the pipeline's quote source read through `ingestion/account_reads.py` → the MCP (MAIN
   account); robin_stocks news is skipped, so no robin_stocks login fires → the 429 is gone. Account
   model: MAIN = the real book (manual); the AGENTIC account is a funded pilot traded by the autonomous
-  OPTIONS agent (`alerts/agentic_options.py`, LIVE when `agent_live.arm` exists — see Key Files).
+  OPTIONS agent (`alerts/agentic_options.py`, LIVE when agent_mode is "live" — see Key Files).
   `config.DRY_RUN=True` stays the safe default; live runs scope it off per call. (The SDK's benign
   `Session termination failed: 400` teardown warning is silenced in `mcp_auth.py`.)
 - **Equity (share) trading — PLANNED (approved plan: TODO Backlog "Stock trading for the agent"):**
@@ -749,16 +748,16 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
    changes the key, no manual clear). Plotly Express costs ~0.1s/figure, so uncached this tab alone
    was ~0.2–0.4s of EVERY click (all tabs rerun on each interaction).
 6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
-   **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
+   Top: the **Agent mode** radio (Off / Paper / Live → `agent_mode.set_mode`; switching to Live needs a
+   confirm checkbox). **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
    equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset buttons.
    **🕯 Live chart**: plotly candlesticks (get_equity_historicals) per ticker/interval with paper BUY/SELL
-   markers + refresh. Then: status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit
+   markers + refresh. Then: status metrics (agentic buying power, LLM credit
    left, **New entries (PDT)** = remaining day-trade budget, `_c_day_trade_budget` 60s);
-   **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
-   (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
-   **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`
-   only around the call, never process-wide; the Preview has an **Include the stock leg** toggle (dry only —
-   LIVE follows config.AGENT_TRADE_STOCKS); **agentic share positions** + a **🔄 Sync positions** refresh — each
+   **LLM credit ledger** control (set balance/reserve — `llm_budget`); **Preview cycle** (dry run, places
+   nothing, both legs) and a guarded **Run LIVE cycle now** (real orders, confirm-checkbox, market-hours only,
+   enabled in Live mode only) — both scope `config.DRY_RUN` only around the call, never process-wide;
+   **agentic share positions** + a **🔄 Sync positions** refresh — each
    row says whether it's agent-managed (plan, opened date, the agent's hold/close decision via
    `agentic_stocks.decide_exit`) or hand-bought (never touched), with a **Sell now** override that reuses
    `agentic_stocks.close_position` (cancel resting stop → confirm → market sell); **open option positions** with live P&L + the agent's exit decision (hold/close + reason)

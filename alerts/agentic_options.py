@@ -11,7 +11,7 @@ Each run:
 SAFETY (engineering, NOT limits on aggression):
   - config.DRY_RUN True → logs intended option orders, places nothing.
   - review_option_order before every place (in place_option_order); is_error honored.
-  - Kill switch: a file `agentic_halt.flag` in the repo root → the loop halts immediately.
+  - agent_mode "off" (the Agent tab's mode control) → the loop halts immediately.
   - Market-hours gated for live placement (options fill in regular hours).
   - trading_guards vets each order (idempotency, runaway day-cap, premium ≤ buying power).
 Position SIZE is uncapped (pilot) — up to the strategy's allocation of buying power.
@@ -27,12 +27,12 @@ import config
 from trading_guards import GuardState, OptionOrderIntent
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_HALT_FLAG = os.path.join(_REPO, "agentic_halt.flag")
 _CACHE = os.path.join(_REPO, "pipeline_cache.json")
 
 
 def _halted() -> bool:
-    return os.path.exists(_HALT_FLAG)
+    import agent_mode
+    return agent_mode.get_mode() == "off"
 
 
 def _market_open() -> bool:
@@ -230,15 +230,14 @@ def _try_option_entry(mcp, acct, sig: dict, regime: dict, avail: float, state,
     return row, (intent.premium if res["status"] in ("placed", "dry_run") else 0.0)
 
 
-def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None,
-                 stocks: bool | None = None) -> list[dict]:
+def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None) -> list[dict]:
     """Entries across both legs, best idea first, from ONE shared buying-power pool. Each signal is
     routed (agentic_stocks.route) to options or shares; an options-routed buy with no affordable
-    contract falls back to shares when the stock leg is on."""
+    contract falls back to shares."""
     from alerts import agentic_stocks as stk
+    from storage.agent_stock_book import invested
 
     regime = _regime()
-    use_stocks = stk.stocks_enabled(stocks)
     base = _signals()
     # J2b: today's watches / pins whose "buy when" trigger has fired join as shares-only candidates.
     try:
@@ -250,17 +249,13 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     # `exclude` = underlyings we closed THIS cycle. Exits run before entries, so a just-sold
     # position no longer shows as held — without this the same signal would re-buy it the same
     # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
-    held = _held_underlyings(mcp, acct) | (exclude or set())
-    stock_dollars, stock_left = {}, 0.0
-    if use_stocks:
-        from storage.agent_stock_book import invested
-        held |= stk.held_tickers(mcp, acct)
-        # config.AGENT_STOCK_BUDGET_CAP limits the TOTAL entry cost the agent holds in shares. The
-        # pyramid sizes on the smaller of buying power and the cap, so a $20 cap still spreads
-        # across several names (40% single-name cap → ≥3 positions to deploy it all).
-        cap = stk.budget_cap()
-        stock_left = stk.stock_room(invested(), cap)
-        stock_dollars = stk.size_buys(signals, min(buying_power, cap) if cap is not None else buying_power)
+    held = _held_underlyings(mcp, acct) | stk.held_tickers(mcp, acct) | (exclude or set())
+    # config.AGENT_STOCK_BUDGET_CAP limits the TOTAL entry cost the agent holds in shares. The
+    # pyramid sizes on the smaller of buying power and the cap, so a $20 cap still spreads
+    # across several names (40% single-name cap → ≥3 positions to deploy it all).
+    cap = stk.budget_cap()
+    stock_left = stk.stock_room(invested(), cap)
+    stock_dollars = stk.size_buys(signals, min(buying_power, cap) if cap is not None else buying_power)
     state = GuardState(start_equity=buying_power)
     avail = buying_power
     results: list[dict] = []
@@ -272,7 +267,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
         dlog.record("entry", sig.get("ticker"), action, reason, inputs={
             **dlog.signal_inputs(sig), "buying_power": round(avail, 2),
             "stock_room": None if stock_left == float("inf") else round(stock_left, 2),
-            "regime": regime.get("risk"), "stocks_enabled": use_stocks}, **extra)
+            "regime": regime.get("risk")}, **extra)
 
     def briefing(sig) -> dict | None:
         # J1: the fresh per-candidate context the J2 judge will read; logged with the decision now
@@ -298,21 +293,14 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
 
     for i, sig in enumerate(signals):
         ticker = (sig.get("ticker") or "").upper()
-        leg = stk.route(sig, use_stocks)
+        leg = stk.route(sig)
         if not ticker:
             continue
         if ticker in held:
             log(sig, "skip", "already held (or closed this cycle)")
             continue
         if leg is None:
-            ctx = verdict = None
-            if sig.get("shares_only"):
-                # A fired watch the rules can't take (stock leg off): still brief + judge it, so the
-                # shadow record shows what the judge would have done with watch triggers.
-                ctx = briefing(sig)
-                verdict = shadow_judge(ctx, "stock", ticker)
-            log(sig, "skip", "not tradeable by the agent (e.g. crypto, or shares-only with the stock leg off)",
-                context=ctx, judge=verdict)
+            log(sig, "skip", "not tradeable by the agent (e.g. a crypto watch trigger)")
             continue
         # PDT: each open position reserves a same-day exit. Out of budget → stop opening (the
         # remaining, lower-ranked signals would only be skipped one by one anyway).
@@ -334,7 +322,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
             if row is None:
                 why.append("options: no applicable strategy or affordable/liquid contract")
-        if row is None and use_stocks and stk.can_hold_shares(sig):   # stock leg, or options fallback
+        if row is None and stk.can_hold_shares(sig):   # stock leg, or options fallback
             row, spent = stk.enter(mcp, acct, sig, stock_dollars.get(ticker, 0.0), avail, state,
                                    verbose, room=stock_left)
             stock_left -= spent
@@ -519,11 +507,11 @@ def _run_paper_entries(verbose: bool, exclude=None) -> list[dict]:
 
 def run_paper_agent(verbose: bool = True) -> dict:
     """Simulation cycle — exits then entries against the paper book (storage.paper_book). No real
-    orders, no real money; uses LIVE option quotes so P&L is realistic. Honors the kill switch.
-    This is what the scheduler runs while UNARMED, building a track record to judge the strategies."""
+    orders, no real money; uses LIVE option quotes so P&L is realistic. Does nothing in mode "off".
+    This is what the scheduler runs in PAPER mode, building a track record to judge the strategies."""
     from ingestion import robinhood_mcp as mcp
     if _halted():
-        return {"status": "halted", "reason": "kill switch present"}
+        return {"status": "halted", "reason": "agent mode is off"}
     if not mcp.is_available():
         return {"status": "skipped", "reason": "USE_MCP off"}
     if verbose:
@@ -535,14 +523,14 @@ def run_paper_agent(verbose: bool = True) -> dict:
     return {"entries": entries, "exits": exits, "mode": "paper"}
 
 
-def run_options_agent(verbose: bool = True, stocks: bool | None = None) -> dict:
-    """One full cycle: exits first (free capital), then entries. Honors the kill switch, market
+def run_options_agent(verbose: bool = True, entries: bool = True) -> dict:
+    """One full cycle: exits first (free capital), then entries. Honors agent mode "off", market
     hours (for live placement), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}.
-    `stocks` overrides config.AGENT_TRADE_STOCKS for this cycle (e.g. a dry preview of the stock leg)."""
+    entries=False → exits only (paper mode keeps managing any real positions opened while live)."""
     from ingestion import robinhood_mcp as mcp
 
     if _halted():
-        return {"status": "halted", "reason": f"kill switch present ({_HALT_FLAG})"}
+        return {"status": "halted", "reason": "agent mode is off"}
     if not mcp.is_available():
         return {"status": "skipped", "reason": "USE_MCP off"}
     acct = mcp.agentic_account_number()
@@ -555,14 +543,15 @@ def run_options_agent(verbose: bool = True, stocks: bool | None = None) -> dict:
     if verbose:
         print(f"== Autonomous options agent ==  DRY_RUN={config.DRY_RUN} | agentic BP=${bp:.2f}\n-- exits --")
     # Exits always run (token-free, capital-protecting) — options, then any share positions the agent
-    # opened (runs even with AGENT_TRADE_STOCKS off, so turning the flag off never strands a position;
-    # it's a no-op without reads when the agent owns no shares).
+    # opened (it's a no-op without reads when the agent owns no shares).
     exits = _run_exits(mcp, acct, bp, verbose)
     try:
         from alerts import agentic_stocks as _stk
         exits += _stk.run_exits(mcp, acct, bp, verbose)
     except Exception as e:  # noqa: BLE001 — a stock-exit failure must not block options entries/exits
         print(f"agentic_options: stock exit pass failed — {e}")
+    if not entries:
+        return {"entries": [], "exits": exits}
     bp = mcp.fetch_buying_power(acct) or bp  # refresh after any closes
 
     # Entries depend on fresh Argus signals (which cost tokens). Halt NEW entries when the LLM
@@ -586,5 +575,5 @@ def run_options_agent(verbose: bool = True, stocks: bool | None = None) -> dict:
         print("-- entries --")
     # Budget is read AFTER exits so this cycle's same-day closes are already counted.
     entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits, live=True),
-                           max_new=_entry_budget(mcp, acct, bp, verbose), stocks=stocks)
+                           max_new=_entry_budget(mcp, acct, bp, verbose))
     return {"entries": entries, "exits": exits}

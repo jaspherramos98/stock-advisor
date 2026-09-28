@@ -2,6 +2,21 @@
 
 ## Done
 
+### 64. One agent control: Off / Paper / Live (simplification step 1 of 2, 2026-09-28) ✅
+Six overlapping controls (arm file `agent_live.arm`, kill switch `agentic_halt.flag`, `config.AGENT_TRADE_STOCKS`,
+`stock_leg_test.pending` + `scripts/stock_leg_test.py`, the preview's stock toggle, the 6:30 task arming live) were
+confusing and let the morning task switch real money on. Now ONE mode in new `agent_mode.py` (agent_mode.txt,
+gitignored; no file → paper, garbled → off), set only from an Agent-tab radio (Live needs a confirm tick).
+`scripts/run_agent.py`: off → nothing; paper → a live EXITS-only pass (`run_options_agent(entries=False)`, so real
+positions left from live are never stranded) + the paper cycle; live → full cycle. The stock leg is always on
+(`route(sig)` lost its flag; the stocks-off paths are gone); `AGENT_STOCK_BUDGET_CAP` ($20) still caps shares.
+`market_open.bat` no longer arms anything. The $20 test script is deleted — the first real share buy in Live is the
+test. `close_all_agent.py` now works in any mode (explicit manual command). Migration: no mode file → PAPER, so the
+agent stopped trading live at merge (it had no positions). 145 tests. Files: agent_mode.py (new), alerts/
+agentic_options.py, alerts/agentic_stocks.py, alerts/agentic_watch.py, config.py, dashboard/tabs/agent.py,
+scripts/run_agent.py, scripts/close_all_agent.py, scripts/agentic_options.py, scripts/stock_leg_test.py (deleted),
+market_open.bat, run_agent.bat, .gitignore, README, tests.
+
 ### 63. short_dte_momentum disabled until the judge is proven (2026-09-28) ✅
 The regime-bucket fix (#58) made `short_dte_momentum` reachable for the first time: weekly OTM options at 100% of
 available buying power on conviction ≥80 in a risk-on tape. User chose to keep it OFF until the shadow judge is
@@ -1042,6 +1057,16 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
+### Paper mode runs the live code, both legs (simplification step 2 of 2 — NEXT)
+`run_paper_agent` is a separate, older copy of the entry/exit logic: options only, no routing, no judge, no
+decision log, no PDT. Make paper = the SAME `_run_entries`/`_run_exits` with only order placement (and position
+reads) swapped for the paper book; extend `storage/paper_book` to hold shares (fractional dollar buys, stock exit
+rules); paper cash = real agentic BP with the same $20 stock cap; tag decision-log records `mode: paper`; delete
+`_run_paper_entries/_run_paper_exits`; show both legs in the Agent tab paper panel. Consider dropping the Preview
+button once paper works. Judge verdicts are reused across live/paper (2h), so extra cost ≈ $0.
+- **Archive every pipeline run** (`pipeline_history/<date>.json`) — past recs are lost today (the cache is overwritten
+  daily; the Sheets export had only 27 rows from June), so a future judge replay has nothing to replay.
+
 ### Agent judgment — PLAN (approved 2026-09-28, not built)
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
 batch: buy/short recs → route by conviction (≥75 options, else shares, short → puts) → first matching playbook
@@ -1113,8 +1138,8 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
 - ~~**S3 exits**~~ — done #53 (agent-opened positions only; resting stop at the PLAN's stop from entry, not the
   ATR-from-current stop that `agentic_stops.sync_protective_stops` computes — that script stays manual-only).
 - ~~**S4 dashboard**~~ — done #54.
-- **S5 tiny live (user runs it):** one ~$5 fractional buy → confirm fill → confirm the agent's exit sells it in
-  the app. Only then add the stock leg to the scheduled cycle.
+- **S5 tiny live — replaced by #64:** no separate test; after paper looks sane, the user switches to Live and the
+  first real share buy (≤$20 cap) is the test (confirm fill, resting stop on a whole share, exit sell).
 
 ### Perf follow-ups (refactor plan A–E finished: #39–#42; D skipped — st.tabs switching is already client-side)
 - Redundant MCP calls per agent cycle: `get_option_positions` ×2 (exits + `_held_underlyings`) and
