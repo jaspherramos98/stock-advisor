@@ -338,7 +338,8 @@ run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; r
                               it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs —
                               REGISTERED (verified 2026-09-28). If ever deleted, re-register
                               (user action, real money in live mode):
-                              schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>un_agent_silent.vbs\""
+                              schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>
+un_agent_silent.vbs\""
                               /SC MINUTE /MO 20 /F. Manage: schtasks /Query|/Run|/Change|/Delete /TN "…".
 market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
                               `scripts/run_pipeline.py` (headless; writes today's cache); output appended to
@@ -760,25 +761,20 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
    cached (`_history_views` / `_allocation_fig`, `st.cache_resource` keyed on the rows — a new export
    changes the key, no manual clear). Plotly Express costs ~0.1s/figure, so uncached this tab alone
    was ~0.2–0.4s of EVERY click (all tabs rerun on each interaction).
-6. **🤖 Agent** (Phase 2) — observe + control the autonomous options agent (agentic pilot only).
-   Top: the **Agent mode** radio (Off / Paper / Live → `agent_mode.set_mode`; switching to Live needs a
-   confirm checkbox). **📊 Paper trading**: the paper book (options + shares) the Paper-mode agent trades —
-   equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset (default = real
-   agentic BP) buttons. (The dry-run Preview button was removed #65 — paper replaces it.)
-   **🕯 Live chart**: plotly candlesticks (get_equity_historicals) per ticker/interval with paper BUY/SELL
-   markers + refresh. Then: status metrics (agentic buying power, LLM credit
-   left, **New entries (PDT)** = remaining day-trade budget, `_c_day_trade_budget` 60s);
-   **LLM credit ledger** control (set balance/reserve — `llm_budget`); a guarded **Run LIVE cycle now** (real orders,
-   confirm-checkbox, market-hours only, enabled in Live mode only) — scopes `config.DRY_RUN` only around the
-   call, never process-wide;
-   **agentic share positions** + a **🔄 Sync positions** refresh — each
-   row says whether it's agent-managed (plan, opened date, the agent's hold/close decision via
-   `agentic_stocks.decide_exit`) or hand-bought (never touched), with a **Sell now** override that reuses
-   `agentic_stocks.close_position` (cancel resting stop → confirm → market sell); **open option positions** with live P&L + the agent's exit decision (hold/close + reason)
-   and a per-position **Close now** override. **Exit policy (`option_exit_decision`, poll-based each
-   cycle, not a resting stop):** hard stop −50% → **trailing take-profit** (once up ≥`trail_activate`
-   25%, sell if it gives back `trail_giveback` 20% from the peak — `storage/peak_tracker`) → +80% hard
-   target → close ≤2 DTE. (Sidebar decluttered — helper captions removed.)
+6. **🤖 Agent** — observe + control the autonomous agent (agentic pilot only). Top to bottom (#66):
+   **Agent mode** radio (Off / Paper / Live → `agent_mode.set_mode`; Live needs a confirm checkbox) + metrics
+   (agentic buying power, LLM credit left, **New entries (PDT)** = `_c_day_trade_budget` 60s).
+   **📊 Paper trading**: the paper book (options + shares) — equity/cash/realized/win-rate, open + closed tables,
+   a collapsed **Reset the paper account** (default = real agentic BP). **💼 Real positions — agentic account**:
+   **Shares** rows say agent-managed (plan, opened, `agentic_stocks.decide_exit` call) or hand-bought (never
+   touched), with **Sell now** (`agentic_stocks.close_position`: cancel resting stop → confirm → market sell);
+   **Options** rows show live P&L + the agent's exit decision with **Close now**. **🕯 Live chart** (candles +
+   paper/LIVE markers). Then 🧾 Decision log + ⚖ Judge scorecard expanders, and **💳 LLM credit** ledger last.
+   No manual run buttons (the mode + scheduler decide; the Run-LIVE/Run-paper/Preview buttons and the tab's
+   Sync button were removed as duplicates). Rows use `st.columns(vertical_alignment=...)`, not `st.write("")`
+   spacers. **Option exit policy (`option_exit_decision`, poll-based each cycle, not a resting stop):** hard
+   stop −50% → **trailing take-profit** (once up ≥`trail_activate` 25%, sell if it gives back `trail_giveback`
+   20% from the peak — `storage/peak_tracker`) → +80% hard target → close ≤2 DTE.
 
 ## Known Issues / Constraints
 - **MCP OAuth: silent refresh works across restarts (fixed); re-login only when the REFRESH token itself

@@ -2,6 +2,15 @@
 
 ## Done
 
+### 66. Agent tab cleanup — no duplicate controls, aligned rows (2026-09-28) ✅
+User flagged leftovers after #45/#46. Removed the "Run a LIVE cycle now" expander (Live mode does exactly that),
+the "Run paper cycle now" button (Paper mode does), and the tab's "Sync positions" button (a plain rerun; the
+cached reads refresh every 30s). Merged "Agentic positions" + "Open option positions" into one **💼 Real positions**
+section (Shares / Options). New order: mode → paper → real positions → chart → decision log / scorecard → LLM
+credit. Button rows were offset by `st.write("")` spacers — now `st.columns(vertical_alignment=...)`. Paper reset
+moved into a collapsed expander; the win-rate "N closed" no longer shows as a green arrow. Checked visually on a
+preview instance. Files: dashboard/tabs/agent.py, CLAUDE.md.
+
 ### 65. Paper mode runs the live agent code, both legs (simplification step 2 of 2, 2026-09-28) ✅
 The old paper loop (`_run_paper_entries/_run_paper_exits`) was a separate, older copy: options only, no routing,
 no stock leg, no judge, no decision log, no PDT — so paper results said nothing about what live would do. Now

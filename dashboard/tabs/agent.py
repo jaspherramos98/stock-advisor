@@ -10,22 +10,19 @@ from dashboard.common import (_cached_prices, _c_agentic_bp, _c_agentic_equity, 
 
 
 def render() -> None:
-    st.subheader("🤖 Agentic options agent")
-    st.caption("Autonomous options trader on the **isolated Agentic pilot** account only "
-                   "(never your main book). Observe what it holds and would do, override any "
-                   "decision, and set its mode. Position size is uncapped "
-                   "by design — this is a disposable-capital experiment, high-variance / likely -EV.")
+    st.subheader("🤖 Autonomous agent")
+    st.caption("Trades options and shares on the **isolated Agentic pilot** account only (never your main "
+               "book). Set its mode, see what it holds, override any position. Disposable-capital experiment: "
+               "high-variance / likely -EV.")
 
     import config as _cfg
     import llm_budget as _lb
     try:
         from ingestion import robinhood_mcp as _amcp
         from ingestion import options_data as _aod
-        from alerts.agentic_options import run_options_agent
         import agent_mode as _mode
         from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
         from trading_guards import OptionOrderIntent, GuardState
-        from ingestion import mcp_auth as _amcpauth
         _agent_ok = True
     except Exception as _e:  # noqa: BLE001
         st.error(f"Agent modules unavailable: {_e}")
@@ -94,27 +91,7 @@ def render() -> None:
             pm2.metric("Cash", f"\\${_ps['cash']:,.2f}")
             pm3.metric("Realized P&L", f"\\${_ps['realized']:,.2f}")
             pm4.metric("Win rate", f"{_ps['win_rate']:.0f}%" if _ps['win_rate'] is not None
-                       else "—", f"{_ps['n_closed']} closed")
-
-            _pc1, _pc2, _pc3 = st.columns([1, 1, 1])
-            with _pc1:
-                if st.button("▶ Run paper cycle now", use_container_width=True, key="paper_run",
-                             disabled=_cur == "off"):
-                    from alerts.agentic_options import run_paper_agent
-                    st.session_state["paper_result"] = run_paper_agent(verbose=False)
-                    st.rerun()
-            with _pc2:
-                _pstart = st.number_input("Reset with $", min_value=1.0, step=5.0, key="paper_reset_amt",
-                                          value=float(round(_agbp, 2)) if _agbp else float(_book["start"]),
-                                          help="Defaults to the real agentic buying power, so paper mirrors "
-                                               "what live would do.")
-            with _pc3:
-                st.write("")
-                if st.button("↺ Reset paper book", use_container_width=True, key="paper_reset"):
-                    _pb.reset(_pstart)
-                    st.rerun()
-            if st.session_state.get("paper_result"):
-                st.caption(f"Last paper cycle: {st.session_state['paper_result']}")
+                       else "—", f"{_ps['n_closed']} closed", delta_color="off", delta_arrow="off")
 
             _rows = [{"Ticker": p["ticker"], "Holding": f"{p['strike']:g}{(p['right'] or '?')[0].upper()} "
                                                         f"{p['expiration']} ×{p['qty']}",
@@ -137,8 +114,128 @@ def render() -> None:
                 } for c in reversed(_book["closed"][-20:])]), use_container_width=True, hide_index=True)
             if not _rows and not _book["closed"]:
                 st.caption("No paper trades yet — they appear after a cycle with a signal (market hours).")
+            with st.expander("↺ Reset the paper account"):
+                _pc1, _pc2 = st.columns([2, 1], vertical_alignment="bottom")
+                with _pc1:
+                    _pstart = st.number_input("Start with $", min_value=1.0, step=5.0, key="paper_reset_amt",
+                                              value=float(round(_agbp, 2)) if _agbp else float(_book["start"]),
+                                              help="Defaults to the real agentic buying power, so paper mirrors "
+                                                   "what live would do. Clears every paper position and trade.")
+                with _pc2:
+                    if st.button("Reset paper book", use_container_width=True, key="paper_reset"):
+                        _pb.reset(_pstart)
+                        st.rerun()
         except Exception as _e:  # noqa: BLE001
             st.caption(f"Paper book unavailable: {_e}")
+
+        # --- REAL positions on the agentic account (shares + options), each with a manual override ---
+        st.markdown("### 💼 Real positions — agentic account")
+        st.caption("What the agent holds with real money (refreshes every 30s). Sell now / Close now override "
+                   "the agent immediately; the agent's own call is shown per row.")
+        st.markdown("**Shares**")
+        _eq = []
+        if _acct:
+            try:
+                _eq = _c_agentic_equity(_acct)   # agentic-account equity holdings
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Could not read agentic equity positions: {_e}")
+        if _eq:
+            from alerts import agentic_stocks as _astk
+            from storage import agent_stock_book as _abook
+            from storage.peak_tracker import get_peak as _get_peak
+            _plans = _abook.all_entries()
+            for _sp in _eq:
+                _t = (_sp.get("ticker") or "").upper()
+                _plan = _plans.get(_t)
+                try:
+                    if _plan:
+                        _sact, _swhy = _astk.decide_exit(_sp, _plan, _get_peak(f"eq:{_t}"))
+                        _agent = (f"agent-managed · plan *{_plan.get('exit_condition') or 'default'}* · "
+                                  f"opened {_plan.get('opened')} · agent: **{_sact}** ({_swhy})")
+                    else:
+                        _agent = "not agent-managed (bought by hand — the agent never touches it)"
+                    sc1, sc2 = st.columns([4, 1], vertical_alignment="center")
+                    with sc1:
+                        st.markdown(
+                            f"**{_t}** {_sp['shares']:g} sh · avg \\${_sp['avg_cost']:.2f} → "
+                            f"\\${_sp['current_price']:.2f} (**{_sp['pnl_pct']:+.1f}%**, "
+                            f"\\${_sp['equity']:.2f}) · {_agent}")
+                    with sc2:
+                        if st.button("Sell now", key=f"agent_sell_{_t}", use_container_width=True):
+                            _old = _cfg.DRY_RUN
+                            _cfg.DRY_RUN = False   # a manual override click IS the confirmation
+                            try:
+                                _r = _astk.close_position(_amcp, _acct, _sp, _agbp or 0,
+                                                          "manual override sell (dashboard)")
+                            finally:
+                                _cfg.DRY_RUN = _old
+                            st.success(f"Sell {_r['status']}: {_r.get('detail') or _r.get('reason')}")
+                            _c_agentic_equity.clear()
+                            st.rerun()
+                except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
+                    st.caption(f"{_t}: render error — {_e}")
+            st.caption("Share exits: the agent re-checks every cycle; the whole-share part of an agent "
+                       "position also rests on a GTC stop at its plan's stop (protects while the PC is off).")
+        else:
+            st.caption("None.")
+
+        st.markdown("**Options**")
+        _positions = []
+        if _acct:
+            try:
+                _positions = _c_option_positions(_acct)
+            except Exception as _e:  # noqa: BLE001
+                st.caption(f"Could not read option positions: {_e}")
+        if not _positions:
+            st.caption("None.")
+        for _p in _positions:
+            try:
+                _oid = _p.get("option_id") or _p.get("option") or _p.get("id")
+                _qty = int(float(_p.get("quantity") or 0))
+                if not _oid or _qty < 1:
+                    continue
+                _entry = float(_p.get("average_open_price") or _p.get("average_price") or 0)
+                if _entry > 5:
+                    _entry /= 100.0
+                _q = _c_option_quote(_oid)
+                _mark = float(_q.get("mark_price") or _q.get("bid_price") or 0)
+                _exp = _p.get("expiration_date") or _p.get("expiration")
+                _dte = _aod._dte(_exp) if _exp else None
+                from storage.peak_tracker import get_peak as _get_peak
+                _act, _why = option_exit_decision(_entry, _mark, _dte, DEFAULT_EXIT,
+                                                  peak_mark=_get_peak(_oid))
+                _pnl = ((_mark - _entry) / _entry * 100) if _entry else 0.0
+                _sym = _p.get("chain_symbol") or _p.get("symbol") or "?"
+                _rt = (_p.get("type") or "call").lower()
+                cc1, cc2 = st.columns([4, 1], vertical_alignment="center")
+                with cc1:
+                    st.markdown(
+                        f"**{_sym} {_rt.upper()}** ×{_qty} · exp {_exp} (DTE {_dte}) · "
+                            f"entry \\${_entry:.2f} → mark \\${_mark:.2f} "
+                            f"(**{_pnl:+.0f}%**) · agent: **{_act}** ({_why})")
+                with cc2:
+                    if st.button("Close now", key=f"agent_close_{_oid}", use_container_width=True):
+                        _intent = OptionOrderIntent(
+                            underlying=_sym, option_id=_oid, right=_rt, side="sell",
+                            position_effect="close", quantity=_qty,
+                            price=round(float(_q.get("bid_price") or _mark), 2),
+                            direction="credit", expiration=_exp,
+                            reason="manual override close (dashboard)",
+                            client_id=f"uiclose-{_oid}")
+                        _old = _cfg.DRY_RUN
+                        _cfg.DRY_RUN = False   # a manual override click IS the confirmation
+                        try:
+                            _res = _amcp.place_option_order(
+                                _intent, GuardState(start_equity=_agbp or 0),
+                                buying_power=_agbp or 0, account_number=_acct)
+                        finally:
+                            _cfg.DRY_RUN = _old
+                        st.success(f"Close {_res['status']}: {_res['reason']}")
+                        st.rerun()
+            except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
+                st.caption(f"position render error: {_e}")
+        if _positions:
+            st.caption("Option exits are POLL-based: the agent re-checks each cycle (not a resting stop).")
 
         # --- Live candlestick chart ---
         st.markdown("### 🕯 Live chart")
@@ -146,13 +243,12 @@ def render() -> None:
             import datetime as _cdt
             _open_ticks = sorted({p["ticker"] for p in _book.get("options", [])} | set(_book.get("shares") or {}))
             _chart_ticks = _open_ticks + [t for t in ("F", "NIO", "SNAP", "SPY") if t not in _open_ticks]
-            _csel1, _csel2, _csel3 = st.columns([2, 1, 1])
+            _csel1, _csel2, _csel3 = st.columns([2, 1, 1], vertical_alignment="bottom")
             with _csel1:
                 _csym = st.selectbox("Ticker", _chart_ticks, key="agent_chart_sym")
             with _csel2:
                 _civ = st.selectbox("Interval", ["5minute", "10minute", "hour", "day"], key="agent_chart_iv")
             with _csel3:
-                st.write("")
                 _refresh = st.button("🔄 Refresh", use_container_width=True, key="agent_chart_refresh")
 
             _days = 2 if _civ in ("5minute", "10minute") else (10 if _civ == "hour" else 120)
@@ -271,49 +367,6 @@ def render() -> None:
         except Exception as _e:  # noqa: BLE001
             st.caption(f"Chart unavailable: {_e}")
 
-        # --- LLM credit ledger (token budget halt) ---
-        st.markdown("### 💳 LLM credit — token-budget halt")
-        st.caption("Anthropic has no live-balance API, so this is a local ledger: set your "
-                       "current console balance; Argus subtracts each Claude call's cost and "
-                       "**halts new agent entries + chat when the remainder hits the reserve** "
-                       "(default \\$0.50), leaving leeway to top up.")
-        lc1, lc2, lc3 = st.columns([2, 1, 1])
-        with lc1:
-            _newbal = st.number_input("Set balance from console ($)", min_value=0.0,
-                                      value=float(_led["balance"]), step=1.0, key="agent_setbal")
-        with lc2:
-            _newres = st.number_input("Reserve ($)", min_value=0.0,
-                                      value=float(_led["reserve"]), step=0.25, key="agent_setres")
-        with lc3:
-            st.write("")
-            if st.button("💾 Update ledger", use_container_width=True):
-                _lb.set_balance(_newbal, _newres)
-                st.rerun()
-        if _led["balance"] > 0:
-            st.caption(f"Spent since set: \\${_led['spent']:.4f} · remaining "
-                           f"\\${_led['remaining']:.2f} · reserve \\${_led['reserve']:.2f}")
-            if _led["remaining"] <= _led["reserve"]:
-                st.error("⛔ Credit at/under reserve — new agent entries + chat are halted. "
-                             "Top up, then update the balance above.")
-
-        # LIVE run now — only in Live mode; explicit, guarded, scoped (never flips DRY_RUN process-wide).
-        with st.expander("🔴 Run a LIVE cycle now (places REAL orders)"):
-            st.warning("Real orders on the agentic account — options (uncapped size) and shares (capped by "
-                       "AGENT_STOCK_BUDGET_CAP). Market hours only. Available in Live mode only.")
-            _confirm = st.checkbox("I understand — trade real money now", key="agent_live_confirm")
-            if st.button("Execute LIVE cycle", disabled=not (_confirm and _acct and _cur == "live")):
-                _old = _cfg.DRY_RUN
-                _cfg.DRY_RUN = False
-                try:
-                    st.session_state["agent_live_result"] = run_options_agent(verbose=False)
-                finally:
-                    _cfg.DRY_RUN = _old
-                st.rerun()
-
-        if st.session_state.get("agent_live_result"):
-            st.markdown("#### 🔴 Last LIVE cycle result")
-            st.json(st.session_state["agent_live_result"])
-
         # --- decision log (plan J0): every candidate/exit the agent considered + why ---
         with st.expander("🧾 Decision log — what the agent considered and why"):
             from storage import decision_log as _dl
@@ -368,113 +421,26 @@ def render() -> None:
                            + f". Judge calls {_sc['judge_calls']}, cost \\${_sc['judge_cost_usd']:.2f}.")
                 st.caption(_sc["caveat"])
 
-        # --- agentic equity positions + sync/refresh ---
-        st.markdown("### 📈 Agentic positions")
-        if st.button("🔄 Sync positions", use_container_width=True, disabled=not _acct,
-                     key="agent_sync_positions"):
-            st.rerun()
-        _eq = []
-        if _acct:
-            try:
-                _eq = _c_agentic_equity(_acct)   # agentic-account equity holdings
-            except Exception as _e:  # noqa: BLE001
-                st.caption(f"Could not read agentic equity positions: {_e}")
-        if _eq:
-            from alerts import agentic_stocks as _astk
-            from storage import agent_stock_book as _abook
-            from storage.peak_tracker import get_peak as _get_peak
-            _plans = _abook.all_entries()
-            for _sp in _eq:
-                _t = (_sp.get("ticker") or "").upper()
-                _plan = _plans.get(_t)
-                try:
-                    if _plan:
-                        _sact, _swhy = _astk.decide_exit(_sp, _plan, _get_peak(f"eq:{_t}"))
-                        _agent = (f"agent-managed · plan *{_plan.get('exit_condition') or 'default'}* · "
-                                  f"opened {_plan.get('opened')} · agent: **{_sact}** ({_swhy})")
-                    else:
-                        _agent = "not agent-managed (bought by hand — the agent never touches it)"
-                    sc1, sc2 = st.columns([4, 1])
-                    with sc1:
-                        st.markdown(
-                            f"**{_t}** {_sp['shares']:g} sh · avg \\${_sp['avg_cost']:.2f} → "
-                            f"\\${_sp['current_price']:.2f} (**{_sp['pnl_pct']:+.1f}%**, "
-                            f"\\${_sp['equity']:.2f}) · {_agent}")
-                    with sc2:
-                        if st.button("Sell now", key=f"agent_sell_{_t}", use_container_width=True):
-                            _old = _cfg.DRY_RUN
-                            _cfg.DRY_RUN = False   # a manual override click IS the confirmation
-                            try:
-                                _r = _astk.close_position(_amcp, _acct, _sp, _agbp or 0,
-                                                          "manual override sell (dashboard)")
-                            finally:
-                                _cfg.DRY_RUN = _old
-                            st.success(f"Sell {_r['status']}: {_r.get('detail') or _r.get('reason')}")
-                            _c_agentic_equity.clear()
-                            st.rerun()
-                except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
-                    st.caption(f"{_t}: render error — {_e}")
-            st.caption("Share exits: the agent re-checks every cycle; the whole-share part of an agent "
-                       "position also rests on a GTC stop at its plan's stop (protects while the PC is off).")
-        else:
-            st.caption("No agentic equity positions.")
-
-        # --- observe open option positions + per-position override ---
-        st.markdown("### 📂 Open option positions (agentic) — override exits")
-        _positions = []
-        if _acct:
-            try:
-                _positions = _c_option_positions(_acct)
-            except Exception as _e:  # noqa: BLE001
-                st.caption(f"Could not read option positions: {_e}")
-        if not _positions:
-            st.caption("No open option positions on the agentic account.")
-        for _p in _positions:
-            try:
-                _oid = _p.get("option_id") or _p.get("option") or _p.get("id")
-                _qty = int(float(_p.get("quantity") or 0))
-                if not _oid or _qty < 1:
-                    continue
-                _entry = float(_p.get("average_open_price") or _p.get("average_price") or 0)
-                if _entry > 5:
-                    _entry /= 100.0
-                _q = _c_option_quote(_oid)
-                _mark = float(_q.get("mark_price") or _q.get("bid_price") or 0)
-                _exp = _p.get("expiration_date") or _p.get("expiration")
-                _dte = _aod._dte(_exp) if _exp else None
-                from storage.peak_tracker import get_peak as _get_peak
-                _act, _why = option_exit_decision(_entry, _mark, _dte, DEFAULT_EXIT,
-                                                  peak_mark=_get_peak(_oid))
-                _pnl = ((_mark - _entry) / _entry * 100) if _entry else 0.0
-                _sym = _p.get("chain_symbol") or _p.get("symbol") or "?"
-                _rt = (_p.get("type") or "call").lower()
-                cc1, cc2 = st.columns([4, 1])
-                with cc1:
-                    st.markdown(
-                        f"**{_sym} {_rt.upper()}** ×{_qty} · exp {_exp} (DTE {_dte}) · "
-                            f"entry \\${_entry:.2f} → mark \\${_mark:.2f} "
-                            f"(**{_pnl:+.0f}%**) · agent: **{_act}** ({_why})")
-                with cc2:
-                    if st.button("Close now", key=f"agent_close_{_oid}", use_container_width=True):
-                        _intent = OptionOrderIntent(
-                            underlying=_sym, option_id=_oid, right=_rt, side="sell",
-                            position_effect="close", quantity=_qty,
-                            price=round(float(_q.get("bid_price") or _mark), 2),
-                            direction="credit", expiration=_exp,
-                            reason="manual override close (dashboard)",
-                            client_id=f"uiclose-{_oid}")
-                        _old = _cfg.DRY_RUN
-                        _cfg.DRY_RUN = False   # a manual override click IS the confirmation
-                        try:
-                            _res = _amcp.place_option_order(
-                                _intent, GuardState(start_equity=_agbp or 0),
-                                buying_power=_agbp or 0, account_number=_acct)
-                        finally:
-                            _cfg.DRY_RUN = _old
-                        st.success(f"Close {_res['status']}: {_res['reason']}")
-                        st.rerun()
-            except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
-                st.caption(f"position render error: {_e}")
-
-        st.caption("Option exits are POLL-based: the agent re-checks each cycle (not a resting stop). "
-                       "Timeliness depends on how often the cycle runs.")
+        # --- LLM credit ledger (token budget halt) ---
+        st.markdown("### 💳 LLM credit — token-budget halt")
+        st.caption("Anthropic has no live-balance API, so this is a local ledger: set your "
+                       "current console balance; Argus subtracts each Claude call's cost and "
+                       "**halts new agent entries + chat when the remainder hits the reserve** "
+                       "(default \\$0.50), leaving leeway to top up.")
+        lc1, lc2, lc3 = st.columns([2, 1, 1], vertical_alignment="bottom")
+        with lc1:
+            _newbal = st.number_input("Set balance from console ($)", min_value=0.0,
+                                      value=float(_led["balance"]), step=1.0, key="agent_setbal")
+        with lc2:
+            _newres = st.number_input("Reserve ($)", min_value=0.0,
+                                      value=float(_led["reserve"]), step=0.25, key="agent_setres")
+        with lc3:
+            if st.button("💾 Update ledger", use_container_width=True):
+                _lb.set_balance(_newbal, _newres)
+                st.rerun()
+        if _led["balance"] > 0:
+            st.caption(f"Spent since set: \\${_led['spent']:.4f} · remaining "
+                           f"\\${_led['remaining']:.2f} · reserve \\${_led['reserve']:.2f}")
+            if _led["remaining"] <= _led["reserve"]:
+                st.error("⛔ Credit at/under reserve — new agent entries + chat are halted. "
+                             "Top up, then update the balance above.")
