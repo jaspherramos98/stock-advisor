@@ -37,12 +37,21 @@ def _save(book: dict) -> None:
 
 
 def record_entry(ticker: str, exit_condition: str | None, source: str | None = None,
-                 conviction: float | None = None, opened: date | None = None) -> None:
-    """Remember the plan for a newly opened position (overwrites a stale record for the ticker)."""
+                 conviction: float | None = None, opened: date | None = None,
+                 dollars: float | None = None) -> None:
+    """Remember the plan for a newly opened position (overwrites a stale record for the ticker).
+    `dollars` = the entry cost, which the stock budget cap (config.AGENT_STOCK_BUDGET_CAP) counts."""
     book = _load()
     book[ticker.upper()] = {"exit_condition": exit_condition or "", "source": source or "pipeline",
-                            "conviction": conviction, "opened": (opened or date.today()).isoformat()}
+                            "conviction": conviction, "opened": (opened or date.today()).isoformat(),
+                            "dollars": dollars}
     _save(book)
+
+
+def invested() -> float:
+    """Entry cost of every position the agent believes it holds — what the stock cap counts. Read
+    from the book (not the broker) so an order placed seconds ago counts before its fill shows up."""
+    return round(sum(float(e.get("dollars") or 0) for e in _load().values()), 2)
 
 
 def get_entry(ticker: str) -> dict | None:

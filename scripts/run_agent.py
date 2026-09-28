@@ -29,6 +29,9 @@ from alerts.agentic_options import run_options_agent, run_paper_agent
 
 _ARM = os.path.join(_REPO, "agent_live.arm")
 _LOG = os.path.join(_REPO, "agent_scheduler.log")
+# One-shot S5 stock-leg test (scripts/stock_leg_test.py): present → run it ONCE, LIVE, on the first
+# armed in-hours cycle. The marker is deleted BEFORE buying so a crash can never repeat the buys.
+_STOCK_TEST = os.path.join(_REPO, "stock_leg_test.pending")
 
 
 def _log(msg: str) -> None:
@@ -74,6 +77,13 @@ def main() -> int:
     # UNARMED → paper simulation (tracks P&L, no money). ARMED → real orders.
     if armed:
         config.DRY_RUN = False
+        if os.path.exists(_STOCK_TEST):
+            try:
+                os.remove(_STOCK_TEST)
+                from scripts.stock_leg_test import run_test
+                _log(f"[LIVE] stock-leg test: {run_test(live=True, verbose=False)}")
+            except Exception as e:  # noqa: BLE001 — the test must never block the normal cycle
+                _log(f"[LIVE] stock-leg test FAILED: {e}")
         out = run_options_agent(verbose=False)
     else:
         out = run_paper_agent(verbose=False)

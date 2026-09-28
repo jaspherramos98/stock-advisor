@@ -235,9 +235,16 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
     # position no longer shows as held — without this the same signal would re-buy it the same
     # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
     held = _held_underlyings(mcp, acct) | (exclude or set())
+    stock_dollars, stock_left = {}, 0.0
     if use_stocks:
+        from storage.agent_stock_book import invested
         held |= stk.held_tickers(mcp, acct)
-    stock_dollars = stk.size_buys(signals, buying_power) if use_stocks else {}
+        # config.AGENT_STOCK_BUDGET_CAP limits the TOTAL entry cost the agent holds in shares. The
+        # pyramid sizes on the smaller of buying power and the cap, so a $20 cap still spreads
+        # across several names (40% single-name cap → ≥3 positions to deploy it all).
+        cap = stk.budget_cap()
+        stock_left = stk.stock_room(invested(), cap)
+        stock_dollars = stk.size_buys(signals, min(buying_power, cap) if cap is not None else buying_power)
     state = GuardState(start_equity=buying_power)
     avail = buying_power
     results: list[dict] = []
@@ -259,7 +266,9 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
         if leg == "option":
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
         if row is None and use_stocks and stk.can_hold_shares(sig):   # stock leg, or options fallback
-            row, spent = stk.enter(mcp, acct, sig, stock_dollars.get(ticker, 0.0), avail, state, verbose)
+            row, spent = stk.enter(mcp, acct, sig, stock_dollars.get(ticker, 0.0), avail, state,
+                                   verbose, room=stock_left)
+            stock_left -= spent
         if row is None:
             continue
         results.append(row)

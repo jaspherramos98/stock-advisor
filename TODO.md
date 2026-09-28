@@ -2,6 +2,19 @@
 
 ## Done
 
+### 55. Stock budget cap + S5 live test script (2026-09-28) ✅
+`config.AGENT_STOCK_BUDGET_CAP = 20.0` — max total entry cost the agent may hold in shares (None = no cap, the
+one line to remove the training wheels). Counted from the stock book (new `dollars` field + `invested()`), not the
+broker, so a just-placed order counts before its fill shows. `_run_entries` sizes the pyramid on min(BP, cap) and
+stops the stock leg at the remaining room (`stock_room`); the order guard still sees real BP (a room under $10
+would otherwise trip its $10 min-BP rule). New `scripts/stock_leg_test.py`: 2-3 positions (today's share signals,
+padded with SPY/QQQ/IWM), the cap split equally, PDT-slot-aware, through the agent's own path; `--live`, `--verify`.
+`scripts/run_agent.py` runs it ONCE, LIVE on the first armed in-hours cycle when `stock_leg_test.pending` exists
+(marker deleted before buying). DRY run vs live reviews: SPY/QQQ/IWM × $6.66 clean. `AGENT_TRADE_STOCKS` stays
+False — flipping it (ongoing stock entries) is the user's call; the test and the exit pass work without it.
++2 tests (123). Files: config.py, storage/agent_stock_book.py, alerts/agentic_stocks.py, alerts/agentic_options.py,
+scripts/stock_leg_test.py (new), scripts/run_agent.py, .gitignore, tests.
+
 ### 54. Agent tab — share positions, decisions, Sell now, stock-leg preview (S4, 2026-09-27) ✅
 Agentic share positions now render one row each: shares / avg → price / P&L / equity, and either the agent's plan
 (exit_condition, opened date) + live hold/close decision (`agentic_stocks.decide_exit`, peak from peak_tracker) or
