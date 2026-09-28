@@ -8,9 +8,10 @@ fetch_buying_power, fetch_positions, fetch_option_positions, day_trade_budget, p
 place_option_order. Orders pass the SAME trading_guards checks as live (plus the equity order-shape rule),
 then fill against storage/paper_book at LIVE prices:
   - options: at the intent's limit price — the ask on an entry, the bid on an exit (what the agent sends);
-  - shares: at the live last price (no spread modeled — a small optimism on tiny orders).
-No broker review (it would run against the real account). No resting stops: a paper share position is
-protected only by the poll's hard stop, so a gap through the stop fills at the next cycle's price.
+  - shares: buys at the live ask, sells at the live bid (last price if the book side is missing).
+No broker review (it would run against the real account). No resting stops — the same as live for the
+FRACTIONAL positions the $20 cap produces (Robinhood allows stops on whole shares only); a whole-share paper
+position is protected only by the poll's hard stop, so a gap through the stop fills at the next cycle's price.
 Market data (quotes, option chains) is read live via the real MCP.
 """
 from __future__ import annotations
@@ -20,6 +21,13 @@ from storage import paper_book as book
 from trading_guards import check_option_order, check_order, record_placed
 
 PAPER_ACCOUNT = "PAPER"
+
+
+def fill_price(quote: dict | None, side: str) -> float | None:
+    """Where a market order would fill: a buy at the ask, a sell at the bid (the spread is a real cost
+    of every round trip). Falls back to the last price when the side of the book is missing."""
+    q = quote or {}
+    return (q.get("ask") if side == "buy" else q.get("bid")) or q.get("price") or None
 
 
 class PaperBroker:
@@ -64,7 +72,7 @@ class PaperBroker:
             reason = "paper fills market orders only (no resting stops/limits)"
         price = None
         if not reason:
-            price = (live.fetch_quotes([intent.ticker]).get(intent.ticker) or {}).get("price")
+            price = fill_price(live.fetch_quotes([intent.ticker]).get(intent.ticker), intent.side)
             if not price:
                 reason = "no live price to fill against"
         if not reason:

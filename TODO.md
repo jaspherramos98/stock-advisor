@@ -2,6 +2,16 @@
 
 ## Done
 
+### 69. Paper fills cross the spread + one position read per agent cycle (2026-09-28) ✅
+- **Paper realism:** paper share orders filled at the last price, so every paper round trip skipped the bid/ask
+  spread. Quotes now carry `bid`/`ask` (`robinhood_mcp._normalize_quotes`) and `paper_broker.fill_price` buys at the
+  ask, sells at the bid (last price if the book side is missing). Resting stops were NOT simulated on purpose: the
+  $20 cap means fractional positions, which can't carry a stop live either — paper already matches live there.
+- **Fewer reads:** each cycle read the option positions twice (exit pass + entry held check) and buying power twice.
+  Now one `_read_option_positions` feeds both passes, and buying power is re-read only when a close was actually
+  sent (test asserts 1 + 1 reads on a quiet cycle; ~0.6s/cycle at the measured ~0.3s per MCP call).
+  152 tests. Files: alerts/paper_broker.py, alerts/agentic_options.py, ingestion/robinhood_mcp.py, CLAUDE.md, tests.
+
 ### 68. Every pipeline run is archived (2026-09-28) ✅
 `pipeline_cache.save` overwrote the only copy of each run, so past recommendations were lost (the Sheets export had
 27 rows from June) and a judge replay / pipeline scorecard had nothing to read. Every save now also appends the run
@@ -1107,8 +1117,6 @@ Lowest core-fit; do last or not at all.
 - **Crypto through the MCP:** since 2026-09-27 the Trading MCP LISTS crypto tools (`get_crypto_positions`,
   `get_crypto_quotes`, `place_crypto_order`, …) but Argus uses none and they're unverified — crypto is still tracked by
   hand (My Positions). Needs a decision on scope (read-only sync vs agent trading) before building.
-- **Paper realism:** shares fill at the last price (no spread) and paper has no resting stops (a gap through the
-  stop fills at the next 20-min poll's price). Fine for judging the rules; revisit if paper P&L looks too rosy.
 
 ### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built, J4 data accruing)
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
@@ -1183,8 +1191,6 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   first real share buy (≤$20 cap) is the test (confirm fill, resting stop on a whole share, exit sell).
 
 ### Perf follow-ups (refactor plan A–E finished: #39–#42; D skipped — st.tabs switching is already client-side)
-- Redundant MCP calls per agent cycle: `get_option_positions` ×2 (exits + `_held_underlyings`) and
-  `get_portfolio` ×2 — now ~0.3s each on the shared session; dedup within a cycle is optional.
 - Not worth it (measured): `_compute_technicals` (0.9ms warm; 469ms was the one-time pandas import); lazy
   `anthropic` import (1.1s, scheduler cold start only).
 

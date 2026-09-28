@@ -311,6 +311,9 @@ def _normalize_quotes(tickers: list[str], data) -> dict[str, dict]:
                 "change_pct": round((change / prev * 100) if prev else 0.0, 2),
                 "high":       0.0,
                 "low":        0.0,
+                # Inside market (0.0 when absent) — the paper broker fills buys at the ask, sells at the bid.
+                "bid":        round(_to_float(q.get("bid_price")), 4),
+                "ask":        round(_to_float(q.get("ask_price")), 4),
             }
         except (ValueError, TypeError):
             results[ticker] = None
