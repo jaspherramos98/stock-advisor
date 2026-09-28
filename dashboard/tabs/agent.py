@@ -289,20 +289,27 @@ def render() -> None:
                         _f.write("halted from dashboard\n")
                     st.rerun()
         with k2:
+            _stocks_on = bool(getattr(_cfg, "AGENT_TRADE_STOCKS", False))
+            _prev_stocks = st.checkbox("Include the stock leg in the preview", value=_stocks_on,
+                                       key="agent_preview_stocks",
+                                       help="Dry-run only. The LIVE cycle follows config.AGENT_TRADE_STOCKS "
+                                            f"(currently {'ON' if _stocks_on else 'OFF'}).")
             if st.button("🔮 Preview cycle (dry run — places nothing)", use_container_width=True,
                          disabled=not _acct):
                 _old = _cfg.DRY_RUN
                 _cfg.DRY_RUN = True
                 try:
-                    st.session_state["agent_preview"] = run_options_agent(verbose=False)
+                    st.session_state["agent_preview"] = run_options_agent(verbose=False,
+                                                                          stocks=_prev_stocks)
                 finally:
                     _cfg.DRY_RUN = _old
                 st.rerun()
 
         # LIVE run — explicit, guarded, scoped (never flips DRY_RUN process-wide).
-        with st.expander("🔴 Run a LIVE cycle (places REAL option orders)"):
-            st.warning("This places real orders on the agentic account with real money. "
-                           "Uncapped size. Only runs during market hours.")
+        with st.expander("🔴 Run a LIVE cycle (places REAL orders)"):
+            st.warning("This places real orders on the agentic account with real money — options, plus "
+                           f"shares when the stock leg is ON (it's {'ON' if _stocks_on else 'OFF'}). "
+                           "Uncapped option size. Only runs during market hours.")
             _confirm = st.checkbox("I understand — trade real money now", key="agent_live_confirm")
             if st.button("Execute LIVE cycle", disabled=not (_confirm and _acct and not _halted)):
                 _old = _cfg.DRY_RUN
@@ -332,13 +339,42 @@ def render() -> None:
             except Exception as _e:  # noqa: BLE001
                 st.caption(f"Could not read agentic equity positions: {_e}")
         if _eq:
-            st.dataframe(
-                pd.DataFrame([{
-                    "Ticker": p["ticker"], "Shares": p["shares"],
-                    "Avg cost": f"${p['avg_cost']:.2f}", "Price": f"${p['current_price']:.2f}",
-                    "Equity": f"${p['equity']:.2f}", "P&L %": f"{p['pnl_pct']:+.1f}%",
-                } for p in _eq]),
-                use_container_width=True, hide_index=True)
+            from alerts import agentic_stocks as _astk
+            from storage import agent_stock_book as _abook
+            from storage.peak_tracker import get_peak as _get_peak
+            _plans = _abook.all_entries()
+            for _sp in _eq:
+                _t = (_sp.get("ticker") or "").upper()
+                _plan = _plans.get(_t)
+                try:
+                    if _plan:
+                        _sact, _swhy = _astk.decide_exit(_sp, _plan, _get_peak(f"eq:{_t}"))
+                        _agent = (f"agent-managed · plan *{_plan.get('exit_condition') or 'default'}* · "
+                                  f"opened {_plan.get('opened')} · agent: **{_sact}** ({_swhy})")
+                    else:
+                        _agent = "not agent-managed (bought by hand — the agent never touches it)"
+                    sc1, sc2 = st.columns([4, 1])
+                    with sc1:
+                        st.markdown(
+                            f"**{_t}** {_sp['shares']:g} sh · avg \\${_sp['avg_cost']:.2f} → "
+                            f"\\${_sp['current_price']:.2f} (**{_sp['pnl_pct']:+.1f}%**, "
+                            f"\\${_sp['equity']:.2f}) · {_agent}")
+                    with sc2:
+                        if st.button("Sell now", key=f"agent_sell_{_t}", use_container_width=True):
+                            _old = _cfg.DRY_RUN
+                            _cfg.DRY_RUN = False   # a manual override click IS the confirmation
+                            try:
+                                _r = _astk.close_position(_amcp, _acct, _sp, _agbp or 0,
+                                                          "manual override sell (dashboard)")
+                            finally:
+                                _cfg.DRY_RUN = _old
+                            st.success(f"Sell {_r['status']}: {_r.get('detail') or _r.get('reason')}")
+                            _c_agentic_equity.clear()
+                            st.rerun()
+                except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
+                    st.caption(f"{_t}: render error — {_e}")
+            st.caption("Share exits: the agent re-checks every cycle; the whole-share part of an agent "
+                       "position also rests on a GTC stop at its plan's stop (protects while the PC is off).")
         else:
             st.caption("No agentic equity positions.")
 
@@ -399,5 +435,5 @@ def render() -> None:
             except Exception as _e:  # noqa: BLE001 — one bad row must not break the tab
                 st.caption(f"position render error: {_e}")
 
-        st.caption("Exits are POLL-based: the agent re-checks each cycle (not a resting stop). "
+        st.caption("Option exits are POLL-based: the agent re-checks each cycle (not a resting stop). "
                        "Timeliness depends on how often the cycle runs.")

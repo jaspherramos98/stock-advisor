@@ -180,6 +180,30 @@ def _cancel_and_wait(mcp, acct, order_id: str) -> bool:
     return False
 
 
+def close_position(mcp, acct, pos: dict, equity: float, reason: str, state=None,
+                   stops: dict | None = None) -> dict:
+    """Sell ONE share position in full: cancel its resting stop and wait for the broker to confirm
+    (else 'deferred' — the stop still reserves the shares), then a market sell. A live close forgets
+    the agent's plan + peak. Shared by the exit pass and the dashboard's Close-now button."""
+    from datetime import date
+    from storage import agent_stock_book as book, peak_tracker
+    from trading_guards import GuardState
+    t = pos["ticker"].upper()
+    stop = (stops if stops is not None else _open_sell_stops(mcp, acct)).get(t)
+    if stop and stop.get("order_id") and not _cancel_and_wait(mcp, acct, stop["order_id"]):
+        return {"close": t, "leg": "stock", "status": "deferred",
+                "reason": "resting stop not confirmed cancelled — retry next cycle"}
+    intent = OrderIntent(ticker=t, side="sell", quantity=pos["shares"], reason=f"exit: {reason}",
+                         client_id=f"stkexit-{t}-{date.today().isoformat()}")
+    res = mcp.place_order(intent, state or GuardState(start_equity=equity), buying_power=equity,
+                          account_number=acct)
+    if res["status"] == "placed":
+        book.forget(t)
+        peak_tracker.clear_peak(f"eq:{t}")
+    return {"close": t, "leg": "stock", "reason": reason, "status": res["status"],
+            "detail": res.get("reason")}
+
+
 def run_exits(mcp, acct, equity: float, verbose: bool) -> list[dict]:
     """Exit pass over the agent's share positions (see module docstring). Rows use the options exit
     shape ({"close": TICKER, ...}) so the entry pass's anti-churn exclude covers both legs."""
@@ -211,19 +235,7 @@ def run_exits(mcp, acct, equity: float, verbose: bool) -> list[dict]:
                 print(f"  {t}: {p['shares']} sh @ avg {p['avg_cost']} now {p['current_price']} "
                       f"peak {peak} → {action} ({reason})")
             if action == "close":
-                stop = stops.get(t)
-                if stop and stop.get("order_id") and not _cancel_and_wait(mcp, acct, stop["order_id"]):
-                    results.append({"close": t, "leg": "stock", "status": "deferred",
-                                    "reason": "resting stop not confirmed cancelled — retry next cycle"})
-                    continue
-                intent = OrderIntent(ticker=t, side="sell", quantity=p["shares"], reason=f"exit: {reason}",
-                                     client_id=f"stkexit-{t}-{today.isoformat()}")
-                res = mcp.place_order(intent, state, buying_power=equity, account_number=acct)
-                results.append({"close": t, "leg": "stock", "reason": reason,
-                                 **{k: res[k] for k in ("status",)}})
-                if res["status"] == "placed":
-                    book.forget(t)
-                    peak_tracker.clear_peak(f"eq:{t}")
+                results.append(close_position(mcp, acct, p, equity, reason, state=state, stops=stops))
                 continue
             # Holding: make sure the whole-share part rests on a GTC stop at the plan's stop.
             whole = math.floor(p["shares"])
