@@ -437,8 +437,15 @@ def run_options_agent(verbose: bool = True, stocks: bool | None = None) -> dict:
     bp = mcp.fetch_buying_power(acct) or 0.0
     if verbose:
         print(f"== Autonomous options agent ==  DRY_RUN={config.DRY_RUN} | agentic BP=${bp:.2f}\n-- exits --")
-    # Exits always run (token-free, capital-protecting).
+    # Exits always run (token-free, capital-protecting) — options, then any share positions the agent
+    # opened (runs even with AGENT_TRADE_STOCKS off, so turning the flag off never strands a position;
+    # it's a no-op without reads when the agent owns no shares).
     exits = _run_exits(mcp, acct, bp, verbose)
+    try:
+        from alerts import agentic_stocks as _stk
+        exits += _stk.run_exits(mcp, acct, bp, verbose)
+    except Exception as e:  # noqa: BLE001 — a stock-exit failure must not block options entries/exits
+        print(f"agentic_options: stock exit pass failed — {e}")
     bp = mcp.fetch_buying_power(acct) or bp  # refresh after any closes
 
     # Entries depend on fresh Argus signals (which cost tokens). Halt NEW entries when the LLM

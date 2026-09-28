@@ -1,5 +1,5 @@
 """
-Stock (share) leg of the autonomous agent — routing, sizing and entries (S2). Exits: S3.
+Stock (share) leg of the autonomous agent — routing, sizing and entries (S2) + exits (S3).
 
 ROUTING (approved plan, conviction-based): the aggressive options leg takes the strongest ideas —
 highly_recommended or conviction ≥ OPTION_CONVICTION — plus every bearish idea (shares can't be
@@ -15,6 +15,15 @@ buying power — one shared pool, so the pipeline's MAIN-account dollar sizes ar
 ORDERS: every share buy is a DOLLAR-based market order (fractional-friendly, fills immediately in
 regular hours). A resting limit that doesn't fill would leave the name looking un-held next cycle and
 invite a duplicate buy; the orders here are small enough that market slippage is noise.
+
+EXITS (run_exits, every cycle): ONLY positions the agent opened (storage.agent_stock_book) — a share
+you bought by hand in the agentic account is never touched. Each is judged by
+analysis.exit_rules.equity_exit_decision against the plan it was opened on (its exit_condition), with
+a trailing peak from storage.peak_tracker (key "eq:TICKER"). A close = cancel any resting stop FIRST
+(open sell orders reserve the shares, so the sell would be refused), wait for the cancel to confirm,
+then a market sell of the whole position. While held, the WHOLE-share part also carries a resting GTC
+stop_market at the plan's stop (entry × (1 − stop%)) so it's protected when the PC is off; a fractional
+remainder can't carry one (broker rule) and relies on the poll.
 """
 from __future__ import annotations
 
@@ -116,3 +125,124 @@ def enter(mcp, acct, sig: dict, dollars: float, avail: float, state, verbose: bo
         from storage.agent_stock_book import record_entry
         record_entry(intent.ticker, sig.get("exit_condition"), sig.get("source"), sig.get("conviction"))
     return row, (intent.dollars if res["status"] in ("placed", "dry_run") else 0.0)
+
+
+# --- exits (S3) ---------------------------------------------------------------------------------
+
+CANCEL_WAIT_SECONDS = 8   # how long to wait for a cancelled stop to release its shares before selling
+
+
+def protective_stop_price(avg_cost: float, stop_pct: float | None) -> float | None:
+    """The plan's stop as a price: entry × (1 − stop%), to the cent. None when unknowable."""
+    if not avg_cost or avg_cost <= 0 or not stop_pct or stop_pct <= 0:
+        return None
+    return round(avg_cost * (1 - stop_pct / 100.0), 2)
+
+
+def decide_exit(pos: dict, entry: dict | None, peak: float | None, today=None) -> tuple[str, str]:
+    """Pure: ('hold'|'close', reason) for one agent share position against its recorded plan."""
+    from analysis.exit_rules import equity_exit_decision, parse_exit_condition
+    from storage.agent_stock_book import days_held
+    rule = parse_exit_condition((entry or {}).get("exit_condition"))
+    return equity_exit_decision(pos.get("avg_cost"), pos.get("current_price"), rule,
+                                peak_price=peak, days_held=days_held(entry, today))
+
+
+def _open_sell_stops(mcp, acct) -> dict[str, dict]:
+    """{TICKER: {order_id, tif}} for working stop sells on the agentic account ({} if unreadable)."""
+    from alerts.agentic_stops import _open_stops
+    try:
+        return {t.upper(): s for t, s in _open_stops(mcp._call_tool("get_equity_orders", {
+            "account_number": acct})).items()}
+    except Exception as e:  # noqa: BLE001
+        print(f"agentic_stocks: open-orders read failed — {e}")
+        return {}
+
+
+def _cancel_and_wait(mcp, acct, order_id: str) -> bool:
+    """Cancel a resting order and wait until the broker reports it no longer working (its shares are
+    released). DRY_RUN logs only. False = couldn't confirm → the caller must NOT sell this cycle."""
+    import time
+    if config.DRY_RUN:
+        print(f"[DRY_RUN CANCEL] resting stop {order_id}")
+        return True
+    try:
+        mcp._call_tool("cancel_equity_order", {"account_number": acct, "order_id": order_id})
+        deadline = time.monotonic() + CANCEL_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            rows = (mcp._data(mcp._call_tool("get_equity_orders", {
+                "account_number": acct, "order_id": order_id})) or {}).get("orders") or []
+            if rows and (rows[0].get("state") or "").lower() in ("cancelled", "filled", "rejected", "failed"):
+                return True
+            time.sleep(1)
+    except Exception as e:  # noqa: BLE001
+        print(f"agentic_stocks: cancel of {order_id} failed — {e}")
+    return False
+
+
+def run_exits(mcp, acct, equity: float, verbose: bool) -> list[dict]:
+    """Exit pass over the agent's share positions (see module docstring). Rows use the options exit
+    shape ({"close": TICKER, ...}) so the entry pass's anti-churn exclude covers both legs."""
+    import math
+    from storage import agent_stock_book as book, peak_tracker
+    from trading_guards import GuardState
+
+    entries = book.all_entries()
+    if not entries:
+        return []                                   # nothing the agent owns → no reads at all
+    positions = [p for p in mcp.fetch_positions(acct) if (p.get("ticker") or "").upper() in entries]
+    if not positions:
+        # Either every agent position is gone (a resting stop filled / sold by hand) or the read
+        # failed — fetch_positions returns [] for both, so leave the book alone rather than wipe it.
+        return []
+    stops = _open_sell_stops(mcp, acct)
+    state = GuardState(start_equity=equity)
+    results: list[dict] = []
+    from datetime import date
+    today = date.today()
+
+    for p in positions:
+        t = p["ticker"].upper()
+        try:
+            entry = entries.get(t)
+            peak = peak_tracker.update_peak(f"eq:{t}", p.get("current_price"))
+            action, reason = decide_exit(p, entry, peak, today)
+            if verbose:
+                print(f"  {t}: {p['shares']} sh @ avg {p['avg_cost']} now {p['current_price']} "
+                      f"peak {peak} → {action} ({reason})")
+            if action == "close":
+                stop = stops.get(t)
+                if stop and stop.get("order_id") and not _cancel_and_wait(mcp, acct, stop["order_id"]):
+                    results.append({"close": t, "leg": "stock", "status": "deferred",
+                                    "reason": "resting stop not confirmed cancelled — retry next cycle"})
+                    continue
+                intent = OrderIntent(ticker=t, side="sell", quantity=p["shares"], reason=f"exit: {reason}",
+                                     client_id=f"stkexit-{t}-{today.isoformat()}")
+                res = mcp.place_order(intent, state, buying_power=equity, account_number=acct)
+                results.append({"close": t, "leg": "stock", "reason": reason,
+                                 **{k: res[k] for k in ("status",)}})
+                if res["status"] == "placed":
+                    book.forget(t)
+                    peak_tracker.clear_peak(f"eq:{t}")
+                continue
+            # Holding: make sure the whole-share part rests on a GTC stop at the plan's stop.
+            whole = math.floor(p["shares"])
+            stop_pct = parse_stop_pct(entry)
+            stop_px = protective_stop_price(p.get("avg_cost"), stop_pct)
+            if whole >= 1 and stop_px and t not in stops and stop_px < (p.get("current_price") or 0):
+                intent = OrderIntent(ticker=t, side="sell", quantity=whole, order_type="stop",
+                                     stop_price=stop_px, time_in_force="gtc",
+                                     reason=f"protective stop {stop_pct:g}% under entry",
+                                     client_id=f"stkstop-{t}-{stop_px}")
+                res = mcp.place_order(intent, state, buying_power=equity, account_number=acct)
+                results.append({"stop": t, "leg": "stock", "stop_price": stop_px,
+                                **{k: res[k] for k in ("status", "reason")}})
+        except Exception as e:  # noqa: BLE001 — one bad position must not abort the rest
+            print(f"agentic_stocks: exit pass failed for {t} — {e}")
+    return results
+
+
+def parse_stop_pct(entry: dict | None) -> float:
+    """The plan's stop % for a recorded entry (STOCK_EXIT_DEFAULT when the plan has none)."""
+    from analysis.exit_rules import STOCK_EXIT_DEFAULT, parse_exit_condition
+    return parse_exit_condition((entry or {}).get("exit_condition"))["stop_pct"] or STOCK_EXIT_DEFAULT["stop_pct"]

@@ -243,6 +243,13 @@ alerts/agentic_stocks.py      Stock (share) leg of the agent (S2) — `route` (H
                               the cycle's buys on AGENTIC BP, clamped to the guard's floored 40% cap), `enter`
                               (dollar-based MARKET buy — a resting limit could miss and invite a duplicate buy
                               next cycle). Off unless config.AGENT_TRADE_STOCKS (default False until S5).
+                              EXITS (S3, `run_exits`, every cycle even with the flag off): ONLY positions in the
+                              agent's stock book (hand-bought shares are never touched) → `decide_exit`
+                              (equity_exit_decision vs the recorded plan + peak_tracker "eq:TICKER"). Close =
+                              cancel the resting stop, WAIT for the broker to confirm (`_cancel_and_wait`, else
+                              'deferred' — never sell into shares a stop still holds), then market-sell all.
+                              Holding = whole-share part rests on a GTC stop_market at entry × (1 − plan stop%).
+                              An empty position read never wipes the book (fetch_positions returns [] on error).
 storage/agent_stock_book.py   Plan behind each agent share position (exit_condition, source, conviction, opened
                               date) → agent_stocks.json (gitignored). Written only on a LIVE placement; S3's exit
                               pass reads it (no record → STOCK_EXIT_DEFAULT).

@@ -1210,6 +1210,113 @@ def test_combined_entries_route_and_share_one_pool(monkeypatch):
     assert [r.get("leg") or r["status"] for r in out] == ["option", "stock", "skipped"]
 
 
+def test_stock_exit_helpers():
+    from datetime import date
+    from alerts.agentic_stocks import protective_stop_price, decide_exit, parse_stop_pct
+    assert protective_stop_price(12.50, 4.0) == 12.0 and protective_stop_price(0, 4) is None
+    assert parse_stop_pct({"exit_condition": "target 6% gain, stop loss at 3%"}) == 3.0
+    assert parse_stop_pct(None) == 4.0                                   # STOCK_EXIT_DEFAULT
+    entry = {"exit_condition": "target 8% gain, stop loss at 4%", "opened": "2026-09-01"}
+    pos = {"avg_cost": 10.0, "current_price": 10.9}
+    assert decide_exit(pos, entry, 10.9, date(2026, 9, 10))[0] == "close"          # target
+    assert decide_exit(dict(pos, current_price=10.2), entry, 10.2, date(2026, 9, 10))[0] == "hold"
+    assert decide_exit(dict(pos, current_price=10.2), entry, 10.2, date(2026, 10, 2))[0] == "close"  # 31d ≥ 30d
+
+
+class _FakeStockMcp:
+    """Broker double for the stock exit pass: positions, one resting stop, records every order."""
+    def __init__(self, positions, stops=None):
+        self.positions, self.stops, self.orders, self.cancelled = positions, stops or [], [], []
+
+    def fetch_positions(self, acct):
+        return self.positions
+
+    def _call_tool(self, name, args=None):
+        if name == "cancel_equity_order":
+            self.cancelled.append(args["order_id"])
+        return {"data": {"orders": self.stops}}
+
+    def _data(self, payload):
+        return payload["data"]
+
+    def place_order(self, intent, state, buying_power, account_number):
+        self.orders.append(intent)
+        return {"status": "dry_run", "reason": ""}
+
+
+def test_stock_exit_pass(monkeypatch, tmp_path):
+    import config
+    from alerts import agentic_stocks as stk
+    from storage import agent_stock_book as book, peak_tracker
+    monkeypatch.setattr(config, "DRY_RUN", True, raising=False)
+    monkeypatch.setattr(book, "_FILE", str(tmp_path / "agent_stocks.json"))
+    monkeypatch.setattr(peak_tracker, "_FILE", str(tmp_path / "peaks.json"))
+    today = __import__("datetime").date.today()
+    book.record_entry("HOLD", "target 8% gain, stop loss at 4%", opened=today)
+    book.record_entry("STOP", "target 8% gain, stop loss at 4%", opened=today)
+    fake = _FakeStockMcp(
+        positions=[{"ticker": "HOLD", "shares": 2.5, "avg_cost": 10.0, "current_price": 10.3},
+                   {"ticker": "STOP", "shares": 1.0, "avg_cost": 20.0, "current_price": 19.0},
+                   {"ticker": "MINE", "shares": 5.0, "avg_cost": 5.0, "current_price": 1.0}],   # hand-bought
+        stops=[{"id": "o-stop", "symbol": "STOP", "side": "sell", "type": "market",
+                "stop_price": "19.20", "state": "queued", "time_in_force": "gtc"}])
+    out = stk.run_exits(fake, "A", 40.0, verbose=False)
+
+    by = {(o.ticker, o.order_type) for o in fake.orders}
+    assert ("MINE", "market") not in by and all(o.ticker != "MINE" for o in fake.orders)   # never touched
+    sell = next(o for o in fake.orders if o.ticker == "STOP")
+    assert sell.side == "sell" and sell.order_type == "market" and sell.quantity == 1.0     # -5% ≤ -4% stop
+    stop = next(o for o in fake.orders if o.ticker == "HOLD")
+    assert (stop.order_type, stop.quantity, stop.stop_price, stop.time_in_force) == ("stop", 2, 9.6, "gtc")
+    assert {r.get("close") or r.get("stop") for r in out} == {"STOP", "HOLD"}
+    assert book.get_entry("STOP") is not None            # DRY_RUN changes nothing in the book
+
+    # A failed/empty position read must never wipe the book.
+    assert stk.run_exits(_FakeStockMcp(positions=[]), "A", 40.0, verbose=False) == []
+    assert set(book.all_entries()) == {"HOLD", "STOP"}
+
+
+def test_stock_exit_cancels_resting_stop_before_selling(monkeypatch, tmp_path):
+    import config
+    from alerts import agentic_stocks as stk
+    from storage import agent_stock_book as book, peak_tracker
+    monkeypatch.setattr(config, "DRY_RUN", False, raising=False)
+    monkeypatch.setattr(book, "_FILE", str(tmp_path / "agent_stocks.json"))
+    monkeypatch.setattr(peak_tracker, "_FILE", str(tmp_path / "peaks.json"))
+    monkeypatch.setattr(stk, "CANCEL_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    book.record_entry("STOP", "target 8% gain, stop loss at 4%")
+    resting = {"id": "o-stop", "symbol": "STOP", "side": "sell", "type": "market",
+               "stop_price": "19.20", "state": "queued", "time_in_force": "gtc"}
+    pos = [{"ticker": "STOP", "shares": 1.0, "avg_cost": 20.0, "current_price": 19.0}]
+
+    class Live(_FakeStockMcp):
+        def __init__(self, cancel_confirms):
+            super().__init__(pos, [dict(resting)])
+            self.confirms = cancel_confirms
+
+        def _call_tool(self, name, args=None):
+            if name == "cancel_equity_order":
+                self.cancelled.append(args["order_id"])
+                if self.confirms:
+                    self.stops[0]["state"] = "cancelled"
+            return {"data": {"orders": self.stops}}
+
+        def place_order(self, intent, state, buying_power, account_number):
+            self.orders.append(intent)
+            return {"status": "placed", "reason": "sent"}
+
+    ok = Live(cancel_confirms=True)
+    out = stk.run_exits(ok, "A", 40.0, verbose=False)
+    assert ok.cancelled == ["o-stop"] and ok.orders[0].order_type == "market"   # cancel THEN sell
+    assert out[0]["status"] == "placed" and book.get_entry("STOP") is None      # live close forgets plan
+
+    book.record_entry("STOP", "target 8% gain, stop loss at 4%")
+    stuck = Live(cancel_confirms=False)
+    out = stk.run_exits(stuck, "A", 40.0, verbose=False)
+    assert stuck.orders == [] and out[0]["status"] == "deferred"                # never sell into a held stop
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 
