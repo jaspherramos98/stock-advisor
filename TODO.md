@@ -2,6 +2,20 @@
 
 ## Done
 
+### 72. Crypto signals, off-hours crypto exits, crypto on the dashboard (agent crypto K3, 2026-09-28) ✅
+- **Signals:** `market_open.bat` runs the pipeline with `--crypto`. That exposed a latent bug: the per-asset story
+  slots were hard-coded for the old 25-story cap (17 stock + 8 crypto), so enabling crypto would have silently grown
+  the run from 15 to 25 stories (~+60% tokens). Now the primary class keeps `MAX_STORIES` (15) and each extra class
+  ADDS `ADDON_STORIES` (5): stocks + crypto = 15 + 5.
+- **Off-hours exits:** crypto trades 24/7, so outside market hours the scheduler now runs ONLY
+  `agentic_options.run_crypto_exits` (live, + `run_paper_crypto_exits` in paper mode). It reads the crypto book first
+  and makes no calls while the agent holds no coins.
+- **Dashboard:** paper panel shows coins (live crypto marks); Real positions gained a **Crypto** section with the
+  agent's call + Sell now (`agentic_crypto.close_position`). Checked on a preview instance.
+- Fixed a stray carriage return that had corrupted the `schtasks` example in CLAUDE.md.
+159 tests. Files: market_open.bat, analysis/claude_analyst.py, alerts/agentic_options.py, scripts/run_agent.py,
+dashboard/tabs/agent.py, dashboard/common.py, CLAUDE.md, tests.
+
 ### 71. The agent trades crypto — crypto leg (agent crypto K2, 2026-09-28) ✅
 New `alerts/agentic_crypto.py`: `agentic_stocks.route` now sends every crypto BUY to a "crypto" leg (crypto shorts →
 not tradeable; a fired crypto watch → crypto too). Sizing = the pyramid on min(BP, new `config.AGENT_CRYPTO_BUDGET_CAP`
@@ -1139,9 +1153,10 @@ Lowest core-fit; do last or not at all.
 
 ### Small follow-ups
 - **Crypto for the agent — IN PROGRESS (user, 2026-09-28: "do 2 [agent trades crypto] then switch to 1 [read-only
-  sync] if it doesn't work"):** K1 client ✅ #70. K2 agent crypto leg ✅ #71. **K3** crypto
-  recs in the morning pipeline (`--crypto`), an off-hours crypto EXIT pass (crypto trades 24/7; the agent runs market
-  hours only), dashboard rows. Proven in Paper first — real crypto orders only once the user picks Live.
+  sync] if it doesn't work"):** K1 client ✅ #70 · K2 crypto leg ✅ #71 · K3 pipeline/off-hours/dashboard ✅ #72.
+  Remaining: watch it in Paper; verify the crypto POSITION row shape on the first real (Live) coin; fall back to
+  read-only sync (set AGENT_CRYPTO_BUDGET_CAP = 0) if it doesn't work out. Off-hours crypto ENTRIES are not built
+  (the pipeline runs at 6:30 on trading days only) — add only if the user wants weekend crypto trading.
 
 ### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built, J4 data accruing)
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM

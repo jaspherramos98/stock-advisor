@@ -115,6 +115,19 @@ def _c_option_quote(option_id):
 
 
 @st.cache_data(ttl=30, show_spinner=False)
+def _c_agentic_crypto(acct):
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_crypto_positions(acct)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_crypto_quotes(tickers: tuple) -> dict:
+    """Crypto mark/bid/ask, cached 30s (pass a sorted tuple so equal sets share an entry)."""
+    from ingestion import robinhood_mcp as _m
+    return _m.fetch_crypto_quotes(list(tickers))
+
+
+@st.cache_data(ttl=30, show_spinner=False)
 def _c_agentic_equity(acct):
     from ingestion import robinhood_mcp as _m
     return _m.fetch_positions(acct)

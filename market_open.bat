@@ -19,8 +19,9 @@ echo ==== %DATE% %TIME% market-open routine ==== >> "%LOG%"
 REM 1. Launch Argus with no terminal window (background). Reuses a running instance.
 start "" wscript.exe "%~dp0argus_silent.vbs"
 
-REM 2. Fresh pipeline signals for today (writes pipeline_cache.json the agent reads).
-"%~dp0venv\Scripts\python.exe" "%~dp0scripts\run_pipeline.py" >> "%LOG%" 2>&1
+REM 2. Fresh pipeline signals for today (writes pipeline_cache.json the agent reads). --crypto adds 5 crypto
+REM    stories on top of the 15 stock ones, so the agent's crypto leg has signals to act on.
+"%~dp0venv\Scripts\python.exe" "%~dp0scripts\run_pipeline.py" --crypto >> "%LOG%" 2>&1
 if errorlevel 1 echo PIPELINE FAILED - the agent only trades today's signals, so it stays idle >> "%LOG%"
 
 echo Argus market-open routine complete.

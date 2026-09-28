@@ -461,6 +461,34 @@ def run_paper_agent(verbose: bool = True) -> dict:
         return {**run_options_agent(verbose, broker=PaperBroker()), "mode": "paper"}
 
 
+def run_crypto_exits(verbose: bool = True, broker=None) -> dict:
+    """Crypto trades 24/7 but the full cycle is market-hours only, so outside the session the scheduler runs
+    just this: the crypto EXIT pass (no entries, no LLM entry calls). Free when the agent holds no coins — the
+    book is checked before any read. Honors agent mode "off" and DRY_RUN; `broker` as in run_options_agent."""
+    from ingestion import robinhood_mcp
+    from alerts import agentic_crypto as acr
+    from storage.agent_stock_book import all_entries
+    mcp = broker or robinhood_mcp
+    if _halted():
+        return {"status": "halted", "reason": "agent mode is off"}
+    if not all_entries(leg=acr.LEG):
+        return {"entries": [], "exits": []}
+    if not mcp.is_available():
+        return {"status": "skipped", "reason": "USE_MCP off"}
+    acct = mcp.agentic_account_number()
+    if not acct:
+        return {"status": "skipped", "reason": "no agentic account"}
+    return {"entries": [], "exits": acr.run_exits(mcp, acct, mcp.fetch_buying_power(acct) or 0.0, verbose)}
+
+
+def run_paper_crypto_exits(verbose: bool = True) -> dict:
+    """run_crypto_exits against the paper book (paper scope + PaperBroker)."""
+    import agent_mode
+    from alerts.paper_broker import PaperBroker
+    with agent_mode.paper_scope():
+        return {**run_crypto_exits(verbose, broker=PaperBroker()), "mode": "paper"}
+
+
 def run_options_agent(verbose: bool = True, entries: bool = True, broker=None) -> dict:
     """One full cycle: exits first (free capital), then entries. Honors agent mode "off", market
     hours (for live placement and paper fills), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}.
