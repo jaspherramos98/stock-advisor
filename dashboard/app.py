@@ -1,7 +1,6 @@
 import streamlit as st
 import sys
 import os
-import json
 from datetime import datetime
 
 # Force UTF-8 stdout/stderr. Pipeline print()s contain non-ASCII symbols
@@ -25,6 +24,7 @@ from main import run_ingestion_and_analysis
 from calculator.portfolio import calculate_allocations
 from storage.positions import add_position, get_open_positions, get_closed_positions, update_amount_invested
 from storage.watchlist import load_watchlist
+from storage import pipeline_cache
 from dashboard.common import _cached_prices, _live_buying_power, _suggested_exit
 from dashboard.tabs import (
     recommendations as recommendations_tab,
@@ -38,9 +38,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# --- File paths ---
-CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache.json")
-CACHE_BACKUP_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline_cache_backup.json")
 # Budget is driven ENTIRELY by live Robinhood buying power (see _effective_budget below).
 # There is no manual budget setting — a hand-typed budget could disagree with the real
 # cash the user has, which confused Argus chat. Buying power is the single source of truth.
@@ -235,13 +232,8 @@ def _build_argus_context() -> str:
 
     # --- Today's recommendations ---
     try:
-        cache_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "pipeline_cache.json"
-        )
-        if os.path.exists(cache_path):
-            with open(cache_path, "r") as f:
-                cache = json.load(f)
+        cache, _ = pipeline_cache.load_today()   # another day's recs are NOT "today's" — never shown as such
+        if cache:
             recs = cache.get("recommendations", [])
             if recs:
                 lines.append(f"\nTODAY'S RECOMMENDATIONS ({cache.get('last_run', 'unknown run time')}):")
@@ -407,46 +399,11 @@ if "proxy_started" not in st.session_state:
 
 
 
-def save_cache(recommendations, prices, last_run):
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r") as f:
-                existing = json.load(f)
-            if existing.get("recommendations"):
-                with open(CACHE_BACKUP_FILE, "w") as f:
-                    json.dump(existing, f)
-        except Exception:
-            pass
-    with open(CACHE_FILE, "w") as f:
-        json.dump({
-            "date":            datetime.now().strftime("%Y-%m-%d"),
-            "last_run":        last_run,
-            "recommendations": recommendations,
-            "prices":          prices,
-        }, f)
-
-
 def load_cache() -> dict | None:
-
-    def try_load(path) -> dict | None:
-        if not os.path.exists(path):
-            return None
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except Exception:
-            return None
-
-    data = try_load(CACHE_FILE)
-    if data and data.get("date") == datetime.now().strftime("%Y-%m-%d"):
-        return data
-
-    backup = try_load(CACHE_BACKUP_FILE)
-    if backup and backup.get("date") == datetime.now().strftime("%Y-%m-%d"):
+    data, from_backup = pipeline_cache.load_today()
+    if from_backup:
         st.toast("Loaded from backup cache — today's pipeline may have failed mid-run.")
-        return backup
-
-    return None
+    return data
 
 
 # --- Page config ---
@@ -591,7 +548,7 @@ if run_button:
             st.session_state.last_run    = last_run
             st.session_state._from_cache = False
 
-            save_cache(recs, st.session_state.prices, last_run)
+            pipeline_cache.save(recs, st.session_state.prices, last_run)
             st.success(f"Pipeline complete — {len(recs)} recommendations found.")
         except Exception as e:
             st.error(f"Pipeline error: {e}")

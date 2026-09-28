@@ -2,6 +2,18 @@
 
 ## Done
 
+### 56. Market-open routine actually works: headless pipeline + shared cache writer (2026-09-28) ✅
+**Bug:** `market_open.bat` step 2 ran `main.py`, which (a) prompts `input("How much are you willing to invest
+today?")` — in the hidden scheduled window it hung forever, so step 3 (arm) never ran — and (b) never writes
+`pipeline_cache.json`, so even a finished run gave the agent nothing (only the dashboard button wrote the cache).
+Fix: new `storage/pipeline_cache.py` = the ONE cache writer/reader (moved out of dashboard/app.py; `load_today()`
+never returns another day's cache — chat context used to label a stale cache "TODAY'S RECOMMENDATIONS"). New
+`scripts/run_pipeline.py` = the headless "Run pipeline" (dashboard's stock-only defaults; skips NYSE
+holidays/weekends unless --force; exit 1 on failure). `market_open.bat` calls it and appends to `market_open.log`.
+Verified: real run wrote today's cache (7 recs) that the agent's `_signals` reads; dashboard headless 0 exceptions.
+Task registration = user action (weekdays 06:30). +2 tests (125). Files: storage/pipeline_cache.py (new),
+scripts/run_pipeline.py (new), dashboard/app.py, market_open.bat, .gitignore, tests.
+
 ### 55. Stock budget cap + S5 live test script (2026-09-28) ✅
 `config.AGENT_STOCK_BUDGET_CAP = 20.0` — max total entry cost the agent may hold in shares (None = no cap, the
 one line to remove the training wheels). Counted from the stock book (new `dollars` field + `invested()`), not the

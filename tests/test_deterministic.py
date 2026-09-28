@@ -1242,6 +1242,36 @@ def test_stock_budget_cap(monkeypatch, tmp_path):
     assert all(bp >= 10 for _, bp in bought)                        # guard sees real BP, not cap room
 
 
+def test_pipeline_cache_roundtrip_and_today_only(monkeypatch, tmp_path):
+    import json as _json
+    from storage import pipeline_cache as pc
+    monkeypatch.setattr(pc, "CACHE_FILE", str(tmp_path / "c.json"))
+    monkeypatch.setattr(pc, "CACHE_BACKUP_FILE", str(tmp_path / "b.json"))
+    assert pc.load_today() == (None, False)
+    pc.save([{"ticker": "A"}], {"A": {"price": 1}}, "now")
+    data, backup = pc.load_today()
+    assert data["recommendations"] == [{"ticker": "A"}] and backup is False
+    pc.save([{"ticker": "B"}], {}, "later")                               # A's run becomes the backup
+    assert _json.loads((tmp_path / "b.json").read_text())["recommendations"] == [{"ticker": "A"}]
+    (tmp_path / "c.json").write_text(_json.dumps({"date": "2020-01-01", "recommendations": [1]}))
+    data, backup = pc.load_today()                                        # stale main → today's backup
+    assert backup is True and data["recommendations"] == [{"ticker": "A"}]
+    # The agent reads the same file/format: a pc.save() cache is "today" to it.
+    from alerts import agentic_options as ao
+    pc.save([{"ticker": "C", "direction": "buy", "conviction": 70}], {}, "x")
+    monkeypatch.setattr(ao, "_CACHE", pc.CACHE_FILE)
+    monkeypatch.setattr("storage.entry_watch.get_chat_suggestions", lambda: [])
+    assert [s["ticker"] for s in ao._signals()] == ["C"]
+
+
+def test_run_pipeline_skips_closed_days():
+    import datetime as dt
+    from scripts.run_pipeline import is_trading_day
+    assert is_trading_day(dt.date(2026, 9, 28)) is True          # Monday
+    assert is_trading_day(dt.date(2026, 9, 27)) is False         # Sunday
+    assert is_trading_day(dt.date(2026, 11, 26)) is False        # Thanksgiving
+
+
 def test_stock_leg_test_helpers():
     from scripts.stock_leg_test import pick, split_evenly
     sigs = [{"ticker": "LOW", "direction": "buy", "conviction": 60},
