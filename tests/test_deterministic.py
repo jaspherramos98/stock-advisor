@@ -1202,12 +1202,55 @@ def test_combined_entries_route_and_share_one_pool(monkeypatch):
             order.append(("stk", intent.ticker, intent.dollars, buying_power))
             return {"status": "dry_run", "reason": ""}
 
+    from storage import agent_stock_book as book
+    monkeypatch.setattr(book, "_FILE", str(__import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "b.json"))
+    monkeypatch.setattr(stk, "budget_cap", lambda: None)            # uncapped for this routing test
     out = ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=2, stocks=True)
     # best idea first: HOT (85, option) → NOCON (80, option → falls back to shares) → CORE blocked by PDT
     assert order[0] == ("opt", "HOT", 40.0)
     assert order[1] == ("opt", "NOCON", 30.0)              # pool shrank by HOT's premium
     assert order[2][:2] == ("stk", "NOCON") and order[2][3] == 30.0
     assert [r.get("leg") or r["status"] for r in out] == ["option", "stock", "skipped"]
+
+
+def test_stock_budget_cap(monkeypatch, tmp_path):
+    from alerts import agentic_options as ao
+    from alerts import agentic_stocks as stk
+    from storage import agent_stock_book as book
+    assert stk.stock_room(0, None) == float("inf")
+    assert stk.stock_room(12.5, 20.0) == 7.5 and stk.stock_room(25, 20.0) == 0.0
+    monkeypatch.setattr(book, "_FILE", str(tmp_path / "b.json"))
+    book.record_entry("OLD", "", dollars=6.0)
+    assert book.invested() == 6.0
+
+    sigs = [{"ticker": t, "direction": "buy", "conviction": 60, "risk_level": "medium"}
+            for t in ("AAA", "BBB", "CCC", "DDD")]
+    monkeypatch.setattr(ao, "_signals", lambda: sigs)
+    monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: set())
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral"})
+    monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
+    monkeypatch.setattr(stk, "budget_cap", lambda: 20.0)
+    bought = []
+
+    class FakeMcp:
+        def place_order(self, intent, state, buying_power, account_number):
+            bought.append((intent.dollars, buying_power))
+            return {"status": "dry_run", "reason": ""}
+
+    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None, stocks=True)
+    assert round(sum(d for d, _ in bought), 2) <= 14.0              # $20 cap − $6 already held
+    assert all(bp >= 10 for _, bp in bought)                        # guard sees real BP, not cap room
+
+
+def test_stock_leg_test_helpers():
+    from scripts.stock_leg_test import pick, split_evenly
+    sigs = [{"ticker": "LOW", "direction": "buy", "conviction": 60},
+            {"ticker": "HI", "direction": "buy", "conviction": 70},
+            {"ticker": "BTC", "direction": "buy", "conviction": 90, "asset_type": "crypto"}]
+    assert [s["ticker"] for s in pick(sigs, held={"LOW"}, n=3)] == ["HI", "SPY", "QQQ"]
+    assert [s["ticker"] for s in pick([], held=set(), n=2)] == ["SPY", "QQQ"]
+    assert pick([], set(), 2)[0]["exit_condition"] == "target 8% gain, stop loss at 4%"
+    assert split_evenly(20.0, 3) == 6.66 and split_evenly(20.0, 0) == 0.0 and split_evenly(0, 3) == 0.0
 
 
 def test_stock_exit_helpers():

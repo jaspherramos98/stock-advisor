@@ -127,7 +127,9 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
                               header badge, chatbot context, and exit_checker. Also `recent_trading_days`
                               (PDT window) + `et_date` (ISO timestamp → Eastern trading date)
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
-                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_TRADE_STOCKS + ROBINHOOD_MCP_URL (R25) —
+                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_TRADE_STOCKS +
+                              AGENT_STOCK_BUDGET_CAP (max total $ entry cost the agent holds in shares;
+                              20.0 for the S5 test — set None to remove the cap) + ROBINHOOD_MCP_URL (R25) —
                               single source of truth
 llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
                               console balance, record_cost decrements per call, can_spend() halts new
@@ -269,13 +271,20 @@ scripts/run_agent.py          Scheduled options-agent runner (Phase 2) — marke
                               (`agentic_halt.flag`) + credit ledger; logs actions to agent_scheduler.log.
 run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
                               it hidden. Windows task "Argus Options Agent" (every 20 min) calls the vbs —
-                              the user deleted it (2026-09); re-register (user action, real money when armed):
+                              REGISTERED (verified 2026-09-28). run_agent.py also runs the one-shot
+                              stock-leg test when `stock_leg_test.pending` exists. If ever deleted, re-register
+                              (user action, real money when armed):
                               schtasks /Create /TN "Argus Options Agent" /TR "wscript.exe \"<repo>un_agent_silent.vbs\""
                               /SC MINUTE /MO 20 /F. Manage: schtasks /Query|/Run|/Change|/Delete /TN "…".
 market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: launch app (hidden) →
                               run pipeline (fresh signals) → arm the agent (echo armed > agent_live.arm).
                               run_market_open_silent.vbs runs it hidden; Windows task "Argus Market Open"
                               (daily 06:30) calls it — currently deleted by the user = manual mornings.
+scripts/stock_leg_test.py     S5 live test of the stock leg: 2-3 small share positions (today's share signals,
+                              padded with SPY/QQQ/IWM) splitting the stock cap EQUALLY, via the agent's own
+                              review-first path + stock book, then managed by the normal cycle. Default DRY;
+                              `--live` real; `--verify` read-only report. One-shot at the next open: create
+                              `stock_leg_test.pending` → run_agent.py runs it once LIVE (marker deleted first).
 scripts/bench_dashboard.py    Click-latency benchmark — runs dashboard/app.py headless (Streamlit AppTest):
                               cold load + N warm reruns (a warm rerun = what a click costs) + exceptions.
                               Live data (needs network + MCP token), so NOT in CI. Use for before/after.

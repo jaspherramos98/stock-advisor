@@ -47,6 +47,15 @@ def stocks_enabled(override: bool | None = None) -> bool:
     return bool(getattr(config, "AGENT_TRADE_STOCKS", False)) if override is None else override
 
 
+def stock_room(invested: float, cap: float | None) -> float:
+    """$ the stock leg may still commit under config.AGENT_STOCK_BUDGET_CAP (inf when uncapped)."""
+    return float("inf") if cap is None else max(0.0, round(cap - (invested or 0.0), 2))
+
+
+def budget_cap() -> float | None:
+    return getattr(config, "AGENT_STOCK_BUDGET_CAP", None)
+
+
 def route(sig: dict, stocks: bool) -> str | None:
     """'option' | 'stock' | None (not tradeable by the agent)."""
     direction = (sig.get("direction") or "").lower()
@@ -110,10 +119,12 @@ def held_tickers(mcp, acct) -> set[str]:
         return set()
 
 
-def enter(mcp, acct, sig: dict, dollars: float, avail: float, state, verbose: bool) -> tuple[dict | None, float]:
+def enter(mcp, acct, sig: dict, dollars: float, avail: float, state, verbose: bool,
+          room: float = float("inf")) -> tuple[dict | None, float]:
     """Place (or dry-run) one share buy. Returns (result row | None if nothing to place, $ committed).
-    A LIVE placement records the entry's exit plan in storage.agent_stock_book for the exit pass."""
-    intent = plan_buy(sig, dollars, avail)
+    `avail` = buying power left this cycle (what the order guard checks); `room` = what the stock
+    budget cap still allows. A LIVE placement records the entry's plan + cost in agent_stock_book."""
+    intent = plan_buy(sig, dollars, min(avail, room))
     if intent is None:
         if verbose:
             print(f"  {sig.get('ticker')}: stock size ${dollars or 0:.2f} below the $1 minimum (skip)")
@@ -123,7 +134,8 @@ def enter(mcp, acct, sig: dict, dollars: float, avail: float, state, verbose: bo
            **{k: res[k] for k in ("status", "reason")}}
     if res["status"] == "placed":
         from storage.agent_stock_book import record_entry
-        record_entry(intent.ticker, sig.get("exit_condition"), sig.get("source"), sig.get("conviction"))
+        record_entry(intent.ticker, sig.get("exit_condition"), sig.get("source"), sig.get("conviction"),
+                     dollars=intent.dollars)
     return row, (intent.dollars if res["status"] in ("placed", "dry_run") else 0.0)
 
 

@@ -11,6 +11,7 @@ agent_scheduler.log
 paper_book.json
 peaks.json
 agent_stocks.json
+stock_leg_test.pending
 pipeline_cache_backup.json
 positions.json
 positions_backup_*.json
