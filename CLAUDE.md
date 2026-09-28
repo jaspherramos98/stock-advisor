@@ -260,6 +260,12 @@ analysis/agent_context.py     Fresh per-candidate briefing (judgment plan J1): p
                               build()/render()/track_record() pure; gather() live (~7s/candidate, never raises).
                               The entry loop stores it as `context` on each decided candidate's log record;
                               render() is what the J2 judge will read. Tests stub gather() (tests/conftest.py).
+alerts/agentic_watch.py       Watch triggers → agent candidates (J2b). Today's watch recs with conviction ≥50 + ALL
+                              pinned watches (pin wins per ticker); FIRED = entry_checker's parser + price still
+                              within 3% of the level (no chasing a run / buying a crash through support); a trigger
+                              saying "close" only counts in the last 30 min of the session. Signals are
+                              `shares_only` (route → shares, never options; skipped by the rules while
+                              AGENT_TRADE_STOCKS is off, but still briefed + JUDGED so the shadow record covers them).
 analysis/agent_judge.py       Entry judge (judgment plan J2): one Sonnet call per candidate reaching a decision —
                               forced tool call `record_verdict` → enter|wait|skip, size_multiplier, instrument,
                               stop, confidence, thesis, invalidation, risks; `parse_verdict` clamps size to [0,1]

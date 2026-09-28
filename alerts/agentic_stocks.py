@@ -63,6 +63,8 @@ def route(sig: dict, stocks: bool) -> str | None:
         return "option"                                   # bearish → puts (no share shorting)
     if direction != "buy":
         return None
+    if sig.get("shares_only"):                            # a fired watch trigger — never an option
+        return "stock" if stocks and can_hold_shares(sig) else None
     if not stocks:
         return "option"
     if sig.get("highly_recommended") or _conviction(sig) >= OPTION_CONVICTION:

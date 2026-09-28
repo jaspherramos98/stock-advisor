@@ -18,6 +18,14 @@ def _no_live_briefing(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_watch_scan(monkeypatch):
+    """The entry loop scans today's watches/pins for fired triggers (live cache + quotes). Default to
+    none in tests; tests of the watch path patch it explicitly."""
+    from alerts import agentic_watch
+    monkeypatch.setattr(agentic_watch, "watch_signals", lambda *a, **k: [])
+
+
+@pytest.fixture(autouse=True)
 def _no_live_judge(monkeypatch):
     """The entry judge calls Claude — never from tests. Its pure parts are tested directly; the
     model call itself is replaced where a test needs a verdict."""
