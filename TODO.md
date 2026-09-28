@@ -2,6 +2,17 @@
 
 ## Done
 
+### 49. Equity orders review-first + whole-share limit buys (S1, 2026-09-27) ✅
+`robinhood_mcp.place_order` (equity) now previews every order with `review_equity_order` after the shape +
+guard checks, same policy as options: a broker alert BLOCKS a buy (`rejected`), a sell proceeds with the alert
+logged, a failed review → `review_failed` and nothing is sent (even live). `agentic_stops` dropped its own
+duplicate preview (+ the now-dead `verbose` param). `trading_guards.buy_cost` prices a buy as dollars OR shares ×
+limit price, so a whole-share limit buy passes the BP/single-name caps (it was always rejected); a market buy by
+share count has no price bound → rejected (size market buys in dollars). Verified live (DRY_RUN): $5 market and
+1-share $12.50 limit F buys review clean → dry_run; a $1 limit → `EQUITY_EXTREMELY_UNMARKETABLE_LIMIT_PRICE` →
+rejected. +3 tests (110). Files: ingestion/robinhood_mcp.py, trading_guards.py, alerts/agentic_stops.py,
+scripts/agentic_stops.py, tests.
+
 ### 48. PDT day-trade guard for the agent (S1, 2026-09-27) ✅
 The live options agent had NO pattern-day-trader protection. Replaying the real fill history shows it made **7 day
 trades on 2026-08-24/25** (5 + 2 — agent entries closed same day, mostly by hand during the churn bug), past the
@@ -880,10 +891,8 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
     but the payload is `{"data": {"order_checks": …}}` → option review alerts ALWAYS logged "none", never blocked.
     (2) ✅ FIXED (#47) `_order_args` could send BOTH `dollar_amount` and `quantity`. (3) ✅ FIXED (#47) `ref_id` was
     `client_id` (deterministic, e.g. `stop-F-11.5`) and options sent none — now a fresh UUID per placement.
-- **S1 foundations:** review-first equity `place_order` that BLOCKS on `order_checks` alerts (reuse
-  `_order_alert`; option side done in #46); ~~order-shape validation + UUID ref_id~~ (done #47); NOTE
-  `trading_guards.check_order` requires `dollars` on every BUY, so a whole-share limit buy is guard-rejected today
-  → extend it to accept `quantity × limit_price` before S2; pure `equity_exit_decision()` (rec's target/stop from
+- **S1 foundations:** ~~review-first equity `place_order` + whole-share limit buys in check_order~~ (done #49);
+  ~~order-shape validation + UUID ref_id~~ (done #47); pure `equity_exit_decision()` (rec's target/stop from
   exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
   duplicate); ~~shared day-trade counter guard~~ (done #48 — stock entries in S2 must share `_entry_budget`). Unit tests.
 - **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on
@@ -900,7 +909,6 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   `get_portfolio` ×2 — now ~0.3s each on the shared session; dedup within a cycle is optional.
 - Not worth it (measured): `_compute_technicals` (0.9ms warm; 469ms was the one-time pandas import); lazy
   `anthropic` import (1.1s, scheduler cold start only).
-- Before enabling stock trading: make `robinhood_mcp.place_order` (equity) review-first like options (→ S1).
 
 ### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)
 Agentic account approved for option_level_2 (2026-08-14). Built + verified in DRY_RUN:

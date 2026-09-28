@@ -138,10 +138,11 @@ trading_guards.py             Broker-agnostic order-safety guardrails (R25) — 
                               manual trades + still-working opening orders).
 ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — mirrors robinhood.py
                               read shapes (fetch_positions/buying_power/quotes) + guarded, DRY_RUN-safe
-                              place_order + place_option_order (review-first: `_order_alert` reads the
-                              broker alert at data.order_checks.alertType; an alert BLOCKS an opening
-                              option order (status 'rejected'), a closing one proceeds with a warning —
-                              never trap an exit). Equity orders pass `_order_shape_error` first (exactly
+                              place_order + place_option_order — BOTH review-first (`_order_alert` reads
+                              the broker alert at data.order_checks.alertType; an alert BLOCKS an opening
+                              order — equity buy / option open — with status 'rejected'; a closing one
+                              proceeds with a warning — never trap an exit; a failed review →
+                              'review_failed', nothing sent). Equity orders pass `_order_shape_error` first (exactly
                               one of qty/$; $ ⇒ market ≥$1; fractional ⇒ market; limit/stop need prices)
                               → 'rejected' even in DRY_RUN. Every placement sends a fresh UUID `ref_id`
                               (`_new_ref_id`, place_* only — review tools reject it); local dedup stays on
@@ -505,9 +506,10 @@ was ~20× the cost for no added edge). **Confirm-first**, DRY_RUN default ON.
   `Session termination failed: 400` teardown warning is silenced in `mcp_auth.py`.)
 - **Equity (share) trading — PLANNED (approved plan: TODO Backlog "Stock trading for the agent"):**
   `alerts/agentic_stops.py` (standing GTC stop_market
-  per agentic share position, confirm-first via `review_equity_order`) is KEPT for the future stock
-  side of the agent but is not scheduled or called by anything today. Note `robinhood_mcp.place_order`
-  (equity) does NOT review-first the way `place_option_order` does — add that before enabling stocks.
+  per agentic share position, previewed by `place_order`'s review step) is KEPT for the future stock
+  side of the agent but is not scheduled or called by anything today. `robinhood_mcp.place_order`
+  (equity) is review-first like options (#49); `trading_guards.buy_cost` prices a buy as dollars or
+  shares × limit price (a market buy by share count is rejected — size market buys in dollars).
 - **Fallback:** `config.USE_MCP=False` routes reads back to `robin_stocks` (`ingestion/robinhood.py`) —
   kept as insurance and the only path that can read crypto. No branch switch needed.
 

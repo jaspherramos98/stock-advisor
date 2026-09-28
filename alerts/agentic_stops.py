@@ -90,7 +90,7 @@ def _open_stops(orders_payload) -> dict[str, dict]:
     return out
 
 
-def sync_protective_stops(verbose: bool = True) -> list[dict]:
+def sync_protective_stops() -> list[dict]:
     """Place a protective GTC stop for each agentic position that lacks one.
 
     Reads the agentic account's positions + open orders, computes each ATR stop from R24
@@ -171,22 +171,8 @@ def sync_protective_stops(verbose: bool = True) -> list[dict]:
 
     results: list[dict] = []
     for intent in intents:
-        # Confirm-first: preview the exact stop before (maybe) placing it.
-        try:
-            preview = mcp._unwrap_tool_result(mcp_auth.call_tool(mcp._TOOL_REVIEW_ORDER, {
-                "account_number": acct, "symbol": intent.ticker, "side": "sell",
-                "type": "stop_market", "quantity": str(intent.quantity),
-                "stop_price": f"{intent.stop_price:.2f}",
-                "time_in_force": intent.time_in_force or "gtc",
-            }))
-            if verbose:
-                print(f"[REVIEW] sell {intent.quantity} {intent.ticker} stop @ ${intent.stop_price} "
-                      f"— checks: {mcp._order_alert(preview) or 'none'}")
-        except Exception as e:  # noqa: BLE001 — a failed preview must not place the order
-            print(f"agentic_stops: review failed for {intent.ticker} — {e}; skipping")
-            results.append({"ticker": intent.ticker, "status": "review_failed", "reason": str(e)})
-            continue
-
+        # place_order previews the exact stop first (review_equity_order) and returns
+        # 'review_failed' rather than placing if the preview can't be made.
         try:
             res = mcp.place_order(intent, state, buying_power=start_equity, account_number=acct)
             results.append({"ticker": intent.ticker, "stop_price": intent.stop_price,
