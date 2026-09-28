@@ -4,8 +4,8 @@ live (alerts/agentic_options.run_options_agent: signals, routing, sizing, the $2
 judge, the decision log, exits) and only the fills are virtual.
 
 Same call surface the agent uses on the live module: is_available, agentic_account_number,
-fetch_buying_power, fetch_positions, fetch_option_positions, day_trade_budget, place_order,
-place_option_order. Orders pass the SAME trading_guards checks as live (plus the equity order-shape rule),
+fetch_buying_power, fetch_positions, fetch_option_positions, fetch_crypto_positions, day_trade_budget,
+place_order, place_option_order, place_crypto_order. Orders pass the SAME trading_guards checks as live (plus the equity order-shape rule),
 then fill against storage/paper_book at LIVE prices:
   - options: at the intent's limit price — the ask on an entry, the bid on an exit (what the agent sends);
   - shares: buys at the live ask, sells at the live bid (last price if the book side is missing).
@@ -80,6 +80,31 @@ class PaperBroker:
                 reason = book.buy_shares(intent.ticker, intent.dollars, price)
             elif book.sell_shares(intent.ticker, intent.quantity, price, intent.reason) is None:
                 reason = "no paper shares to sell"
+        return self._result(intent, state, reason, f"{intent.side} {intent.ticker} @ ${price}")
+
+    def fetch_crypto_positions(self, account_number: str | None = None) -> list[dict]:
+        """Paper coins in live's crypto position shape."""
+        held = book.get_book()["crypto"]
+        rows = [{"asset_code": t, "quantity": h["shares"], "cost_basis": h["cost"]} for t, h in held.items()]
+        return live._normalize_crypto_positions(rows, live.fetch_crypto_quotes(list(held)) if held else {})
+
+    def place_crypto_order(self, intent, state, buying_power: float, account_number: str | None = None) -> dict:
+        """Same shape rule + guards as live; fills at the live crypto ask (buy) / bid (sell). The market
+        maker's ~2% spread is the main cost of a crypto round trip, so modeling it matters here."""
+        reason = live._crypto_order_shape_error(intent)
+        if not reason:
+            verdict = check_order(intent, state, buying_power)
+            reason = None if verdict.allowed else verdict.reason
+        price = None
+        if not reason:
+            price = fill_price(live.fetch_crypto_quotes([intent.ticker]).get(intent.ticker.upper()), intent.side)
+            if not price:
+                reason = "no live crypto price to fill against"
+        if not reason:
+            if intent.side == "buy":
+                reason = book.buy_shares(intent.ticker, intent.dollars, price, leg="crypto")
+            elif book.sell_shares(intent.ticker, intent.quantity, price, intent.reason, leg="crypto") is None:
+                reason = "no paper crypto to sell"
         return self._result(intent, state, reason, f"{intent.side} {intent.ticker} @ ${price}")
 
     def place_option_order(self, intent, state, buying_power: float, account_number: str | None = None) -> dict:

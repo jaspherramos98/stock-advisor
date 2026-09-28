@@ -800,11 +800,13 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
   expires** (symptom: log shows `_perform_authorization_code_grant` then a clean `NotAuthenticated`;
   buying power stops reading): `python scripts/mcp_login.py` (one browser approve), then relaunch — now
   rare (refresh-token lifetime), not every ~3 days.
-- **Argus reads NO crypto through the MCP.** When wired, the Robinhood Trading MCP had no crypto tools; as of
-  2026-09-27 it LISTS them (`get_crypto_positions`, `get_crypto_quotes`, `place_crypto_order`, …) but Argus
-  uses none and they're unverified. Today: Sync positions skips crypto; the options agent can't touch it. Track
-  crypto manually (My Positions → add). Only `ingestion/robinhood.py` (robin_stocks) sees crypto, and
-  that path is skipped under `USE_MCP`. (Wiring crypto reads = a future backlog item.)
+- **Crypto via the MCP (K1 #70, 2026-09-28):** `robinhood_mcp` has `fetch_crypto_quotes` (mark/bid/ask),
+  `fetch_crypto_positions` and `place_crypto_order` (shape → guards → `preview_crypto_order` → DRY_RUN/live,
+  preview problem BLOCKS a buy, never a sell). Verified live: the agentic account's crypto account is onboarded
+  + agentic-enabled, $1 market buy previews clean with ZERO fee, `rhs_account_number` == `account_number`.
+  **Robinhood crypto is market-maker priced: bid/ask spread ~1.9% (BTC/DOGE/ETH)** — a round trip costs ~2%
+  before any move. No account holds crypto today, so the POSITION row shape is unverified (parsed defensively;
+  confirm on the first real position). The agent's crypto leg = K2/K3 (TODO). Dashboard Sync still skips crypto.
 - **Equity order rules (verified S0, 2026-09-27):** fractional / `dollar_amount` orders are `market` +
   `regular_hours` only (dollar min $1); `review_equity_order` is advisory — problems come back as a soft
   `data.order_checks.alertType`, not an error, and it doesn't catch every illegal shape. Details: TODO "Stock

@@ -9,6 +9,7 @@ Book (paper_book.json, repo root, gitignored):
     {"version": 2, "cash", "start",
      "options": [{option_id, ticker, right, strike, expiration, qty, entry_price, cost, opened_at}],
      "shares":  {TICKER: {shares, avg_cost, cost, opened_at}},
+     "crypto":  {TICKER: {shares, avg_cost, cost, opened_at}}   ← coin quantity kept in "shares"
      "closed":  [{leg, ticker, entry_price, exit_price, qty, pnl, pnl_pct, reason, opened_at, closed_at, ...}],
      "fills":   [{key, effect, qty, ts}]}          ← PDT day-trade counting, same rule as live
 
@@ -27,7 +28,12 @@ DEFAULT_START = 25.0
 
 def _fresh(start: float) -> dict:
     start = round(float(start), 2)
-    return {"version": 2, "cash": start, "start": start, "options": [], "shares": {}, "closed": [], "fills": []}
+    return {"version": 2, "cash": start, "start": start, "options": [], "shares": {}, "crypto": {},
+            "closed": [], "fills": []}
+
+
+# Share-like holdings live in separate buckets per leg: a coin and a stock can share a ticker (SOL is both).
+_BUCKET = {"stock": "shares", "crypto": "crypto"}
 
 
 def _load() -> dict:
@@ -120,9 +126,9 @@ def close_option(option_id: str, exit_price: float, reason: str = "") -> dict | 
 
 # --- shares -------------------------------------------------------------------------------
 
-def buy_shares(ticker: str, dollars: float, price: float) -> str | None:
-    """Dollar-based paper buy at `price` (fractional). Adds to an existing position at a blended
-    average. Returns None on success, else why it was refused."""
+def buy_shares(ticker: str, dollars: float, price: float, leg: str = "stock") -> str | None:
+    """Dollar-based paper buy at `price` (fractional) — shares, or a coin with leg="crypto". Adds to an
+    existing holding at a blended average. Returns None on success, else why it was refused."""
     t = (ticker or "").upper()
     dollars, price = round(float(dollars or 0), 2), float(price or 0)
     if not t or dollars <= 0 or price <= 0:
@@ -131,23 +137,25 @@ def buy_shares(ticker: str, dollars: float, price: float) -> str | None:
     if dollars > d["cash"]:
         return f"${dollars:.2f} exceeds paper cash ${d['cash']:.2f}"
     qty = dollars / price
-    held = d["shares"].get(t) or {"shares": 0.0, "cost": 0.0, "opened_at": _now()}
+    bucket = d[_BUCKET[leg]]
+    held = bucket.get(t) or {"shares": 0.0, "cost": 0.0, "opened_at": _now()}
     held["shares"] = held["shares"] + qty
     held["cost"] = round(held["cost"] + dollars, 2)
     held["avg_cost"] = held["cost"] / held["shares"]
-    d["shares"][t] = held
+    bucket[t] = held
     d["cash"] = round(d["cash"] - dollars, 2)
-    _fill(d, f"eq:{t}", "open", qty)
+    if leg == "stock":                            # PDT counts equities + options, never crypto
+        _fill(d, f"eq:{t}", "open", qty)
     _save(d)
     return None
 
 
-def sell_shares(ticker: str, qty: float, price: float, reason: str = "") -> dict | None:
-    """Sell `qty` paper shares (capped at what's held) at `price`. Returns the closed record, or None
-    if nothing is held."""
+def sell_shares(ticker: str, qty: float, price: float, reason: str = "", leg: str = "stock") -> dict | None:
+    """Sell `qty` (capped at what's held) at `price`. Returns the closed record, or None if nothing is held."""
     t = (ticker or "").upper()
     d = _load()
-    held = d["shares"].get(t)
+    bucket = d[_BUCKET[leg]]
+    held = bucket.get(t)
     if not held or not price or price <= 0:
         return None
     qty = min(float(qty or 0), held["shares"])
@@ -157,14 +165,15 @@ def sell_shares(ticker: str, qty: float, price: float, reason: str = "") -> dict
     d["cash"] = round(d["cash"] + qty * price, 2)
     rest = held["shares"] - qty
     if rest <= 1e-9:
-        d["shares"].pop(t)
+        bucket.pop(t)
     else:
-        d["shares"][t] = {**held, "shares": rest, "cost": round(avg * rest, 2)}
-    rec = {"leg": "stock", "ticker": t, "qty": qty, "entry_price": avg, "exit_price": float(price),
+        bucket[t] = {**held, "shares": rest, "cost": round(avg * rest, 2)}
+    rec = {"leg": leg, "ticker": t, "qty": qty, "entry_price": avg, "exit_price": float(price),
            "pnl": round((price - avg) * qty, 2), "pnl_pct": round((price - avg) / avg * 100, 1) if avg else 0.0,
            "reason": reason, "opened_at": held.get("opened_at"), "closed_at": _now()}
     d["closed"].append(rec)
-    _fill(d, f"eq:{t}", "close", qty)
+    if leg == "stock":
+        _fill(d, f"eq:{t}", "close", qty)
     _save(d)
     return rec
 
@@ -179,19 +188,20 @@ def position_pnl(entry_price: float, mark: float, qty: int) -> tuple[float, floa
             round((mark - entry_price) / entry_price * 100, 1))
 
 
-def summarize(book: dict, option_marks: dict[str, float], share_prices: dict[str, float] | None = None) -> dict:
-    """Account stats given option marks {option_id: mark} and share prices {TICKER: price} (a missing
-    price marks at cost). equity = cash + open value; realized = Σ closed pnl; win rate over closed."""
-    share_prices = share_prices or {}
+def summarize(book: dict, option_marks: dict[str, float], share_prices: dict[str, float] | None = None,
+              crypto_prices: dict[str, float] | None = None) -> dict:
+    """Account stats given option marks {option_id: mark}, share prices and crypto prices {TICKER: price}
+    (a missing price marks at cost). equity = cash + open value; realized = Σ closed pnl; win rate over closed."""
     open_val = unreal = 0.0
     for p in book.get("options", []):
         mk = float(option_marks.get(p["option_id"], p["entry_price"]))
         open_val += mk * 100 * p["qty"]
         unreal += (mk - p["entry_price"]) * 100 * p["qty"]
-    for t, h in (book.get("shares") or {}).items():
-        px = float(share_prices.get(t) or h["avg_cost"])
-        open_val += px * h["shares"]
-        unreal += (px - h["avg_cost"]) * h["shares"]
+    for bucket, prices in (("shares", share_prices or {}), ("crypto", crypto_prices or {})):
+        for t, h in (book.get(bucket) or {}).items():
+            px = float(prices.get(t) or h["avg_cost"])
+            open_val += px * h["shares"]
+            unreal += (px - h["avg_cost"]) * h["shares"]
     closed = book.get("closed", [])
     wins = sum(1 for c in closed if c.get("pnl", 0) > 0)
     cash_, start = book.get("cash", 0.0), book.get("start", DEFAULT_START)
@@ -200,5 +210,6 @@ def summarize(book: dict, option_marks: dict[str, float], share_prices: dict[str
             "realized": round(sum(c.get("pnl", 0.0) for c in closed), 2), "equity": round(equity, 2),
             "start": round(start, 2), "total_pnl": round(equity - start, 2),
             "total_pnl_pct": round((equity - start) / start * 100, 1) if start else 0.0,
-            "n_open": len(book.get("options", [])) + len(book.get("shares") or {}), "n_closed": len(closed),
+            "n_open": len(book.get("options", [])) + len(book.get("shares") or {}) + len(book.get("crypto") or {}),
+            "n_closed": len(closed),
             "win_rate": round(wins / len(closed) * 100, 0) if closed else None}

@@ -576,6 +576,177 @@ def _order_shape_error(intent: OrderIntent) -> str | None:
     return None
 
 
+# --- crypto -----------------------------------------------------------------------------------
+# Verified live 2026-09-28 (read-only + previews, nothing placed): the AGENTIC account's crypto account is
+# onboarded and agentic-enabled; preview_crypto_order accepts a $1 market buy with ZERO fee; the crypto tools
+# take `rhs_account_number`, which equals `account_number` on every account. Robinhood crypto is priced by a
+# market maker — the bid/ask spread was ~1.9% on BTC and DOGE — so every round trip costs ~2% up front.
+# get_crypto_positions was empty on every account, so the POSITION row shape is not yet verified (parsed
+# defensively; confirm on the first real crypto position).
+_TOOL_CRYPTO_QUOTES = "get_crypto_quotes"
+_TOOL_CRYPTO_POSITIONS = "get_crypto_positions"
+_TOOL_PREVIEW_CRYPTO = "preview_crypto_order"
+_TOOL_PLACE_CRYPTO = "place_crypto_order"
+
+
+def crypto_pair(ticker: str) -> str:
+    """'btc' / 'BTC' / 'BTC-USD' → 'BTC-USD' (the pair the crypto tools take)."""
+    t = (ticker or "").upper().strip()
+    return t if t.endswith("-USD") else f"{t}-USD"
+
+
+def _crypto_base(symbol: str) -> str:
+    """'BTCUSD' / 'BTC-USD' / 'BTC' → 'BTC' (quote responses come back unhyphenated)."""
+    s = (symbol or "").upper().replace("-", "")
+    return s[:-3] if s.endswith("USD") and len(s) > 3 else s
+
+
+def _normalize_crypto_quotes(tickers: list[str], data) -> dict[str, dict]:
+    """Pure: get_crypto_quotes payload → {TICKER: {price (mark), bid, ask}} or None per ticker."""
+    wanted = {_crypto_base(t) for t in tickers}
+    out: dict[str, dict | None] = {t: None for t in wanted}
+    for r in (data.get("results") or []) if isinstance(data, dict) else []:
+        base = _crypto_base(r.get("symbol"))
+        bid, ask = _to_float(r.get("bid_price")), _to_float(r.get("ask_price"))
+        mark = _to_float(r.get("mark_price")) or ((bid + ask) / 2 if bid and ask else 0.0)
+        if base in wanted and mark > 0:
+            out[base] = {"price": mark, "bid": bid, "ask": ask}
+    return out
+
+
+def fetch_crypto_quotes(tickers: list[str]) -> dict[str, dict]:
+    """{TICKER: {price, bid, ask}} from the MCP ({} on any failure)."""
+    if not tickers or not is_available():
+        return {}
+    try:
+        data = _data(_call_tool(_TOOL_CRYPTO_QUOTES, {"symbols": [crypto_pair(t) for t in tickers]}))
+    except Exception as e:  # noqa: BLE001
+        print(f"Robinhood MCP crypto quotes: fetch failed — {e}")
+        return {}
+    return _normalize_crypto_quotes(tickers, data)
+
+
+def _crypto_row_fields(row: dict) -> tuple[str, float, float]:
+    """(TICKER, quantity, total cost basis) from one get_crypto_positions row — shape unverified, so try the
+    known Robinhood crypto-holding spellings (robin_stocks: currency.code + cost_bases[].direct_cost_basis)."""
+    cur = row.get("currency") if isinstance(row.get("currency"), dict) else {}
+    ticker = _crypto_base(row.get("asset_code") or row.get("currency_code") or cur.get("code")
+                          or row.get("symbol") or "")
+    qty = _to_float(row.get("quantity") or row.get("quantity_available") or row.get("total_quantity"))
+    cost = sum(_to_float(c.get("direct_cost_basis")) for c in row.get("cost_bases") or [] if isinstance(c, dict))
+    cost = cost or _to_float(row.get("cost_basis") or row.get("total_cost_basis"))
+    return ticker, qty, cost
+
+
+def _normalize_crypto_positions(rows, quotes: dict | None = None) -> list[dict]:
+    """Pure: crypto position rows → Argus position dicts (same keys as equity positions + asset_type)."""
+    quotes = quotes or {}
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        ticker, qty, cost = _crypto_row_fields(row)
+        if not ticker or qty <= 0:
+            continue
+        avg = cost / qty if cost else 0.0
+        current = (quotes.get(ticker) or {}).get("price") or avg
+        out.append({"ticker": ticker, "company_name": ticker, "asset_type": "crypto", "shares": qty,
+                    "avg_cost": avg, "current_price": current, "amount_invested": round(cost, 2),
+                    "equity": round(qty * current, 2),
+                    "pnl_pct": round((current - avg) / avg * 100, 2) if avg else 0.0})
+    return out
+
+
+def fetch_crypto_positions(account_number: str) -> list[dict]:
+    """Crypto holdings of a brokerage account (via its linked crypto account), priced at the mark.
+    Degrades to [] on any failure — callers that must not act on a failed read check the book, not this."""
+    if not is_available() or not account_number:
+        return []
+    try:
+        data = _data(_call_tool(_TOOL_CRYPTO_POSITIONS, {"rhs_account_number": account_number}))
+    except Exception as e:  # noqa: BLE001
+        print(f"Robinhood MCP crypto positions: fetch failed — {e}")
+        return []
+    rows = (data.get("results") or data.get("positions") or []) if isinstance(data, dict) else []
+    tickers = [_crypto_row_fields(r)[0] for r in rows if isinstance(r, dict)]
+    return _normalize_crypto_positions(rows, fetch_crypto_quotes([t for t in tickers if t]))
+
+
+def _crypto_order_shape_error(intent: OrderIntent) -> str | None:
+    """Pure: the agent only sends MARKET crypto orders, by dollars (buys) or quantity (sells)."""
+    if intent.order_type != "market":
+        return "the agent sends market crypto orders only"
+    if (intent.quantity is None) == (intent.dollars is None):
+        return "exactly one of quantity or dollars is required"
+    if intent.dollars is not None and intent.dollars < MIN_DOLLAR_ORDER:
+        return f"dollar amount below the ${MIN_DOLLAR_ORDER:.2f} minimum"
+    if intent.quantity is not None and intent.quantity <= 0:
+        return "quantity must be positive"
+    return None
+
+
+def _crypto_order_args(intent: OrderIntent, account_number: str) -> dict:
+    args = {"rhs_account_number": account_number, "symbol": crypto_pair(intent.ticker),
+            "side": intent.side, "type": "market"}
+    if intent.dollars is not None:
+        args["dollar_amount"] = f"{intent.dollars:.2f}"
+    else:
+        args["quantity"] = f"{intent.quantity:.8f}".rstrip("0").rstrip(".")
+    return args
+
+
+def _crypto_preview_alert(preview) -> str | None:
+    """A problem in a preview_crypto_order payload, or None when clean. Verified clean shape:
+    {"data": {"order": {...}, "estimated_fee": "0", ...}}. Anything without an order, or carrying an
+    error/check field, is treated as an alert (fail safe — the error shape isn't documented)."""
+    data = _data(preview)
+    if not isinstance(data, dict) or not isinstance(data.get("order"), dict):
+        return f"preview returned no order: {str(data)[:200]}"
+    for key in ("errors", "validation_errors", "order_checks", "alert", "error"):
+        if data.get(key):
+            return f"{key}: {str(data[key])[:200]}"
+    return None
+
+
+def place_crypto_order(intent: OrderIntent, state: GuardState, buying_power: float,
+                       account_number: str | None = None) -> dict:
+    """Crypto twin of place_order: shape + trading_guards → preview_crypto_order → DRY_RUN log or a live
+    send to the AGENTIC account. Returns {status, reason, intent, dry_run}. A preview problem BLOCKS a buy
+    and is only logged for a sell (never trap an exit). Live-send failures propagate."""
+    reason = _crypto_order_shape_error(intent)
+    if not reason:
+        verdict = check_order(intent, state, buying_power)
+        reason = None if verdict.allowed else verdict.reason
+    if reason:
+        print(f"[CRYPTO REJECTED] {intent.side} {intent.ticker} — {reason}")
+        return {"status": "rejected", "reason": reason, "intent": intent, "dry_run": config.DRY_RUN}
+    tag = f"{intent.side} {crypto_pair(intent.ticker)}"
+    try:
+        acct = account_number or agentic_account_number()
+        if not acct:
+            raise MCPNotWired("no agentic account for crypto")
+        args = _crypto_order_args(intent, acct)
+        preview = _call_tool(_TOOL_PREVIEW_CRYPTO, args)
+    except Exception as e:  # noqa: BLE001 — a failed preview must not place the order
+        print(f"[CRYPTO PREVIEW FAILED] {tag} — {e}")
+        return {"status": "review_failed", "reason": str(e), "intent": intent, "dry_run": config.DRY_RUN}
+    alert = _crypto_preview_alert(preview)
+    print(f"[CRYPTO PREVIEW] {tag} — checks: {alert or 'none'}")
+    if alert and intent.side == "buy":
+        return {"status": "rejected", "reason": f"preview problem: {alert}", "intent": intent,
+                "dry_run": config.DRY_RUN}
+    if config.DRY_RUN:
+        record_placed(intent, state)
+        print(f"[DRY_RUN CRYPTO] {tag} dollars={intent.dollars} qty={intent.quantity} :: {intent.reason}")
+        return {"status": "dry_run", "reason": "logged, not sent", "intent": intent, "dry_run": True}
+    ref_id = _new_ref_id()
+    result = _call_tool(_TOOL_PLACE_CRYPTO, {**args, "ref_id": ref_id})
+    record_placed(intent, state)
+    print(f"[CRYPTO PLACED] {tag} ref {ref_id} :: {intent.reason}")
+    return {"status": "placed", "reason": "sent", "intent": intent, "dry_run": False, "ref_id": ref_id,
+            "raw": result}
+
+
 def _order_args(intent: OrderIntent, account_number: str) -> dict:
     """Map a shape-valid OrderIntent (see _order_shape_error) to the review/place_equity_order
     schema (all values are strings). ref_id is added by place_order only — review has none."""

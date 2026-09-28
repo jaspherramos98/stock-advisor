@@ -2,6 +2,18 @@
 
 ## Done
 
+### 70. Crypto client for the Robinhood MCP (agent crypto K1, 2026-09-28) ✅
+User chose agent crypto trading (option 2) with read-only sync as the fallback. Read-only probes + previews first
+(nothing placed): the agentic account's crypto account is onboarded + agentic-enabled; a $1 market buy previews clean
+with ZERO fee; crypto tools take `rhs_account_number` (== `account_number` on every account); no account holds crypto
+today; **bid/ask spread ~1.9%** on BTC/ETH/DOGE (market-maker pricing). Built `robinhood_mcp.crypto_pair`,
+`fetch_crypto_quotes` (mark/bid/ask), `fetch_crypto_positions` (row shape unverified → defensive parser),
+`place_crypto_order` (market only; shape → trading_guards → preview → DRY_RUN/live; a preview problem blocks a buy, not
+a sell; fresh ref_id; never auto-retried). Paper: `PaperBroker.fetch_crypto_positions/place_crypto_order` fill at the
+live crypto ask/bid into a separate `crypto` bucket (SOL is both a coin and a stock); crypto adds no PDT fills. Live
+smoke: quotes read, a DRY_RUN $1 BTC buy previewed clean and was logged, not sent. 155 tests. Files:
+ingestion/robinhood_mcp.py, alerts/paper_broker.py, storage/paper_book.py, CLAUDE.md, tests.
+
 ### 69. Paper fills cross the spread + one position read per agent cycle (2026-09-28) ✅
 - **Paper realism:** paper share orders filled at the last price, so every paper round trip skipped the bid/ask
   spread. Quotes now carry `bid`/`ask` (`robinhood_mcp._normalize_quotes`) and `paper_broker.fill_price` buys at the
@@ -1114,9 +1126,11 @@ Lowest core-fit; do last or not at all.
 ## Backlog
 
 ### Small follow-ups
-- **Crypto through the MCP:** since 2026-09-27 the Trading MCP LISTS crypto tools (`get_crypto_positions`,
-  `get_crypto_quotes`, `place_crypto_order`, …) but Argus uses none and they're unverified — crypto is still tracked by
-  hand (My Positions). Needs a decision on scope (read-only sync vs agent trading) before building.
+- **Crypto for the agent — IN PROGRESS (user, 2026-09-28: "do 2 [agent trades crypto] then switch to 1 [read-only
+  sync] if it doesn't work"):** K1 client ✅ #70. **K2** agent crypto leg — route crypto buys to a crypto leg with its
+  own `$` cap, pyramid sizing, plan book, `equity_exit_decision` exits, paper + live; PDT doesn't apply. **K3** crypto
+  recs in the morning pipeline (`--crypto`), an off-hours crypto EXIT pass (crypto trades 24/7; the agent runs market
+  hours only), dashboard rows. Proven in Paper first — real crypto orders only once the user picks Live.
 
 ### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built, J4 data accruing)
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
