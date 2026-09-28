@@ -374,6 +374,7 @@ def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
 
     state = GuardState(start_equity=buying_power)
     results: list[dict] = []
+    held_syms = {(r.get("chain_symbol") or "").upper() for r in rows if r.get("chain_symbol")}
     for p in rows:
         try:
             oid = p.get("option_id") or p.get("option") or p.get("id")
@@ -394,6 +395,23 @@ def _run_exits(mcp, acct, buying_power, verbose) -> list[dict]:
             if verbose:
                 print(f"  {p.get('chain_symbol','?')} {oid[:8]}: entry {entry} mark {mark} peak {peak} dte {dte} → {action} ({reason})")
             if action != "close":
+                # J3: the rules hold — review on news / an unusual underlying move / imminent earnings
+                # (SHADOW: logged only; keep|sell for options, no stop to tighten).
+                sym = (p.get("chain_symbol") or "").upper()
+                try:
+                    from analysis.holding_review import review
+                    from ingestion import account_reads as ar
+                    underlying = (ar.quotes([sym]).get(sym) or {}).get("price")
+                    review({"ticker": sym, "key": oid, "kind": "option", "price": underlying,
+                            "entry": entry, "now": mark,
+                            "pnl_pct": round((mark - entry) / entry * 100, 1) if entry else None,
+                            "plan": f"option exits: -{DEFAULT_EXIT['stop_pct']}% stop, trail after "
+                                    f"+{DEFAULT_EXIT['trail_activate']}%, +{DEFAULT_EXIT['profit_pct']}% target, "
+                                    f"close at ≤{DEFAULT_EXIT['close_dte']} DTE (now {dte} DTE)",
+                            "peak": peak},
+                           holdings=held_syms, verbose=verbose)
+                except Exception as e:  # noqa: BLE001 — a review must never break the exit pass
+                    print(f"agentic_options: holding review failed for {sym} — {e}")
                 continue
             right = (p.get("type") or "call").lower()
             sym = p.get("chain_symbol") or "?"

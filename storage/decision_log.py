@@ -12,6 +12,8 @@ Append-only JSON Lines at agent_decisions.jsonl (repo root, gitignored). One rec
   - kind "exit": a close the exit pass fired, with entry → exit price and P&L %, linked to the entry
     record that opened it (`entry_id`, looked up by `key`: the option_id, or "eq:TICKER" for shares).
   - kind "stop": a protective stop placed for a share position.
+  - kind "review": an event-driven holding review (J3) — what fired it, the rules' action (hold), and
+    the judge's keep/sell/tighten verdict (shadow: logged only).
 
 This is the measuring stick for the judgment plan: the J4 shadow review compares what the mechanical
 rules did against what the judge would have done, trade by trade. Records are never rewritten; a
@@ -61,6 +63,13 @@ def read(limit: int | None = None, mode: str | None = None) -> list[dict]:
     except OSError:
         return []
     return out[-limit:] if limit else out
+
+
+def get(record_id: str | None) -> dict | None:
+    """One record by id (e.g. the entry an exit/review links to), or None."""
+    if not record_id:
+        return None
+    return next((r for r in read() if r.get("id") == record_id), None)
 
 
 def last_entry_id(key: str, mode: str | None = None) -> str | None:

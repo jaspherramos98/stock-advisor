@@ -13,6 +13,7 @@ paper_book.json
 peaks.json
 agent_stocks.json
 agent_decisions.jsonl
+holding_review.json
 stock_leg_test.pending
 pipeline_cache_backup.json
 positions.json

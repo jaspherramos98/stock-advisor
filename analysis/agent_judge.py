@@ -72,6 +72,65 @@ TOOL = {
 }
 
 
+HOLD_ACTIONS = ("keep", "sell", "tighten_stop")
+
+HOLD_SYSTEM = """You are the risk-focused position reviewer for Argus's autonomous agent (a SMALL, disposable \
+Robinhood account). The agent HOLDS the position below; an event just fired (a new headline, an unusual move, or \
+earnings imminent). Decide whether the ORIGINAL THESIS still holds given what changed, using ONLY the briefing.
+
+Hard rules:
+- Use only facts in the briefing. Never invent news or prices from memory; n/a means unknown.
+- You can only REDUCE risk: KEEP (the plan stands), SELL now, or TIGHTEN_STOP (shares only: a new stop price \
+above the current stop and below the current price). You never loosen a stop or add to the position.
+- Do not sell on noise. The mechanical exit plan (stop / trailing / target) already exists; act only when the \
+event materially changes the thesis or the risk (thesis-breaking news, earnings gap risk the thesis didn't \
+plan for, a move that broke the invalidation level). A normal wobble inside the plan is KEEP.
+- Protect open profit sensibly: a strong winner facing a new risk is a TIGHTEN_STOP candidate, not an automatic sell.
+
+Record your verdict with the record_holding_verdict tool: what_changed (the event, one sentence), reasoning \
+(why keep/sell/tighten, 1-2 sentences)."""
+
+HOLD_TOOL = {
+    "name": "record_holding_verdict",
+    "description": "Record the verdict on the held position.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": list(HOLD_ACTIONS)},
+            "new_stop_price": {"type": ["number", "null"],
+                               "description": "Only for tighten_stop: the new stop price. Otherwise null."},
+            "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+            "what_changed": {"type": "string"},
+            "reasoning": {"type": "string"},
+        },
+        "required": ["action", "confidence", "what_changed", "reasoning"],
+    },
+}
+
+
+def parse_holding_verdict(raw: dict | None, price: float | None = None, current_stop: float | None = None,
+                          allow_tighten: bool = True) -> dict:
+    """Pure: validate a holding verdict. Anything malformed → KEEP (for a held position, 'do nothing' is
+    the no-op; the mechanical exits still stand). A tighten must be a real tightening: a stop price above
+    the current stop and below the current price — otherwise it degrades to keep with an error."""
+    if not isinstance(raw, dict) or raw.get("action") not in HOLD_ACTIONS:
+        return {"action": "keep", "error": "malformed verdict", "raw": raw}
+    action = raw["action"]
+    out = {"action": action, "new_stop_price": None,
+           "confidence": int(_clip(raw.get("confidence"), 0, 100, 0)),
+           "what_changed": str(raw.get("what_changed") or "")[:240],
+           "reasoning": str(raw.get("reasoning") or "")[:400]}
+    if action == "tighten_stop":
+        stop = _clip(raw.get("new_stop_price"), 0.0, float("inf"), None)
+        floor = current_stop or 0.0
+        if not allow_tighten or stop is None or not price or not (floor < stop < price):
+            out.update(action="keep", error=f"invalid tighten (stop {raw.get('new_stop_price')}, "
+                                            f"current stop {current_stop}, price {price})")
+        else:
+            out["new_stop_price"] = round(stop, 2)
+    return out
+
+
 def mode() -> str:
     """'off' | 'shadow'. (J5 will add 'binding' — until then anything else behaves as 'off'.)"""
     m = str(getattr(config, "AGENT_JUDGE", "off")).lower()
@@ -116,21 +175,21 @@ def plan_text(leg: str | None, stock_dollars: float | None) -> str:
     return "RULES' PLAN: none."
 
 
-def _call_model(briefing: str, plan: str) -> tuple[dict | None, dict]:
+def _call_model(briefing: str, plan: str, system: str = SYSTEM, tool: dict = TOOL) -> tuple[dict | None, dict]:
     """One forced-tool Sonnet call. Returns (tool input or None, usage dict). Raises on API errors."""
     import anthropic
     from dotenv import load_dotenv
     load_dotenv()   # the scheduled runner must not depend on some other import having loaded .env first
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     msg = client.messages.create(
-        model=config.CLAUDE_MODEL, max_tokens=MAX_TOKENS, temperature=0, system=SYSTEM,
-        tools=[TOOL], tool_choice={"type": "tool", "name": "record_verdict"},
+        model=config.CLAUDE_MODEL, max_tokens=MAX_TOKENS, temperature=0, system=system,
+        tools=[tool], tool_choice={"type": "tool", "name": tool["name"]},
         messages=[{"role": "user", "content": f"{briefing}\n\n{plan}"}],
     )
     usage = {"input_tokens": getattr(msg.usage, "input_tokens", 0),
              "output_tokens": getattr(msg.usage, "output_tokens", 0)}
     for block in msg.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "record_verdict":
+        if getattr(block, "type", None) == "tool_use" and block.name == tool["name"]:
             return block.input, usage
     return None, usage
 
@@ -151,3 +210,23 @@ def judge_entry(ctx: dict, leg: str | None, stock_dollars: float | None = None) 
     cost = llm_budget.cost_of(config.CLAUDE_MODEL, usage["input_tokens"], usage["output_tokens"])
     llm_budget.record_cost(cost)
     return {**parse_verdict(raw), "model": config.CLAUDE_MODEL, "cost_usd": cost, "mode": mode()}
+
+
+def judge_holding(ctx: dict, position_text: str, *, price: float | None = None,
+                  current_stop: float | None = None, allow_tighten: bool = True) -> dict | None:
+    """Verdict for one held position after an event (J3), or None when the judge is off / no briefing.
+    Never raises: a failure or no credit → KEEP tagged with the error (the mechanical exits still stand)."""
+    if mode() == "off" or not ctx or "signal" not in ctx:
+        return None
+    import llm_budget
+    from analysis.agent_context import render
+    if not llm_budget.can_spend():
+        return {"action": "keep", "error": "LLM credit at reserve — review not run"}
+    try:
+        raw, usage = _call_model(render(ctx), position_text, HOLD_SYSTEM, HOLD_TOOL)
+    except Exception as e:  # noqa: BLE001
+        return {"action": "keep", "error": f"review call failed: {e}"}
+    cost = llm_budget.cost_of(config.CLAUDE_MODEL, usage["input_tokens"], usage["output_tokens"])
+    llm_budget.record_cost(cost)
+    return {**parse_holding_verdict(raw, price, current_stop, allow_tighten),
+            "model": config.CLAUDE_MODEL, "cost_usd": cost, "mode": mode()}

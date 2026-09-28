@@ -273,6 +273,15 @@ analysis/agent_judge.py       Entry judge (judgment plan J2): one Sonnet call pe
                               config.AGENT_JUDGE = "shadow" (logged as `judge` on the decision record, changes
                               NOTHING) | "off". ~$0.012 + ~10s per call; cost → llm_budget; skipped at the credit
                               reserve; loads .env itself. Tests stub `_call_model` (tests/conftest.py).
+analysis/holding_review.py    Event-driven holding review (J3) — on the HOLD path of both exit passes, a position is
+                              reviewed only when an EVENT fires: an unseen Finnhub headline (2h per-ticker cooldown —
+                              roundup pieces get tagged to big names; headlines in between batch into the next
+                              review), a move ≥1.5× its avg daily range since the last reference price, or earnings
+                              ≤2 days (once/day). Sonnet `agent_judge.judge_holding` (keep | sell | tighten_stop;
+                              tighten = shares only and must be above the current stop and below price, else keep)
+                              reads the J1 briefing + entry→now, plan, the ORIGINAL thesis/invalidation from the
+                              entry record. Logged as a `review` record; SHADOW → nothing changes. State:
+                              holding_review.json (gitignored). Tests stub `review` (conftest → `_review_impl`).
 storage/decision_log.py       Agent decision log (judgment plan J0) — append-only agent_decisions.jsonl (gitignored):
                               one record per decision {id, ts, mode live|dry, kind entry|exit|stop|halt, ticker,
                               key, action, reason, inputs, …}. EVERY entry candidate is logged, incl. skips and why
