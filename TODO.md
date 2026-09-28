@@ -2,6 +2,20 @@
 
 ## Done
 
+### 50. Shared exit parser — fixes premature "gain target reached" alerts + equity_exit_decision (S1, 2026-09-27) ✅
+**Bug (user-facing, exit emails):** `exit_checker._check_percentage_exit` matched EVERY percentage as a gain
+target, and its stop-exclusion looked up `f"{8.0}%"` in text that says "8%" (never found) — so for
+"target 8% gain, stop loss at 4%" it emailed **"Gain target reached" at +4%**, and for analyst text like
+"…(ATR-sized: avg daily range is 2.2%)" at ~+1.7%. That pushed exits at a fraction of the plan — plausibly
+feeding the scorecard's discipline leak (early closes). Fix: new `analysis/exit_rules.parse_exit_condition` is
+the ONE parser (target = explicit "target X%" else "X% gain/rise/…", never a bare %; stop phrase blanked first;
+earliest week/day/month limit), now used by exit_checker (percentage + time exits), `scorecard.parse_band` and
+dashboard `_stop_loss_price` (3 duplicate regex sets removed). Verified: agrees with the old scorecard parser on
+all 53 real exit conditions (positions + today's recs); the alert path is what changed. Plus pure
+`equity_exit_decision` for the stock leg: hard stop → ATR trail (after +1R, 1 stop-distance off peak) → target →
+time limit, `STOCK_EXIT_DEFAULT` 8%/4%/30d. +3 tests (113). Files: analysis/exit_rules.py (new),
+alerts/exit_checker.py, analysis/scorecard.py, dashboard/common.py, tests.
+
 ### 49. Equity orders review-first + whole-share limit buys (S1, 2026-09-27) ✅
 `robinhood_mcp.place_order` (equity) now previews every order with `review_equity_order` after the shape +
 guard checks, same policy as options: a broker alert BLOCKS a buy (`rejected`), a sell proceeds with the alert
@@ -892,9 +906,8 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
     (2) ✅ FIXED (#47) `_order_args` could send BOTH `dollar_amount` and `quantity`. (3) ✅ FIXED (#47) `ref_id` was
     `client_id` (deterministic, e.g. `stop-F-11.5`) and options sent none — now a fresh UUID per placement.
 - **S1 foundations:** ~~review-first equity `place_order` + whole-share limit buys in check_order~~ (done #49);
-  ~~order-shape validation + UUID ref_id~~ (done #47); pure `equity_exit_decision()` (rec's target/stop from
-  exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
-  duplicate); ~~shared day-trade counter guard~~ (done #48 — stock entries in S2 must share `_entry_budget`). Unit tests.
+  ~~order-shape validation + UUID ref_id~~ (done #47); ~~pure `equity_exit_decision()`~~ (done #50 — S3 feeds it
+  the rec's exit_condition + a `peak_tracker` key like `eq:TICKER`); ~~shared day-trade counter guard~~ (done #48 — stock entries in S2 must share `_entry_budget`). Unit tests.
 - **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on
   agentic BP; fractional = dollar market order, whole share = limit; anti-churn (`_closed_underlyings`) and kill
   switch / arm flag / credit halt shared with options.

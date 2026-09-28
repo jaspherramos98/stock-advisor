@@ -15,7 +15,7 @@ bailing winners before the target. This module exposes exactly that:
 All pure logic (unit-tested, no network/LLM). `spy_benchmark` is the one optional
 network helper (yfinance) — answers "would just holding SPY have beaten this?".
 """
-import re
+from analysis.exit_rules import parse_exit_condition
 
 # Treat a realized P&L within this fraction of the planned band as "the band was hit"
 # (prices rarely land exactly on the level; 90% of target counts as reaching it).
@@ -27,20 +27,9 @@ def parse_band(exit_condition: str):
     Pull (target_pct, stop_pct) out of an exit_condition string such as
     "target 8% gain, stop loss at 4%". Returns (None, None) for either part it
     can't find. Works for both longs and shorts (same wording; P&L is already
-    stored in the trade's favour by close_position)."""
-    text = (exit_condition or "").lower()
-    target = stop = None
-
-    # "target 8%" or, when phrased without the word target, "... 10% gain".
-    m = re.search(r"target\s*([\d.]+)\s*%", text) or re.search(r"([\d.]+)\s*%\s*gain", text)
-    if m:
-        target = float(m.group(1))
-
-    m = re.search(r"stop(?:\s*loss)?(?:\s*at)?\s*([\d.]+)\s*%", text)
-    if m:
-        stop = float(m.group(1))
-
-    return target, stop
+    stored in the trade's favour by close_position). Delegates to the shared parser."""
+    rule = parse_exit_condition(exit_condition)
+    return rule["target_pct"], rule["stop_pct"]
 
 
 def classify_exit(position: dict) -> str | None:

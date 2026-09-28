@@ -65,13 +65,11 @@ def _stop_loss_price(exit_condition: str, ref_price: float, direction: str = "bu
     - Long:  ref × (1 − X/100)  (you exit when price falls X% below entry)
     - Short: ref × (1 + X/100)  (you exit when price rises X% against you)
     """
-    import re
-    if not exit_condition or not ref_price:
+    from analysis.exit_rules import parse_exit_condition
+    stop_pct = parse_exit_condition(exit_condition)["stop_pct"] if ref_price else None
+    if stop_pct is None:
         return None
-    m = re.search(r"stop\s*loss\s*at\s*(\d+(?:\.\d+)?)\s*%", exit_condition.lower())
-    if not m:
-        return None
-    pct = float(m.group(1)) / 100.0
+    pct = stop_pct / 100.0
     return round(ref_price * (1 + pct), 2) if direction == "short" else round(ref_price * (1 - pct), 2)
 
 

@@ -278,6 +278,50 @@ def test_parse_band():
     assert parse_band("merger close or 10% gain, stop loss at 4%") == (10.0, 4.0)
     assert parse_band("no exit condition set") == (None, None)
 
+def test_parse_exit_condition():
+    from analysis.exit_rules import parse_exit_condition as p
+    assert p("target 8% gain, stop loss at 4%") == {"target_pct": 8.0, "stop_pct": 4.0, "max_days": None}
+    assert p("Target 12% gain, stop-loss 4.5%, exit in 2 weeks") == {"target_pct": 12.0, "stop_pct": 4.5, "max_days": 14}
+    assert p("stop at 3%, 6% rise or 10 days")["target_pct"] == 6.0          # order-independent
+    assert p("target 6% or 9% gain, stop loss at 3%")["target_pct"] == 6.0   # first level hit
+    # Real analyst text: explanatory %s are not targets (this picked 2.2 before the fix)
+    assert p("Target 8% gain, stop loss at 4% (ATR-sized: avg daily range is 2.2%)")["target_pct"] == 8.0
+    assert p("merger close or 10% gain, stop loss at 4%")["target_pct"] == 10.0
+    assert p("hold while RSI < 70%")["target_pct"] is None
+    assert p("1 month or 20 days")["max_days"] == 20                        # earliest limit
+    assert p("") == {"target_pct": None, "stop_pct": None, "max_days": None}
+    assert p(None)["stop_pct"] is None
+
+
+def test_exit_alert_no_longer_fires_gain_at_stop_distance(monkeypatch):
+    # Regression: "target 8% gain, stop loss at 4%" used to alert "gain target reached" at +4%.
+    from alerts import exit_checker as ec
+    monkeypatch.setattr(ec, "get_effective_price", lambda p: 100.0)
+    pos = {"ticker": "ABC", "exit_condition": "target 8% gain, stop loss at 4%", "direction": "buy"}
+    assert ec._check_percentage_exit(pos, 104.0) is None
+    assert ec._check_percentage_exit(pos, 107.6)["alert_type"] == "percentage_gain"   # 0.5 tolerance
+    assert ec._check_percentage_exit(pos, 96.4)["alert_type"] == "stop_loss"
+    short = dict(pos, direction="short")
+    assert ec._check_percentage_exit(short, 96.0) is None                             # +4% for a short
+    assert ec._check_percentage_exit(short, 104.0)["alert_type"] == "stop_loss"
+
+
+def test_equity_exit_decision():
+    from analysis.exit_rules import equity_exit_decision as d
+    rule = {"target_pct": 10.0, "stop_pct": 4.0, "max_days": 20}
+    assert d(100, 95.9, rule)[0] == "close"                        # hard stop
+    assert d(100, 110.0, rule)[0] == "close"                       # target
+    assert d(100, 104.0, rule, peak_price=104.0)[0] == "hold"      # up 1R, at peak
+    assert d(100, 103.0, rule, peak_price=106.0)[0] == "hold"      # 2.8% off peak < 4%
+    act, why = d(100, 101.5, rule, peak_price=106.0)               # 4.2% off a +6% peak → trail
+    assert act == "close" and why.startswith("trail")
+    assert d(100, 101.0, rule, peak_price=103.0)[0] == "hold"      # peak < 1R → no trail yet
+    assert d(100, 101.0, rule, days_held=20)[0] == "close"         # time limit
+    assert d(100, 101.0, {"target_pct": None, "stop_pct": None})[1] == "+1.0%"   # defaults fill in
+    assert d(100, 95.0, {})[0] == "close"                          # default 4% stop
+    assert d(0, 10.0, rule)[0] == "hold" and d(100, None, rule)[0] == "hold"
+
+
 def test_classify_exit():
     # reached ~target → let run
     assert classify_exit({"pnl_pct": 7.3, "exit_condition": "target 8% gain, stop loss at 4%"}) == "target"
