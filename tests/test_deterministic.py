@@ -836,6 +836,65 @@ def test_paper_cycle_runs_the_live_entry_loop(monkeypatch, tmp_path):
     assert pb.get_book()["shares"] == {} and pb.get_book()["closed"][-1]["pnl"] > 0
 
 
+def test_crypto_quote_and_position_parsing():
+    from ingestion import robinhood_mcp as m
+    assert m.crypto_pair("btc") == "BTC-USD" and m.crypto_pair("ETH-USD") == "ETH-USD"
+    assert m._crypto_base("BTCUSD") == "BTC" and m._crypto_base("DOGE-USD") == "DOGE"
+    # Verified live payload shape (2026-09-28): symbols come back unhyphenated.
+    q = m._normalize_crypto_quotes(["btc", "ETH"], {"results": [
+        {"symbol": "BTCUSD", "bid_price": "82510.29", "ask_price": "84079.26", "mark_price": "83294.77"}]})
+    assert q == {"BTC": {"price": 83294.77, "bid": 82510.29, "ask": 84079.26}, "ETH": None}
+    rows = [{"currency": {"code": "BTC"}, "quantity": "0.0002",
+             "cost_bases": [{"direct_cost_basis": "16.00"}]},
+            {"asset_code": "DOGE", "quantity": "0"}]                      # zero quantity → skipped
+    pos = m._normalize_crypto_positions(rows, {"BTC": {"price": 90000.0}})
+    assert len(pos) == 1 and pos[0]["ticker"] == "BTC" and pos[0]["avg_cost"] == 80000.0
+    assert pos[0]["equity"] == 18.0 and pos[0]["pnl_pct"] == 12.5 and pos[0]["asset_type"] == "crypto"
+
+
+def test_crypto_order_shape_preview_and_dry_run(monkeypatch):
+    import config
+    from ingestion import robinhood_mcp as m
+    from trading_guards import GuardState, OrderIntent
+    assert m._crypto_order_shape_error(OrderIntent(ticker="BTC", side="buy", dollars=0.5)) is not None
+    assert m._crypto_order_shape_error(OrderIntent(ticker="BTC", side="buy", dollars=5, order_type="limit")) is not None
+    assert m._crypto_order_args(OrderIntent(ticker="btc", side="sell", quantity=0.000123400), "A") == \
+        {"rhs_account_number": "A", "symbol": "BTC-USD", "side": "sell", "type": "market", "quantity": "0.0001234"}
+    assert m._crypto_preview_alert({"data": {"order": {"id": "x"}, "estimated_fee": "0"}}) is None
+    assert m._crypto_preview_alert({"data": {"detail": "no crypto account"}}).startswith("preview returned no order")
+    assert m._crypto_preview_alert({"data": {"order": {}, "errors": ["x"]}}).startswith("errors")
+
+    calls = []
+    monkeypatch.setattr(config, "DRY_RUN", True)
+    monkeypatch.setattr(m, "_call_tool", lambda name, args: calls.append(name) or {"data": {"errors": ["bad"]}})
+    buy = OrderIntent(ticker="BTC", side="buy", dollars=5.0, client_id="b")
+    assert m.place_crypto_order(buy, GuardState(start_equity=40), 40, "A")["status"] == "rejected"   # preview problem blocks a buy
+    sell = OrderIntent(ticker="BTC", side="sell", quantity=0.0001, client_id="s")
+    assert m.place_crypto_order(sell, GuardState(start_equity=40), 40, "A")["status"] == "dry_run"   # …never an exit
+    assert calls == ["preview_crypto_order", "preview_crypto_order"]                                # nothing placed
+
+
+def test_paper_crypto_book_is_separate(monkeypatch, tmp_path):
+    from alerts.paper_broker import PaperBroker
+    from ingestion import robinhood_mcp as live
+    from storage import paper_book as pb
+    from trading_guards import GuardState, OrderIntent
+    monkeypatch.setattr(pb, "_FILE", str(tmp_path / "paper.json"))
+    monkeypatch.setattr(live, "fetch_crypto_quotes",
+                        lambda t: {x.upper(): {"price": 100.0, "bid": 99.0, "ask": 101.0} for x in t})
+    monkeypatch.setattr(live, "fetch_quotes", lambda t: {x: {"price": 5.0} for x in t})
+    pb.reset(40.0)
+    b, st = PaperBroker(), GuardState(start_equity=40.0)
+    assert b.place_crypto_order(OrderIntent(ticker="SOL", side="buy", dollars=10.1, client_id="c"), st, 40)["status"] == "placed"
+    assert b.place_order(OrderIntent(ticker="SOL", side="buy", dollars=5.0, client_id="s"), st, 29.9)["status"] == "placed"
+    bk = pb.get_book()
+    assert abs(bk["crypto"]["SOL"]["shares"] - 0.1) < 1e-12 and bk["shares"]["SOL"]["shares"] == 1.0  # coin ≠ stock SOL
+    assert [f["key"] for f in bk["fills"]] == ["eq:SOL"]                                   # crypto isn't a PDT fill
+    assert [p["ticker"] for p in b.fetch_crypto_positions()] == ["SOL"]
+    rec = pb.sell_shares("SOL", 1, 99.0, "exit", leg="crypto")
+    assert rec["leg"] == "crypto" and rec["pnl"] == -0.2 and "SOL" in pb.get_book()["shares"]
+
+
 def test_paper_fill_price_crosses_the_spread():
     from alerts.paper_broker import fill_price
     q = {"price": 12.41, "bid": 12.40, "ask": 12.42}
