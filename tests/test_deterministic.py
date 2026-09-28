@@ -931,6 +931,101 @@ def test_option_review_clean_open_proceeds(monkeypatch):
     assert mcp.place_option_order(intent, st, buying_power=500.0, account_number="AGENTIC")["status"] == "dry_run"
 
 
+def _fill(key, effect, day, ts, qty=1):
+    import datetime as dt
+    return {"key": key, "effect": effect, "qty": qty, "ts": ts, "date": dt.date(2026, 9, day)}
+
+
+def test_count_day_trades():
+    import datetime as dt
+    from trading_guards import count_day_trades
+    window = [dt.date(2026, 9, d) for d in (25, 24, 23, 22, 21)]
+    today = dt.date(2026, 9, 25)
+    fills = [
+        _fill("A", "open", 22, "t1"), _fill("A", "close", 22, "t2"),                 # 1 day trade
+        _fill("B", "open", 23, "t1"), _fill("B", "close", 23, "t2"),
+        _fill("B", "open", 23, "t3"), _fill("B", "close", 23, "t4"),                 # +2 (round trips)
+        _fill("C", "open", 23, "t1", 2), _fill("C", "close", 23, "t2", 2),           # +1 (one sell)
+        _fill("D", "open", 22, "t1"), _fill("D", "close", 24, "t2"),                 # overnight → 0
+        _fill("E", "close", 24, "t1"),                                               # close only → 0
+        _fill("F", "open", 18, "t1"), _fill("F", "close", 18, "t2"),                 # outside window
+        _fill("G", "open", 25, "t1"),                                                # opened today, held
+        _fill("H", "open", 25, "t1"), _fill("H", "close", 25, "t2"),                 # +1, not reserved
+    ]
+    assert count_day_trades(fills, window, today) == (5, 1)
+
+
+def test_day_trade_budget_reserves_same_day_exits():
+    import datetime as dt
+    from trading_guards import day_trade_budget
+    window = [dt.date(2026, 9, d) for d in (25, 24, 23, 22, 21)]
+    today = dt.date(2026, 9, 25)
+    assert day_trade_budget([], window, today, 42.0) == 3
+    one_used_one_held = [_fill("A", "open", 22, "t1"), _fill("A", "close", 22, "t2"),
+                         _fill("G", "open", 25, "t1")]
+    assert day_trade_budget(one_used_one_held, window, today, 42.0) == 1
+    three_used = [f for k in "ABC" for f in (_fill(k, "open", 23, "t1"), _fill(k, "close", 23, "t2"))]
+    assert day_trade_budget(three_used, window, today, 42.0) == 0
+    assert day_trade_budget(three_used, window, today, 30_000.0) is None       # $25k exempt
+
+
+def test_fills_from_broker_orders():
+    import datetime as dt
+    from ingestion.robinhood_mcp import _fills_from_option_orders, _fills_from_equity_orders
+    today = dt.date(2026, 9, 25)
+    opt = [
+        {"state": "filled", "pending_quantity": "0", "legs": [{"option_id": "o1", "position_effect": "close",
+         "executions": [{"quantity": "2.0", "trade_date": "2026-09-08", "timestamp": "2026-09-08T13:58:17Z"}]}]},
+        {"state": "queued", "pending_quantity": "1.0", "legs": [{"option_id": "o2", "position_effect": "open",
+         "executions": []}]},                                                        # working buy → reserve
+        {"state": "cancelled", "pending_quantity": "0", "legs": [{"option_id": "o3", "position_effect": "open",
+         "executions": []}]},                                                        # dead → nothing
+    ]
+    f = _fills_from_option_orders(opt, today)
+    assert f[0] == {"key": "opt:o1", "effect": "close", "qty": 2.0, "ts": "2026-09-08T13:58:17Z",
+                    "date": dt.date(2026, 9, 8)}
+    assert f[1]["key"] == "opt:o2" and f[1]["effect"] == "open" and f[1]["date"] == today
+    assert len(f) == 2
+
+    eq = [
+        # 01:30 UTC on the 15th = 21:30 ET on the 14th → dated the 14th (Eastern trading date)
+        {"side": "sell", "state": "filled", "instrument_id": "i1",
+         "executions": [{"quantity": "1.0", "timestamp": "2026-08-15T01:30:00Z"}]},
+        {"side": "buy", "state": "queued", "instrument_id": "i2", "quantity": None,
+         "cumulative_quantity": "0", "executions": []},                              # $-based working buy
+    ]
+    f = _fills_from_equity_orders(eq, today)
+    assert f[0]["key"] == "eq:i1" and f[0]["effect"] == "close" and f[0]["date"] == dt.date(2026, 8, 14)
+    assert f[1] == {"key": "eq:i2", "effect": "open", "qty": 1.0, "ts": "~pending", "date": today}
+
+
+def test_recent_trading_days_skips_weekends_and_holidays():
+    import datetime as dt
+    from market_hours import recent_trading_days
+    # Tue 2026-09-08 back 5: Labor Day Mon 09-07 + weekend skipped
+    assert recent_trading_days(5, dt.date(2026, 9, 8)) == [
+        dt.date(2026, 9, 8), dt.date(2026, 9, 4), dt.date(2026, 9, 3), dt.date(2026, 9, 2), dt.date(2026, 9, 1)]
+
+
+def test_entries_stop_when_pdt_budget_exhausted(monkeypatch):
+    from alerts import agentic_options as ao
+    monkeypatch.setattr(ao, "_signals", lambda: [{"ticker": "AAA", "direction": "buy"},
+                                                 {"ticker": "BBB", "direction": "buy"}])
+    monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: set())
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral"})
+    out = ao._run_entries(mcp=None, acct="A", buying_power=100.0, verbose=False, max_new=0)
+    assert out == [{"ticker": "AAA", "status": "skipped", "reason": "PDT day-trade budget exhausted"}]
+
+
+def test_entry_budget_fails_closed():
+    from alerts.agentic_options import _entry_budget
+
+    class Boom:
+        def day_trade_budget(self, *a):
+            raise RuntimeError("orders unreadable")
+    assert _entry_budget(Boom(), "A", 42.0, verbose=False) == 0
+
+
 def test_plan_protective_stops():
     from alerts.agentic_stops import plan_protective_stops, _stop_price
     # stop price = current × (1 − pct/100)

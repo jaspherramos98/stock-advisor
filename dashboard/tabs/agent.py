@@ -6,7 +6,8 @@ import streamlit as st
 import pandas as pd
 import os
 import plotly.graph_objects as go
-from dashboard.common import _c_agentic_bp, _c_agentic_equity, _c_option_orders, _c_option_positions, _c_option_quote
+from dashboard.common import (_c_agentic_bp, _c_agentic_equity, _c_day_trade_budget, _c_option_orders,
+                              _c_option_positions, _c_option_quote)
 
 
 def render() -> None:
@@ -41,12 +42,17 @@ def render() -> None:
         # what actually governs whether the agent trades real money.
         _arm_path = os.path.join(os.path.dirname(_HALT_FLAG), "agent_live.arm")
         _armed = os.path.exists(_arm_path)
-        m1, m2, m3, m4 = st.columns(4)
+        _pdt = _c_day_trade_budget(_acct, _agbp) if _acct else None
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Agent mode", "🔴 ARMED — LIVE" if _armed else "🟢 PAPER (unarmed)")
         m2.metric("Kill switch", "⛔ HALTED" if _halted else "▶ active")
         m3.metric("Agentic buying power", f"\\${_agbp:,.2f}" if _agbp is not None else "—")
         m4.metric("LLM credit left", f"\\${_led['remaining']:,.2f}"
                   if _led["balance"] > 0 else "not set")
+        m5.metric("New entries (PDT)", "—" if _pdt is None else str(_pdt),
+                  help="Positions the agent may still open without risking a pattern-day-trader flag: "
+                       "3 day trades per 5 business days, minus trades used and positions opened today "
+                       "(each reserves its same-day exit). Exits are never blocked.")
 
         if not _acct:
             st.warning("Agentic account not connected (USE_MCP off or not logged in). "

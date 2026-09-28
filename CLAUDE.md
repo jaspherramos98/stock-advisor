@@ -116,7 +116,8 @@ argus_stop.bat                Stop the background instance (kills whatever holds
 run_checks.bat                Run exit+entry alert checks once (UTF-8 env + venv python)
 run_checks_silent.vbs         Same, hidden — what the "Argus Alert Checks" scheduled task calls
 market_hours.py               Shared NYSE session logic (holidays/half-days/status) — used by dashboard
-                              header badge, chatbot context, and exit_checker
+                              header badge, chatbot context, and exit_checker. Also `recent_trading_days`
+                              (PDT window) + `et_date` (ISO timestamp → Eastern trading date)
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
                               flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION + ROBINHOOD_MCP_URL (R25) —
                               single source of truth
@@ -130,6 +131,11 @@ chat_budget.py                Chat token budget: history window + max_tokens + t
 trading_guards.py             Broker-agnostic order-safety guardrails (R25) — OrderIntent/GuardState +
                               check_order (idempotency, daily order cap, daily-loss kill switch,
                               buying-power + single-name cap). Pure logic, network-free, unit-tested.
+                              PDT: `count_day_trades` / `day_trade_budget` — ≤3 day trades per 5 NYSE
+                              business days (options + stocks together; exempt ≥$25k). Each position
+                              opened today RESERVES its same-day exit, so only ENTRIES are ever limited.
+                              Live input = `robinhood_mcp.day_trade_budget` (broker fill history incl.
+                              manual trades + still-working opening orders).
 ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B) — mirrors robinhood.py
                               read shapes (fetch_positions/buying_power/quotes) + guarded, DRY_RUN-safe
                               place_order + place_option_order (review-first: `_order_alert` reads the
@@ -209,6 +215,8 @@ alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_sig
                               unit-tested) — exits run before entries, so without this a live signal would
                               sell then re-buy the same name in one cycle, paying the round-trip spread and
                               undoing the exit (the churn bug).
+                              PDT: entries stop once the day-trade budget (`_entry_budget`, read AFTER
+                              exits) is spent; an unreadable fill history → 0 entries (fail CLOSED).
                               EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
                               (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
                               market-hours gated, kill switch `agentic_halt.flag`, LLM-credit halt on entries.
@@ -641,7 +649,8 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
    **📊 Paper trading**: virtual account (storage/paper_book) the agent trades vs live option prices —
    equity/cash/realized P&L/win-rate metrics, open+closed paper tables, Run-paper-cycle + Reset buttons.
    **🕯 Live chart**: plotly candlesticks (get_equity_historicals) per ticker/interval with paper BUY/SELL
-   markers + refresh. Then: status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit left);
+   markers + refresh. Then: status metrics (DRY_RUN vs LIVE-capable, kill switch, agentic buying power, LLM credit
+   left, **New entries (PDT)** = remaining day-trade budget, `_c_day_trade_budget` 60s);
    **LLM credit ledger** control (set balance/reserve — `llm_budget`); **kill switch** toggle
    (creates/removes `agentic_halt.flag`); **Preview cycle** (dry run, places nothing) and a guarded
    **Run LIVE cycle** (real orders, confirm-checkbox, market-hours only) — both scope `config.DRY_RUN`

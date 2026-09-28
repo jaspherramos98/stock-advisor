@@ -2,6 +2,21 @@
 
 ## Done
 
+### 48. PDT day-trade guard for the agent (S1, 2026-09-27) ✅
+The live options agent had NO pattern-day-trader protection. Replaying the real fill history shows it made **7 day
+trades on 2026-08-24/25** (5 + 2 — agent entries closed same day, mostly by hand during the churn bug), past the
+3-per-5-days limit. Whether Robinhood flagged the account isn't readable via the MCP (check the app's day-trade
+counter). New: pure `trading_guards.count_day_trades` / `day_trade_budget` (≤3 per 5 NYSE business days, options +
+stocks together, exempt ≥$25k; conservative pairing — may over-count, never under-count). Each position opened
+today RESERVES its same-day exit, so the guard only ever limits ENTRIES — exits are never blocked. Live input
+`robinhood_mcp.day_trade_budget` reads the broker's own fills (`get_option_orders`/`get_equity_orders`, created
+≥ window start − 10 days for GTC fills) so manual trades + restarts count; still-working opening orders reserve a
+slot too. `agentic_options._entry_budget` reads it AFTER exits and fails CLOSED (unreadable → 0 entries).
+`market_hours.recent_trading_days` + `et_date`. Agent tab: **New entries (PDT)** metric. Verified: counter matches a
+hand count of the real Aug 24–25 fills (7); live budget now = 3; DRY cycle + headless dashboard clean. +7 tests (107).
+Files: trading_guards.py, market_hours.py, ingestion/robinhood_mcp.py, alerts/agentic_options.py,
+dashboard/common.py, dashboard/tabs/agent.py, tests.
+
 ### 47. Order shape validation + per-placement ref_id (S1 bugs 2 + 3, 2026-09-27) ✅
 **Bug 2:** `_order_args` could send both `dollar_amount` and `quantity` (broker wants exactly one) and silently
 turned an unknown order_type into `market`. New pure `robinhood_mcp._order_shape_error(intent)` enforces the S0
@@ -870,7 +885,7 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
   `trading_guards.check_order` requires `dollars` on every BUY, so a whole-share limit buy is guard-rejected today
   → extend it to accept `quantity × limit_price` before S2; pure `equity_exit_decision()` (rec's target/stop from
   exit_condition + R24 structure, trailing via `peak_tracker`, time exits — reuse exit_checker parsers, don't
-  duplicate); shared day-trade counter guard (options + stocks; PDT applies per S0). Unit tests.
+  duplicate); ~~shared day-trade counter guard~~ (done #48 — stock entries in S2 must share `_entry_budget`). Unit tests.
 - **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on
   agentic BP; fractional = dollar market order, whole share = limit; anti-churn (`_closed_underlyings`) and kill
   switch / arm flag / credit halt shared with options.
