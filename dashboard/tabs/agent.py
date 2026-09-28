@@ -1,10 +1,9 @@
 """
-Agent — observe/control the autonomous options agent (paper book, live chart, ledger, kill switch, runs).
+Agent — observe/control the autonomous options agent (mode Off/Paper/Live, paper book, live chart, ledger, runs).
 Extracted verbatim from dashboard/app.py (tab 6); rendered via render().
 """
 import streamlit as st
 import pandas as pd
-import os
 import plotly.graph_objects as go
 from dashboard.common import (_c_agentic_bp, _c_agentic_equity, _c_day_trade_budget, _c_option_orders,
                               _c_option_positions, _c_option_quote)
@@ -14,7 +13,7 @@ def render() -> None:
     st.subheader("🤖 Agentic options agent")
     st.caption("Autonomous options trader on the **isolated Agentic pilot** account only "
                    "(never your main book). Observe what it holds and would do, override any "
-                   "decision, and control run mode + the kill switch. Position size is uncapped "
+                   "decision, and set its mode. Position size is uncapped "
                    "by design — this is a disposable-capital experiment, high-variance / likely -EV.")
 
     import config as _cfg
@@ -22,7 +21,8 @@ def render() -> None:
     try:
         from ingestion import robinhood_mcp as _amcp
         from ingestion import options_data as _aod
-        from alerts.agentic_options import run_options_agent, _HALT_FLAG, _run_exits
+        from alerts.agentic_options import run_options_agent
+        import agent_mode as _mode
         from analysis.options_strategies import option_exit_decision, DEFAULT_EXIT
         from trading_guards import OptionOrderIntent, GuardState
         from ingestion import mcp_auth as _amcpauth
@@ -33,23 +33,35 @@ def render() -> None:
 
     if _agent_ok:
         _acct = _amcp.agentic_account_number() if _amcp.is_available() else None
-        _halted = os.path.exists(_HALT_FLAG)
         _agbp = _c_agentic_bp(_acct) if _acct else None
         _led = _lb.get_state()
 
-        # The scheduler decides live-vs-paper by the ARM FILE, not config.DRY_RUN (which is a
-        # static default the scheduler overrides at runtime). So show the armed state — that's
-        # what actually governs whether the agent trades real money.
-        _arm_path = os.path.join(os.path.dirname(_HALT_FLAG), "agent_live.arm")
-        _armed = os.path.exists(_arm_path)
+        # --- the ONE control: what the scheduled agent does every cycle ---
+        _labels = {"off": "⛔ Off — does nothing", "paper": "🟢 Paper — fake money, real prices",
+                   "live": "🔴 Live — real money"}
+        _cur = _mode.get_mode()
+        _pick = st.radio("Agent mode", _mode.MODES, index=_mode.MODES.index(_cur),
+                         format_func=_labels.get, horizontal=True)
+        if _pick != _cur:
+            if _pick == "live" and not st.checkbox(
+                    "I understand — the agent will place REAL orders (options + shares, shares capped at "
+                    f"\\${_cfg.AGENT_STOCK_BUDGET_CAP:g})" if _cfg.AGENT_STOCK_BUDGET_CAP is not None
+                    else "I understand — the agent will place REAL orders (options + shares, uncapped)",
+                    key="agent_mode_live_confirm"):
+                st.warning("Tick the box to switch to Live.")
+            else:
+                _mode.set_mode(_pick)
+                st.rerun()
+        st.caption("Takes effect on the next scheduled cycle (every 20 min, market hours). Paper still exits "
+                   "any real positions left from Live. Off stops everything, exits included — resting stops "
+                   "on shares still protect at Robinhood.")
+
         _pdt = _c_day_trade_budget(_acct, _agbp) if _acct else None
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Agent mode", "🔴 ARMED — LIVE" if _armed else "🟢 PAPER (unarmed)")
-        m2.metric("Kill switch", "⛔ HALTED" if _halted else "▶ active")
-        m3.metric("Agentic buying power", f"\\${_agbp:,.2f}" if _agbp is not None else "—")
-        m4.metric("LLM credit left", f"\\${_led['remaining']:,.2f}"
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Agentic buying power", f"\\${_agbp:,.2f}" if _agbp is not None else "—")
+        m2.metric("LLM credit left", f"\\${_led['remaining']:,.2f}"
                   if _led["balance"] > 0 else "not set")
-        m5.metric("New entries (PDT)", "—" if _pdt is None else str(_pdt),
+        m3.metric("New entries (PDT)", "—" if _pdt is None else str(_pdt),
                   help="Positions the agent may still open without risking a pattern-day-trader flag: "
                        "3 day trades per 5 business days, minus trades used and positions opened today "
                        "(each reserves its same-day exit). Exits are never blocked.")
@@ -61,8 +73,8 @@ def render() -> None:
         # --- Paper trading (simulation) ---
         st.markdown("### 📊 Paper trading — simulated, zero money at risk")
         st.caption("The agent trades a VIRTUAL account against live option prices so you can "
-                       "judge the strategies before arming real money. The scheduler runs this every "
-                       "cycle while unarmed.")
+                       "judge the strategies before going Live. The scheduler runs this every "
+                       "cycle in Paper mode.")
         try:
             from storage import paper_book as _pb
             from ingestion import options_data as _pod2
@@ -274,44 +286,22 @@ def render() -> None:
 
         # --- controls ---
         st.markdown("### 🎛 Controls")
-        k1, k2 = st.columns(2)
-        with k1:
-            if _halted:
-                if st.button("▶ Remove kill switch (resume)", use_container_width=True):
-                    try:
-                        os.remove(_HALT_FLAG)
-                    except OSError:
-                        pass
-                    st.rerun()
-            else:
-                if st.button("⛔ HALT agent (kill switch)", use_container_width=True, type="primary"):
-                    with open(_HALT_FLAG, "w", encoding="utf-8") as _f:
-                        _f.write("halted from dashboard\n")
-                    st.rerun()
-        with k2:
-            _stocks_on = bool(getattr(_cfg, "AGENT_TRADE_STOCKS", False))
-            _prev_stocks = st.checkbox("Include the stock leg in the preview", value=_stocks_on,
-                                       key="agent_preview_stocks",
-                                       help="Dry-run only. The LIVE cycle follows config.AGENT_TRADE_STOCKS "
-                                            f"(currently {'ON' if _stocks_on else 'OFF'}).")
-            if st.button("🔮 Preview cycle (dry run — places nothing)", use_container_width=True,
-                         disabled=not _acct):
-                _old = _cfg.DRY_RUN
-                _cfg.DRY_RUN = True
-                try:
-                    st.session_state["agent_preview"] = run_options_agent(verbose=False,
-                                                                          stocks=_prev_stocks)
-                finally:
-                    _cfg.DRY_RUN = _old
-                st.rerun()
+        if st.button("🔮 Preview cycle (dry run — places nothing)", use_container_width=True,
+                     disabled=not _acct or _cur == "off"):
+            _old = _cfg.DRY_RUN
+            _cfg.DRY_RUN = True
+            try:
+                st.session_state["agent_preview"] = run_options_agent(verbose=False)
+            finally:
+                _cfg.DRY_RUN = _old
+            st.rerun()
 
-        # LIVE run — explicit, guarded, scoped (never flips DRY_RUN process-wide).
-        with st.expander("🔴 Run a LIVE cycle (places REAL orders)"):
-            st.warning("This places real orders on the agentic account with real money — options, plus "
-                           f"shares when the stock leg is ON (it's {'ON' if _stocks_on else 'OFF'}). "
-                           "Uncapped option size. Only runs during market hours.")
+        # LIVE run now — only in Live mode; explicit, guarded, scoped (never flips DRY_RUN process-wide).
+        with st.expander("🔴 Run a LIVE cycle now (places REAL orders)"):
+            st.warning("Real orders on the agentic account — options (uncapped size) and shares (capped by "
+                       "AGENT_STOCK_BUDGET_CAP). Market hours only. Available in Live mode only.")
             _confirm = st.checkbox("I understand — trade real money now", key="agent_live_confirm")
-            if st.button("Execute LIVE cycle", disabled=not (_confirm and _acct and not _halted)):
+            if st.button("Execute LIVE cycle", disabled=not (_confirm and _acct and _cur == "live")):
                 _old = _cfg.DRY_RUN
                 _cfg.DRY_RUN = False
                 try:

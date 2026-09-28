@@ -56,12 +56,12 @@ How all components, files, and external APIs connect.
 - Watch List — what Argus monitors (exit alerts, pinned buy triggers with 1-day expiry) + ticker watchlist
 - History — exported pipeline runs from Google Sheets with charts
 - 🤖 Agent — observe/control the autonomous options agent: paper book, live candlestick with buy/sell
-  markers, LLM credit ledger, kill switch, preview/live cycles, positions + Close-now
+  markers, LLM credit ledger, Off/Paper/Live mode, preview/live cycles, positions + Close-now
 
-**Autonomous options agent** (isolated Robinhood Agentic account, disposable pilot money)
-- Trades long calls/puts from Argus's own buy/short signals through 5 codified strategies
-- Trailing take-profit exits, anti-churn, kill switch, LLM-credit halt; DRY_RUN unless explicitly armed
-- Stock (share) trading for the agent is planned — see TODO.md
+**Autonomous agent** (isolated Robinhood Agentic account, disposable pilot money)
+- One control: agent mode Off / Paper / Live (Agent tab); defaults to Paper — never real money unless you pick Live
+- Trades long calls/puts through 5 codified strategies, plus shares for moderate-conviction buys (capped)
+- Trailing take-profit exits, anti-churn, LLM-credit halt, PDT guard; a Sonnet judge reviews every call in shadow mode
 
 **Positions**
 - Add from recommendations with one click (uses live market price by default)

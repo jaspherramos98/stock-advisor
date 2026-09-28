@@ -5,8 +5,8 @@ ROUTING (approved plan, conviction-based): the aggressive options leg takes the 
 highly_recommended or conviction ≥ OPTION_CONVICTION — plus every bearish idea (shares can't be
 shorted on this account, so bearish = puts). Other buys become share positions (the core). An
 options-routed buy with no affordable contract falls back to shares rather than being dropped. Crypto
-never routes to shares (the MCP can't trade it). With config.AGENT_TRADE_STOCKS off, everything
-routes to options — the agent behaves exactly as before.
+never routes to shares (the MCP can't trade it). The stock leg is always on; in live mode its total
+entry cost is capped by config.AGENT_STOCK_BUDGET_CAP.
 
 SIZING: Argus's own pyramid (calculator.portfolio.calculate_allocations — 20/55/25 risk tiers,
 conviction within a tier, 40% single-name cap) over ALL of the cycle's buy signals, on the AGENTIC
@@ -43,10 +43,6 @@ def _conviction(sig: dict) -> float:
         return 0.0
 
 
-def stocks_enabled(override: bool | None = None) -> bool:
-    return bool(getattr(config, "AGENT_TRADE_STOCKS", False)) if override is None else override
-
-
 def stock_room(invested: float, cap: float | None) -> float:
     """$ the stock leg may still commit under config.AGENT_STOCK_BUDGET_CAP (inf when uncapped)."""
     return float("inf") if cap is None else max(0.0, round(cap - (invested or 0.0), 2))
@@ -56,7 +52,7 @@ def budget_cap() -> float | None:
     return getattr(config, "AGENT_STOCK_BUDGET_CAP", None)
 
 
-def route(sig: dict, stocks: bool) -> str | None:
+def route(sig: dict) -> str | None:
     """'option' | 'stock' | None (not tradeable by the agent)."""
     direction = (sig.get("direction") or "").lower()
     if direction == "short":
@@ -64,9 +60,7 @@ def route(sig: dict, stocks: bool) -> str | None:
     if direction != "buy":
         return None
     if sig.get("shares_only"):                            # a fired watch trigger — never an option
-        return "stock" if stocks and can_hold_shares(sig) else None
-    if not stocks:
-        return "option"
+        return "stock" if can_hold_shares(sig) else None
     if sig.get("highly_recommended") or _conviction(sig) >= OPTION_CONVICTION:
         return "option"
     return "stock" if can_hold_shares(sig) else None

@@ -9,7 +9,7 @@ trading-guards vetted, `is_error` honored, DRY_RUN-safe.
 DRY_RUN-safe: with config.DRY_RUN=True it PRINTS the sell-to-close orders it would place and
 sends nothing. Flip config.DRY_RUN=False (edit config.py) to actually sell — during market hours.
 
-Kill switch: `agentic_halt.flag` in the repo root halts before placing anything.
+Works in every agent mode (incl. off) — it's an explicit manual command, like the dashboard's Close now.
 
 Usage:
     venv\\Scripts\\python.exe scripts\\close_all_agent.py          # preview (DRY_RUN, places nothing)
@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from trading_guards import OptionOrderIntent, GuardState
-from alerts.agentic_options import _halted, _market_open, _HALT_FLAG
+from alerts.agentic_options import _market_open
 
 
 def main() -> int:
@@ -36,9 +36,6 @@ def main() -> int:
     if "--live" in sys.argv:
         config.DRY_RUN = False  # scope real placement to this run only; global default stays safe
 
-    if _halted():
-        print(f"HALTED — kill switch present ({_HALT_FLAG}). Remove it to run.")
-        return 1
     if not mcp.is_available():
         print("SKIP — USE_MCP off.")
         return 1

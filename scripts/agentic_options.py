@@ -4,7 +4,7 @@ Run one cycle of the autonomous options agent (Phase 2) on the AGENTIC pilot acc
 DRY_RUN-safe: with config.DRY_RUN=True it logs the option orders it WOULD place (entries +
 exits) and sends nothing. Flip config.DRY_RUN=False to trade for real (during market hours).
 
-Kill switch: create a file `agentic_halt.flag` in the repo root to halt immediately.
+Does nothing when the agent mode is off (agent_mode.py / the Agent tab).
 
 Usage:
     venv\\Scripts\\python.exe scripts\\agentic_options.py
