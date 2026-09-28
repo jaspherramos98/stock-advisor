@@ -107,12 +107,19 @@ def mean_reversion(signal: dict, regime: dict) -> dict | None:
 STRATEGIES = [pre_earnings_iv, post_earnings_momentum, short_dte_momentum,
               mean_reversion, catalyst_momentum]
 
+# Playbooks switched off by the user (applicable_plans skips them; the code stays, so re-enabling is
+# deleting the name here). short_dte_momentum — weekly OTM options at 100% of available buying power
+# on conviction ≥80 in a risk-on tape — was unreachable until the regime-bucket fix (#58); the user
+# chose to keep it OFF until the shadow judge is proven (judgment plan J4 → J5), 2026-09-28.
+DISABLED_STRATEGIES = {"short_dte_momentum"}
+
 
 def applicable_plans(signal: dict, regime: dict) -> list[dict]:
-    """All strategy plans that apply to this signal, in priority order. The loop tries each in
-    turn until one yields a tradable/affordable contract (so an illiquid short-DTE pick falls
+    """All enabled strategy plans that apply to this signal, in priority order. The loop tries each
+    in turn until one yields a tradable/affordable contract (so an illiquid short-DTE pick falls
     through to the catalyst swing instead of dropping the signal)."""
-    return [plan for strat in STRATEGIES if (plan := strat(signal, regime))]
+    return [plan for strat in STRATEGIES
+            if strat.__name__ not in DISABLED_STRATEGIES and (plan := strat(signal, regime))]
 
 
 def select_strategy(signal: dict, regime: dict) -> dict | None:
