@@ -239,7 +239,14 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
 
     regime = _regime()
     use_stocks = stk.stocks_enabled(stocks)
-    signals = stk.rank(_signals())
+    base = _signals()
+    # J2b: today's watches / pins whose "buy when" trigger has fired join as shares-only candidates.
+    try:
+        from alerts.agentic_watch import watch_signals
+        base += watch_signals(exclude={(s.get("ticker") or "").upper() for s in base}, verbose=verbose)
+    except Exception as e:  # noqa: BLE001 — watch triggers are additive; never block real signals
+        print(f"agentic_options: watch-trigger scan failed — {e}")
+    signals = stk.rank(base)
     # `exclude` = underlyings we closed THIS cycle. Exits run before entries, so a just-sold
     # position no longer shows as held — without this the same signal would re-buy it the same
     # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
@@ -277,6 +284,18 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             print(f"agentic_options: briefing failed for {sig.get('ticker')} — {e}")
             return None
 
+    def shadow_judge(ctx, leg, ticker) -> dict | None:
+        try:
+            from analysis.agent_judge import judge_entry
+            verdict = judge_entry(ctx, leg, stock_dollars.get(ticker))
+            if verdict and verbose:
+                print(f"  judge {ticker}: {verdict['decision']} ×{verdict.get('size_multiplier')} — "
+                      f"{verdict.get('thesis') or verdict.get('error', '')}")
+            return verdict
+        except Exception as e:  # noqa: BLE001 — the judge must never break a cycle
+            print(f"agentic_options: judge failed for {ticker} — {e}")
+            return None
+
     for i, sig in enumerate(signals):
         ticker = (sig.get("ticker") or "").upper()
         leg = stk.route(sig, use_stocks)
@@ -286,7 +305,14 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
             log(sig, "skip", "already held (or closed this cycle)")
             continue
         if leg is None:
-            log(sig, "skip", "not tradeable by the agent (e.g. crypto, or shares-only with the stock leg off)")
+            ctx = verdict = None
+            if sig.get("shares_only"):
+                # A fired watch the rules can't take (stock leg off): still brief + judge it, so the
+                # shadow record shows what the judge would have done with watch triggers.
+                ctx = briefing(sig)
+                verdict = shadow_judge(ctx, "stock", ticker)
+            log(sig, "skip", "not tradeable by the agent (e.g. crypto, or shares-only with the stock leg off)",
+                context=ctx, judge=verdict)
             continue
         # PDT: each open position reserves a same-day exit. Out of budget → stop opening (the
         # remaining, lower-ranked signals would only be skipped one by one anyway).
@@ -302,15 +328,7 @@ def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | 
         ctx = briefing(sig)
         # J2 entry judge. SHADOW: the verdict is logged beside the rules' decision and changes
         # nothing below — the J4 review scores it before it's ever allowed to bind.
-        verdict = None
-        try:
-            from analysis.agent_judge import judge_entry
-            verdict = judge_entry(ctx, leg, stock_dollars.get(ticker))
-            if verdict and verbose:
-                print(f"  judge {ticker}: {verdict['decision']} ×{verdict.get('size_multiplier')} — "
-                      f"{verdict.get('thesis') or verdict.get('error', '')}")
-        except Exception as e:  # noqa: BLE001 — the judge must never break a cycle
-            print(f"agentic_options: judge failed for {ticker} — {e}")
+        verdict = shadow_judge(ctx, leg, ticker)
         row, spent, why = None, 0.0, []
         if leg == "option":
             row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)

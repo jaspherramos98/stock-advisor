@@ -2,6 +2,18 @@
 
 ## Done
 
+### 60. Watch triggers become agent candidates (judgment plan J2b, 2026-09-28) ✅
+New `alerts/agentic_watch.py`: today's watch recs with conviction ≥50 plus ALL pinned watches (a pin wins for its
+ticker) are checked every cycle; a trigger FIRES when entry_checker's parser says the level is hit AND the price is
+still within 3% of it (a breakout that already ran, or a pullback that crashed through support, doesn't count); a
+trigger that says "close" only counts in the last 30 minutes of the session. Fired watches join the entry loop as
+`shares_only` signals — `agentic_stocks.route` sends them to shares, never options; while `AGENT_TRADE_STOCKS` is
+off the rules skip them, but they're still briefed + judged so the shadow record covers watch triggers too. With the
+stock leg on they're dollar share buys inside the $20 cap + PDT guard, exit plan = the watch's exit_condition.
+Live scan: the user's pinned watches (GOOGL/LLY/META/MSFT/NVDA…) evaluated, none fired. tests/conftest.py stubs the
+live scan. +4 tests (138). Files: alerts/agentic_watch.py (new), alerts/agentic_stocks.py, alerts/agentic_options.py,
+tests/conftest.py, tests.
+
 ### 59. Sonnet entry judge, shadow mode (judgment plan J2, 2026-09-28) ✅
 New `analysis/agent_judge.py`: for each candidate that reaches a decision, one Sonnet call reads the J1 briefing +
 the rules' plan and answers through a FORCED tool call (`record_verdict`): enter|wait|skip, size_multiplier,
@@ -1006,9 +1018,7 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
   `entry_id`, keeping the file append-only).
 - ~~**J1 context builder**~~ — done #58.
 - ~~**J2 entry judge**~~ — done #59 (shadow).
-- **J2b watch triggers → judge candidates** — drafted `alerts/agentic_watch.py` (conviction ≥50 or pinned, ±3% band,
-  "close" triggers only in the last 30 min, shares-only) feeding the SAME judge, so it weighs the qualitative parts
-  ("on volume", "stabilization candle") a price check can't see.
+- ~~**J2b watch triggers → judge candidates**~~ — done #60.
 - **Pipeline LLM cost isn't in the credit ledger** — `claude_analyst.run_analysis` never calls
   `llm_budget.record_cost` (only chat + the judge do), so "LLM credit left" overstates what's left.
 - **J3 holding review** — event-driven only (new headline on a held ticker, move > ~1.5× ATR, earnings ≤2 days,

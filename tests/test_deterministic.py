@@ -1571,6 +1571,81 @@ def test_shadow_judge_never_changes_the_trade(monkeypatch):
     assert rec["context"]["ticker"] == "LLY"                                # the briefing rides along
 
 
+def test_watch_trigger_fired_rules():
+    from alerts.agentic_watch import fired, needs_close
+    pull = "Pullback to support ~$321.88 on volume before a long entry"
+    assert fired(pull, 320.0, False).startswith("pulled back to $321.88")      # at/under support, within 3%
+    assert fired(pull, 330.0, False) is None                                   # hasn't pulled back
+    assert fired(pull, 300.0, False) is None                                   # crashed through (>3% below)
+    brk = "Break above $344.03 resistance on volume"
+    assert fired(brk, 346.0, False).startswith("broke above $344.03")
+    assert fired(brk, 360.0, False) is None                                    # already ran >3% — don't chase
+    close = "Confirmed bounce and close above $256.16 resistance"
+    assert needs_close(close) and not needs_close(brk)
+    assert fired(close, 257.0, near_close=False) is None                       # intraday ≠ a close
+    assert fired(close, 257.0, near_close=True).startswith("broke above")
+    assert fired("", 100, True) is None and fired(pull, None, True) is None
+
+
+def test_watch_near_close_window():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from alerts.agentic_watch import is_near_close
+    et = ZoneInfo("America/New_York")
+    assert is_near_close(datetime(2026, 9, 28, 15, 40, tzinfo=et)) is True     # Monday 3:40 PM ET
+    assert is_near_close(datetime(2026, 9, 28, 14, 0, tzinfo=et)) is False
+    assert is_near_close(datetime(2026, 9, 27, 15, 45, tzinfo=et)) is False     # Sunday
+
+
+def test_watch_candidates_and_shares_only_route():
+    from alerts.agentic_watch import candidates
+    from alerts.agentic_stocks import route
+    recs = [{"ticker": "LLY", "direction": "watch", "conviction": 52, "entry_trigger": "breaks above $1,210.70"},
+            {"ticker": "AMD", "direction": "watch", "conviction": 35, "entry_trigger": "pullback to $507"},
+            {"ticker": "NVDA", "direction": "buy", "conviction": 80, "entry_trigger": "now"},
+            {"ticker": "META", "direction": "watch", "conviction": 60, "entry_trigger": "now"}]
+    pins = [{"ticker": "AMD", "trigger_text": "pullback to $500", "exit_condition": "target 6% gain"}]
+    got = {c["ticker"]: c for c in candidates(recs, pins)}
+    assert set(got) == {"LLY", "AMD"}                                          # low-conv AMD only via its pin
+    assert got["AMD"]["source"] == "pinned-watch" and got["AMD"]["entry_trigger"] == "pullback to $500"
+    sig = {"ticker": "LLY", "direction": "buy", "conviction": 90, "shares_only": True}
+    assert route(sig, True) == "stock"                                         # even at conv ≥75: never options
+    assert route(sig, False) is None
+
+
+def test_fired_watch_is_judged_even_with_stock_leg_off(monkeypatch):
+    from alerts import agentic_options as ao
+    from alerts import agentic_stocks as stk
+    from alerts import agentic_watch
+    from analysis import agent_context, agent_judge
+    from storage import decision_log as dl
+    monkeypatch.setattr(ao, "_signals", lambda: [])
+    monkeypatch.setattr(agentic_watch, "watch_signals", lambda **k: [
+        {"ticker": "LLY", "direction": "buy", "conviction": 52, "shares_only": True, "source": "watch",
+         "trigger_fired": "broke above $1210.7 (now $1215)", "exit_condition": "target 6% gain, stop loss at 3.8%"}])
+    monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: set())
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral", "detail": {}})
+    monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
+    monkeypatch.setattr(stk, "budget_cap", lambda: None)
+    monkeypatch.setattr(agent_context, "gather", lambda *a, **k: _real_ctx())
+    monkeypatch.setattr(agent_judge, "judge_entry", lambda *a, **k: {"decision": "wait", "size_multiplier": 0.0})
+
+    ao._run_entries(mcp=None, acct="A", buying_power=40.0, verbose=False, max_new=None, stocks=False)
+    rec = dl.read()[-1]
+    assert rec["ticker"] == "LLY" and rec["action"] == "skip" and rec["judge"]["decision"] == "wait"
+    assert rec["inputs"]["source"] == "watch"
+
+    placed = []
+
+    class FakeMcp:
+        def place_order(self, intent, state, buying_power, account_number):
+            placed.append((intent.ticker, intent.order_type))
+            return {"status": "dry_run", "reason": ""}
+
+    ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=None, stocks=True)
+    assert placed == [("LLY", "market")]                                       # stock leg on → a share buy
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 
