@@ -2,6 +2,21 @@
 
 ## Done
 
+### 51. Agent stock leg — routing + entries, DRY_RUN (S2, 2026-09-27) ✅
+New `alerts/agentic_stocks.py`: `route` (HR / conviction ≥75 → options; other buys → shares; shorts → puts;
+crypto never shares), `rank` (best idea first by conviction across both legs), `size_buys` (Argus pyramid over all
+the cycle's buy signals on AGENTIC BP), `plan_buy` / `enter` (dollar-based market buy via review-first
+`place_order`; a live fill records the exit plan in new `storage/agent_stock_book.py` → agent_stocks.json,
+gitignored). `agentic_options._run_entries` refactored into one best-first loop over a SHARED BP pool: options leg
+extracted verbatim into `_try_option_entry`; an options-routed buy with no affordable contract (common at ~$42)
+falls back to shares; held = option underlyings + share tickers + this cycle's closes; one PDT budget for both.
+Gated by new `config.AGENT_TRADE_STOCKS` (False → options-only exactly as before, except signals are now ranked by
+conviction instead of pipeline-before-chat); `run_options_agent(stocks=True)` previews it. Real-run catch: the
+pyramid rounds a name sized AT the 40% cap up a cent (16.768 → 16.77) and the order guard rejected it — sizes are
+now clamped to the floored cap and order dollars floor to the cent. Verified DRY vs live reviews: F $16.76 + T
+$10.48 share buys review clean. +4 tests (117). Files: alerts/agentic_stocks.py, storage/agent_stock_book.py (new),
+alerts/agentic_options.py, config.py, .gitignore, tests.
+
 ### 50. Shared exit parser — fixes premature "gain target reached" alerts + equity_exit_decision (S1, 2026-09-27) ✅
 **Bug (user-facing, exit emails):** `exit_checker._check_percentage_exit` matched EVERY percentage as a gain
 target, and its stop-exclusion looked up `f"{8.0}%"` in text that says "8%" (never found) — so for
@@ -908,9 +923,8 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
 - **S1 foundations:** ~~review-first equity `place_order` + whole-share limit buys in check_order~~ (done #49);
   ~~order-shape validation + UUID ref_id~~ (done #47); ~~pure `equity_exit_decision()`~~ (done #50 — S3 feeds it
   the rec's exit_condition + a `peak_tracker` key like `eq:TICKER`); ~~shared day-trade counter guard~~ (done #48 — stock entries in S2 must share `_entry_budget`). Unit tests.
-- **S2 routing + entries (DRY_RUN):** conviction router; best-idea-first ordering over one BP pool; pyramid on
-  agentic BP; fractional = dollar market order, whole share = limit; anti-churn (`_closed_underlyings`) and kill
-  switch / arm flag / credit halt shared with options.
+- ~~**S2 routing + entries (DRY_RUN)**~~ — done #51 (all share buys = dollar market orders, not whole-share limits:
+  an unfilled resting limit would read as un-held next cycle and invite a duplicate buy).
 - **S3 exits:** every cycle poll exits for all stock positions; whole shares also hold a GTC stop (agentic_stops);
   cancel the resting stop before a poll-based sell (open sell orders hold the shares).
 - **S4 dashboard:** Agent tab — stock positions, exit decision, Close-now, P&L.

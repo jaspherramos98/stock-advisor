@@ -27,6 +27,10 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 #   MCP_PERSISTENT_SESSION — when True, MCP tool calls share ONE open connection per process
 #              (ingestion/mcp_session.py) instead of a ~1.2s handshake per call. Reads retry once
 #              on a broken connection; order placement never retries. False = per-call sessions.
+#   AGENT_TRADE_STOCKS — when True, the autonomous agent also buys SHARES on the agentic account
+#              (alerts/agentic_stocks.py routing: HR / conviction ≥75 → options, other buys → shares).
+#              False = options-only, exactly as before. Stays False until the S5 tiny-live gate
+#              passes (TODO "Stock trading for the agent"); a dry preview can pass stocks=True.
 #
 # USE_MCP=True: the dashboard/pipeline read account data via the official MCP (OAuth refresh
 # tokens → no 429), defaulting to the MAIN account. Requires `mcp[cli]` in the venv + a stored
@@ -36,4 +40,5 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 USE_MCP = True
 DRY_RUN = True
 MCP_PERSISTENT_SESSION = True
+AGENT_TRADE_STOCKS = False
 ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading"

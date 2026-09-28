@@ -161,69 +161,98 @@ def _entry_budget(mcp, acct, equity: float, verbose: bool) -> int | None:
     return budget
 
 
-def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None) -> list[dict]:
+def _try_option_entry(mcp, acct, sig: dict, regime: dict, avail: float, state,
+                      verbose: bool) -> tuple[dict | None, float]:
+    """Options leg for one signal: strategy → affordable contract → sized buy-to-open.
+    Returns (result row, premium committed) or (None, 0) when no strategy/contract fits."""
     from ingestion import options_data as od
     from ingestion import account_reads as ar
     from analysis.options_strategies import applicable_plans, size_contracts
+    from ingestion.signal_context import enrich
+
+    ticker = (sig.get("ticker") or "").upper()
+    sig = enrich(sig)   # add rsi + earnings context for the technical/earnings strategies
+    plans = applicable_plans(sig, regime)
+    if not plans:
+        return None, 0.0
+    spot = (ar.quotes([ticker]).get(ticker) or {}).get("price")
+    if not spot:
+        return None, 0.0
+    # Try strategies in priority order until one yields a tradable/affordable contract.
+    plan, contract = None, None
+    for cand in plans:
+        c = od.select_contract(ticker, spot, cand["right"], cand["dte_min"],
+                               cand["dte_max"], cand["otm_pct"], max_premium=avail)
+        if c:
+            plan, contract = cand, c
+            break
+    if not contract:
+        if verbose:
+            print(f"  {ticker}: no affordable/liquid contract for any strategy")
+        return None, 0.0
+    n = size_contracts(plan["alloc_pct"], avail, contract["cost_1x"])
+    if n < 1:
+        return None, 0.0
+    price = round(contract["ask"], 2)
+    intent = OptionOrderIntent(
+        underlying=ticker, option_id=contract["instrument_id"], right=plan["right"],
+        side="buy", position_effect="open", quantity=n, price=price,
+        strike=contract["strike"], expiration=contract["expiration"],
+        reason=f"{plan['strategy']} (conv {sig.get('conviction')})",
+        client_id=f"opt-{ticker}-{contract['instrument_id']}-{contract['expiration']}",
+    )
+    res = mcp.place_option_order(intent, state, buying_power=avail, account_number=acct)
+    row = {"ticker": ticker, "leg": "option", "strategy": plan["strategy"], "qty": n,
+           "contract": f"{contract['strike']}{plan['right'][0].upper()} {contract['expiration']}",
+           **{k: res[k] for k in ("status", "reason")}}
+    return row, (intent.premium if res["status"] in ("placed", "dry_run") else 0.0)
+
+
+def _run_entries(mcp, acct, buying_power, verbose, exclude=None, max_new: int | None = None,
+                 stocks: bool | None = None) -> list[dict]:
+    """Entries across both legs, best idea first, from ONE shared buying-power pool. Each signal is
+    routed (agentic_stocks.route) to options or shares; an options-routed buy with no affordable
+    contract falls back to shares when the stock leg is on."""
+    from alerts import agentic_stocks as stk
 
     regime = _regime()
+    use_stocks = stk.stocks_enabled(stocks)
+    signals = stk.rank(_signals())
     # `exclude` = underlyings we closed THIS cycle. Exits run before entries, so a just-sold
     # position no longer shows as held — without this the same signal would re-buy it the same
     # cycle, paying the round-trip spread and undoing the exit we just took (the churn bug).
     held = _held_underlyings(mcp, acct) | (exclude or set())
+    if use_stocks:
+        held |= stk.held_tickers(mcp, acct)
+    stock_dollars = stk.size_buys(signals, buying_power) if use_stocks else {}
     state = GuardState(start_equity=buying_power)
     avail = buying_power
     results: list[dict] = []
 
-    from ingestion.signal_context import enrich
-
-    for sig in _signals():
+    for sig in signals:
         ticker = (sig.get("ticker") or "").upper()
-        if ticker in held:
+        leg = stk.route(sig, use_stocks)
+        if not ticker or ticker in held or leg is None:
             continue
         # PDT: each open position reserves a same-day exit. Out of budget → stop opening (the
-        # remaining, lower-priority signals would only be skipped one by one anyway).
+        # remaining, lower-ranked signals would only be skipped one by one anyway).
         if max_new is not None and max_new <= 0:
             if verbose:
                 print(f"  PDT day-trade budget exhausted — no more entries this cycle (next: {ticker})")
             results.append({"ticker": ticker, "status": "skipped", "reason": "PDT day-trade budget exhausted"})
             break
-        sig = enrich(sig)   # add rsi + earnings context for the technical/earnings strategies
-        plans = applicable_plans(sig, regime)
-        if not plans:
+
+        row, spent = (None, 0.0)
+        if leg == "option":
+            row, spent = _try_option_entry(mcp, acct, sig, regime, avail, state, verbose)
+        if row is None and use_stocks and stk.can_hold_shares(sig):   # stock leg, or options fallback
+            row, spent = stk.enter(mcp, acct, sig, stock_dollars.get(ticker, 0.0), avail, state, verbose)
+        if row is None:
             continue
-        spot = (ar.quotes([ticker]).get(ticker) or {}).get("price")
-        if not spot:
-            continue
-        # Try strategies in priority order until one yields a tradable/affordable contract.
-        plan, contract = None, None
-        for cand in plans:
-            c = od.select_contract(ticker, spot, cand["right"], cand["dte_min"],
-                                   cand["dte_max"], cand["otm_pct"], max_premium=avail)
-            if c:
-                plan, contract = cand, c
-                break
-        if not contract:
-            if verbose:
-                print(f"  {ticker}: no affordable/liquid contract for any strategy (skip)")
-            continue
-        n = size_contracts(plan["alloc_pct"], avail, contract["cost_1x"])
-        if n < 1:
-            continue
-        price = round(contract["ask"], 2)
-        intent = OptionOrderIntent(
-            underlying=ticker, option_id=contract["instrument_id"], right=plan["right"],
-            side="buy", position_effect="open", quantity=n, price=price,
-            strike=contract["strike"], expiration=contract["expiration"],
-            reason=f"{plan['strategy']} (conv {sig.get('conviction')})",
-            client_id=f"opt-{ticker}-{contract['instrument_id']}-{contract['expiration']}",
-        )
-        res = mcp.place_option_order(intent, state, buying_power=avail, account_number=acct)
-        results.append({"ticker": ticker, "strategy": plan["strategy"], "qty": n,
-                        "contract": f"{contract['strike']}{plan['right'][0].upper()} {contract['expiration']}",
-                        **{k: res[k] for k in ("status", "reason")}})
-        if res["status"] in ("placed", "dry_run"):
-            avail -= intent.premium  # reserve so later entries don't oversize
+        results.append(row)
+        if spent:
+            avail -= spent   # reserve so later entries don't oversize
+            held.add(ticker)
             if max_new is not None:
                 max_new -= 1
     return results
@@ -376,9 +405,10 @@ def run_paper_agent(verbose: bool = True) -> dict:
     return {"entries": entries, "exits": exits, "mode": "paper"}
 
 
-def run_options_agent(verbose: bool = True) -> dict:
+def run_options_agent(verbose: bool = True, stocks: bool | None = None) -> dict:
     """One full cycle: exits first (free capital), then entries. Honors the kill switch, market
-    hours (for live placement), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}."""
+    hours (for live placement), and DRY_RUN. Returns {'entries': [...], 'exits': [...]}.
+    `stocks` overrides config.AGENT_TRADE_STOCKS for this cycle (e.g. a dry preview of the stock leg)."""
     from ingestion import robinhood_mcp as mcp
 
     if _halted():
@@ -416,5 +446,5 @@ def run_options_agent(verbose: bool = True) -> dict:
         print("-- entries --")
     # Budget is read AFTER exits so this cycle's same-day closes are already counted.
     entries = _run_entries(mcp, acct, bp, verbose, exclude=_closed_underlyings(exits, live=True),
-                           max_new=_entry_budget(mcp, acct, bp, verbose))
+                           max_new=_entry_budget(mcp, acct, bp, verbose), stocks=stocks)
     return {"entries": entries, "exits": exits}

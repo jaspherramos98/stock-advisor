@@ -1110,6 +1110,82 @@ def test_entries_stop_when_pdt_budget_exhausted(monkeypatch):
     assert out == [{"ticker": "AAA", "status": "skipped", "reason": "PDT day-trade budget exhausted"}]
 
 
+def test_stock_routing():
+    from alerts.agentic_stocks import route
+    hr = {"ticker": "A", "direction": "buy", "highly_recommended": True, "conviction": 60}
+    strong = {"ticker": "B", "direction": "buy", "conviction": 75}
+    core = {"ticker": "C", "direction": "buy", "conviction": 68}
+    short = {"ticker": "D", "direction": "short", "conviction": 50}
+    coin = {"ticker": "BTC", "direction": "buy", "conviction": 60, "asset_type": "crypto"}
+    watch = {"ticker": "E", "direction": "watch"}
+    assert [route(s, True) for s in (hr, strong, core, short, coin, watch)] == \
+        ["option", "option", "stock", "option", None, None]
+    # stock leg off → everything tradeable goes to options (behavior before S2)
+    assert [route(s, False) for s in (hr, core, short, coin, watch)] == \
+        ["option", "option", "option", "option", None]
+
+
+def test_stock_rank_and_plan():
+    from alerts.agentic_stocks import rank, plan_buy
+    sigs = [{"ticker": "LOW", "conviction": 60}, {"ticker": "HI", "conviction": 90},
+            {"ticker": "CHAT", "conviction": 72}, {"ticker": "OLD", "confidence_score": 0.8}]
+    assert [s["ticker"] for s in rank(sigs)] == ["HI", "OLD", "CHAT", "LOW"]
+    i = plan_buy({"ticker": "f", "conviction": 68}, dollars=12.349, avail=40.0)
+    assert i.ticker == "F" and i.dollars == 12.34 and i.side == "buy" and i.order_type == "market"
+    # Sized exactly at the 40% cap of $41.92 (16.768) must floor, not round up past the guard's cap.
+    capped = plan_buy({"ticker": "F"}, dollars=0.40 * 41.92, avail=41.92)
+    assert capped.dollars == 16.76
+    assert check_order(capped, GuardState(start_equity=41.92), buying_power=41.92).allowed
+    assert plan_buy({"ticker": "F"}, dollars=12.0, avail=5.0).dollars == 5.0     # capped to what's left
+    assert plan_buy({"ticker": "F"}, dollars=0.8, avail=40.0) is None           # < $1 broker minimum
+
+
+def test_stock_sizing_uses_pyramid_on_agentic_bp():
+    from alerts.agentic_stocks import size_buys
+    sigs = [{"ticker": "A", "direction": "buy", "conviction": 70, "risk_level": "medium"},
+            {"ticker": "B", "direction": "buy", "conviction": 70, "risk_level": "low"},
+            {"ticker": "BTC", "direction": "buy", "conviction": 90, "asset_type": "crypto"}]
+    out = size_buys(sigs, 40.0)
+    assert out["A"] == 16.0          # 55% core pool, capped at 40% of $40
+    assert out["B"] == 10.0          # 25% base pool
+    assert "BTC" not in out and size_buys([], 40.0) == {}
+    # Real case: at BP $41.92 the allocator returns 16.77 for a capped name (16.768 rounded UP),
+    # one cent over the order guard's 40% cap → must be clamped to 16.76.
+    assert size_buys(sigs[:1], 41.92)["A"] == 16.76
+
+
+def test_combined_entries_route_and_share_one_pool(monkeypatch):
+    from alerts import agentic_options as ao
+    from alerts import agentic_stocks as stk
+    sigs = [{"ticker": "CORE", "direction": "buy", "conviction": 68, "risk_level": "medium"},
+            {"ticker": "HOT", "direction": "buy", "conviction": 85, "risk_level": "medium"},
+            {"ticker": "NOCON", "direction": "buy", "conviction": 80, "risk_level": "low"}]
+    monkeypatch.setattr(ao, "_signals", lambda: sigs)
+    monkeypatch.setattr(ao, "_held_underlyings", lambda mcp, acct: set())
+    monkeypatch.setattr(ao, "_regime", lambda: {"risk": "neutral"})
+    monkeypatch.setattr(stk, "held_tickers", lambda mcp, acct: set())
+    order = []
+
+    def fake_option(mcp, acct, sig, regime, avail, state, verbose):
+        order.append(("opt", sig["ticker"], avail))
+        if sig["ticker"] == "HOT":
+            return {"ticker": "HOT", "leg": "option", "status": "dry_run", "reason": ""}, 10.0
+        return None, 0.0                                   # NOCON: no affordable contract
+    monkeypatch.setattr(ao, "_try_option_entry", fake_option)
+
+    class FakeMcp:
+        def place_order(self, intent, state, buying_power, account_number):
+            order.append(("stk", intent.ticker, intent.dollars, buying_power))
+            return {"status": "dry_run", "reason": ""}
+
+    out = ao._run_entries(FakeMcp(), "A", 40.0, verbose=False, max_new=2, stocks=True)
+    # best idea first: HOT (85, option) → NOCON (80, option → falls back to shares) → CORE blocked by PDT
+    assert order[0] == ("opt", "HOT", 40.0)
+    assert order[1] == ("opt", "NOCON", 30.0)              # pool shrank by HOT's premium
+    assert order[2][:2] == ("stk", "NOCON") and order[2][3] == 30.0
+    assert [r.get("leg") or r["status"] for r in out] == ["option", "stock", "skipped"]
+
+
 def test_entry_budget_fails_closed():
     from alerts.agentic_options import _entry_budget
 

@@ -127,7 +127,7 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
                               header badge, chatbot context, and exit_checker. Also `recent_trading_days`
                               (PDT window) + `et_date` (ISO timestamp → Eastern trading date)
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
-                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION + ROBINHOOD_MCP_URL (R25) —
+                              flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_TRADE_STOCKS + ROBINHOOD_MCP_URL (R25) —
                               single source of truth
 llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
                               console balance, record_cost decrements per call, can_spend() halts new
@@ -224,12 +224,26 @@ alerts/agentic_options.py     Autonomous options agent (Phase 2). SIGNALS (`_sig
                               unit-tested) — exits run before entries, so without this a live signal would
                               sell then re-buy the same name in one cycle, paying the round-trip spread and
                               undoing the exit (the churn bug).
+                              ENTRY LOOP (`_run_entries`): signals ranked best-first, each routed to the
+                              options leg (`_try_option_entry`) or the stock leg (agentic_stocks.enter) from
+                              ONE shared BP pool; an options-routed buy with no affordable contract falls back
+                              to shares when the stock leg is on. `run_options_agent(stocks=…)` overrides
+                              config.AGENT_TRADE_STOCKS for one cycle (dry previews).
                               PDT: entries stop once the day-trade budget (`_entry_budget`, read AFTER
                               exits) is spent; an unreadable fill history → 0 entries (fail CLOSED).
                               EXITS: open positions→trailing exit policy (peak_tracker)→close. run_paper_agent
                               (paper) + run_options_agent (dry/live). DRY_RUN-safe, review-first, guarded,
                               market-hours gated, kill switch `agentic_halt.flag`, LLM-credit halt on entries.
                               AGENTIC account only. Position size uncapped (pilot).
+alerts/agentic_stocks.py      Stock (share) leg of the agent (S2) — `route` (HR / conviction ≥75 → options;
+                              other buys → shares; shorts → puts; crypto never shares; flag off → all options),
+                              `rank` (best idea first, conviction desc), `size_buys` (Argus pyramid over ALL
+                              the cycle's buys on AGENTIC BP, clamped to the guard's floored 40% cap), `enter`
+                              (dollar-based MARKET buy — a resting limit could miss and invite a duplicate buy
+                              next cycle). Off unless config.AGENT_TRADE_STOCKS (default False until S5).
+storage/agent_stock_book.py   Plan behind each agent share position (exit_condition, source, conviction, opened
+                              date) → agent_stocks.json (gitignored). Written only on a LIVE placement; S3's exit
+                              pass reads it (no record → STOCK_EXIT_DEFAULT).
 alerts/agentic_stops.py       Auto-exit protective stops (R25, #2 driver) — places a standing GTC
                               stop_market per AGENTIC-account position (set-and-forget; Robinhood
                               auto-sells if hit, no polling). ATR stop % from R24 structure; confirm-first
