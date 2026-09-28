@@ -81,9 +81,8 @@ def _log_chat_usage(usage, sent_messages):
             f"msgs_sent={sent_messages}"
         )
         # Decrement the local credit ledger (Anthropic exposes no live balance API).
-        from llm_budget import cost_of, record_cost
-        record_cost(cost_of(CLAUDE_MODEL, usage.get("input_tokens", 0),
-                            usage.get("output_tokens", 0), cache_read))
+        from llm_budget import record_usage
+        record_usage(CLAUDE_MODEL, usage)
     except Exception:
         pass
 

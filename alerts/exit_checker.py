@@ -282,6 +282,8 @@ Check if any headlines signal that an exit condition has been met."""
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
+        from llm_budget import record_usage
+        record_usage(CLAUDE_CHEAP_MODEL, message.usage)
 
         raw = message.content[0].text.strip()
         if raw.startswith("```"):

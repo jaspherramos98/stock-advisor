@@ -70,13 +70,31 @@ def set_balance(amount: float, reserve: float | None = None) -> dict:
 
 
 def cost_of(model: str, input_tokens: int, output_tokens: int,
-            cache_read_tokens: int = 0) -> float:
-    """USD cost of one call. Cache reads bill at ~0.1× input (Anthropic prompt-cache read rate)."""
+            cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float:
+    """USD cost of one call. Cache reads bill at ~0.1× input, cache writes at 1.25× (Anthropic
+    prompt-cache rates)."""
     pin, pout = _PRICES.get(model, _PRICES["claude-sonnet-4-6"])
     return round(
-        (input_tokens * pin + output_tokens * pout + cache_read_tokens * pin * 0.1) / 1_000_000,
+        (input_tokens * pin + output_tokens * pout
+         + cache_read_tokens * pin * 0.1 + cache_write_tokens * pin * 1.25) / 1_000_000,
         6,
     )
+
+
+def record_usage(model: str, usage) -> float:
+    """Record one API call's cost from its `usage` (the SDK's Usage object or a dict). The ONE way
+    every Claude call site updates the ledger — pipeline, exit checker, chat. Returns the cost; never
+    raises."""
+    def get(name: str) -> int:
+        v = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, 0)
+        return int(v or 0)
+    try:
+        cost = cost_of(model, get("input_tokens"), get("output_tokens"),
+                       get("cache_read_input_tokens"), get("cache_creation_input_tokens"))
+    except (TypeError, ValueError):
+        return 0.0
+    record_cost(cost)
+    return cost
 
 
 def record_cost(usd: float) -> None:

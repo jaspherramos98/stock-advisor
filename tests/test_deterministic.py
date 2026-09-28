@@ -919,13 +919,15 @@ def test_catalyst_staleness_gate():
 def test_recommendation_entry_scope_and_staleness(tmp_path, monkeypatch):
     import json as _json
     from alerts import entry_checker as ec
+    from storage import pipeline_cache as pc
     from datetime import date, timedelta
-    monkeypatch.setattr(ec, "CACHE_FILE", str(tmp_path / "pipeline_cache.json"))
+    monkeypatch.setattr(pc, "CACHE_FILE", str(tmp_path / "pipeline_cache.json"))
+    monkeypatch.setattr(pc, "CACHE_BACKUP_FILE", str(tmp_path / "pipeline_cache_backup.json"))
     # Watchlist has only WATCHED; UNTRACKED is not curated.
     monkeypatch.setattr(ec, "_watchlist_tickers", lambda: {"WATCHED", "OLDNEWS"})
     today = date.today().strftime("%Y-%m-%d")
     old = (date.today() - timedelta(days=ec.CATALYST_MAX_AGE_DAYS + 2)).strftime("%Y-%m-%d")
-    (tmp_path / "pipeline_cache.json").write_text(_json.dumps({"recommendations": [
+    recs = [
         {"ticker": "WATCHED",  "direction": "watch", "entry_trigger": "breaks above $10",
          "catalyst_date": today},
         {"ticker": "UNTRACKED", "direction": "watch", "entry_trigger": "breaks above $5",
@@ -934,9 +936,26 @@ def test_recommendation_entry_scope_and_staleness(tmp_path, monkeypatch):
          "catalyst_date": old},                                     # dropped: stale catalyst
         {"ticker": "WATCHED",  "direction": "buy",   "entry_trigger": "now",
          "catalyst_date": today},                                   # dropped: 'now' has no trigger
-    ]}))
+    ]
+    (tmp_path / "pipeline_cache.json").write_text(_json.dumps({"date": today, "recommendations": recs}))
     got = {c["ticker"] for c in ec._candidates_from_recommendations()}
     assert got == {"WATCHED"}
+    # Yesterday's cache (the pipeline didn't run today) → no recommendation alerts at all.
+    (tmp_path / "pipeline_cache.json").write_text(_json.dumps({"date": old, "recommendations": recs}))
+    assert ec._candidates_from_recommendations() == []
+
+
+def test_record_usage_updates_ledger(tmp_path, monkeypatch):
+    import llm_budget as lb
+    monkeypatch.setattr(lb, "_LEDGER", str(tmp_path / "ledger.json"))
+    lb.set_balance(5.0)
+
+    class U:   # the SDK's Usage object shape
+        input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens = 10_000, 2_000, 0, None
+    assert lb.record_usage("claude-sonnet-4-6", U()) == 0.06               # 10k×$3 + 2k×$15 per 1M
+    assert lb.record_usage("claude-sonnet-4-6", {"input_tokens": 0, "cache_creation_input_tokens": 1_000_000}) == 3.75
+    assert lb.get_state()["spent"] == 3.81
+    assert lb.record_usage("claude-sonnet-4-6", object()) == 0.0          # nothing readable → no spend
 
 
 def test_agent_signals_merge_chat_buys(tmp_path, monkeypatch):

@@ -2,6 +2,18 @@
 
 ## Done
 
+### 67. LLM ledger counts every Claude call + entry alerts ignore stale caches + backlog cleanup (2026-09-28) ✅
+- **Ledger:** the daily pipeline analysis (Sonnet, the biggest regular call) and the exit checker's Haiku calls never
+  hit `llm_budget`, so "LLM credit left" — which halts agent entries at the reserve — read high. New
+  `llm_budget.record_usage(model, usage)` (SDK Usage object or dict) is the one recorder: pipeline, exit checker and
+  chat use it. `cost_of` now also bills cache WRITES at 1.25× input (the chat under-counted them).
+- **Stale entry alerts:** `entry_checker` read `pipeline_cache.json` directly, so on a day the pipeline didn't run
+  it could email "buy when" alerts from yesterday's watches. It now uses `pipeline_cache.load_today()` (the same
+  today-only rule as the dashboard and the agent).
+- **Backlog:** removed finished/stale entries (R27 "live pending", R25b, B1), marked the judgment + stock plans with
+  their real status, added the crypto-MCP item. 150 tests. Files: llm_budget.py, analysis/claude_analyst.py,
+  alerts/exit_checker.py, alerts/entry_checker.py, dashboard/app.py, TODO.md, CLAUDE.md, tests.
+
 ### 66. Agent tab cleanup — no duplicate controls, aligned rows (2026-09-28) ✅
 User flagged leftovers after #45/#46. Removed the "Run a LIVE cycle now" expander (Live mode does exactly that),
 the "Run paper cycle now" button (Paper mode does), and the tab's "Sync positions" button (a plain rerun; the
@@ -1085,12 +1097,15 @@ Lowest core-fit; do last or not at all.
 ## Backlog
 
 ### Small follow-ups
+- **Crypto through the MCP:** since 2026-09-27 the Trading MCP LISTS crypto tools (`get_crypto_positions`,
+  `get_crypto_quotes`, `place_crypto_order`, …) but Argus uses none and they're unverified — crypto is still tracked by
+  hand (My Positions). Needs a decision on scope (read-only sync vs agent trading) before building.
 - **Paper realism:** shares fill at the last price (no spread) and paper has no resting stops (a gap through the
   stop fills at the next 20-min poll's price). Fine for judging the rules; revisit if paper P&L looks too rosy.
 - **Archive every pipeline run** (`pipeline_history/<date>.json`) — past recs are lost today (the cache is overwritten
   daily; the Sheets export had only 27 rows from June), so a future judge replay has nothing to replay.
 
-### Agent judgment — PLAN (approved 2026-09-28, not built)
+### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built, J4 data accruing)
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
 batch: buy/short recs → route by conviction (≥75 options, else shares, short → puts) → first matching playbook
 (options_strategies) → pyramid/caps/PDT sizing; exits = fixed option_exit_decision / equity_exit_decision. Watches
@@ -1107,8 +1122,6 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
 - ~~**J1 context builder**~~ — done #58.
 - ~~**J2 entry judge**~~ — done #59 (shadow).
 - ~~**J2b watch triggers → judge candidates**~~ — done #60.
-- **Pipeline LLM cost isn't in the credit ledger** — `claude_analyst.run_analysis` never calls
-  `llm_budget.record_cost` (only chat + the judge do), so "LLM credit left" overstates what's left.
 - ~~**J3 holding review**~~ — done #61 (the "invalidation level hit" trigger was dropped: the entry judge's
   invalidation is free text, not a parseable level — the review instead SHOWS it to the judge on every event).
 - **J4 shadow (2–4 weeks from 2026-09-28)** — scoring tools BUILT (#62: `analysis/judge_scorecard.py`,
@@ -1122,7 +1135,7 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
 **Honest bar:** expect the judge to mostly SKIP. If shadow data shows its skips were no better than its takes,
 turn it off.
 
-### Stock trading for the agent — PLAN (approved 2026-09-27, not built)
+### Stock trading for the agent — PLAN (approved 2026-09-27; S0–S4 built, S5 = first live share buy)
 Goal: the autonomous agent also trades SHARES on the agentic account, alongside options.
 **Decisions (user):** route by conviction — highly_recommended or conviction ≥75 → options (aggressive leg),
 other pipeline buys → stocks (core); **shared buying-power pool**, entries processed **best idea first across
@@ -1170,22 +1183,7 @@ Honest bar: Argus stock picks measured ~net-flat; this automates discipline + 24
 - Not worth it (measured): `_compute_technicals` (0.9ms warm; 469ms was the one-time pandas import); lazy
   `anthropic` import (1.1s, scheduler cold start only).
 
-### R27. Autonomous options agent — Phase 2 (BUILT, DRY_RUN; live pending)
-Agentic account approved for option_level_2 (2026-08-14). Built + verified in DRY_RUN:
-- `ingestion/options_data.py` (contract selection), `trading_guards.OptionOrderIntent`/
-  `check_option_order`, `robinhood_mcp.place_option_order` (leg schema, review-first, is_error, agentic).
-- `analysis/options_strategies.py` (short_dte_momentum + catalyst_momentum, exit policy).
-- `alerts/agentic_options.py` `run_options_agent()` (entries+exits, kill switch `agentic_halt.flag`,
-  market-hours gate) + `scripts/agentic_options.py`.
-Uncapped position size (disposable pilot); guards are correctness-only. 71 tests. Verified DRY_RUN end
-to end (F 15C via strategy fallback, review clean, logged not sent).
-**Remaining:** (1) run a few DRY_RUN cycles during market hours + inspect; (2) verify exit-path field
-mapping against a REAL option position (avg_open_price/expiration shapes unconfirmed — no positions
-existed at build); (3) tiny live cycle (DRY_RUN off, market hours); (4) scheduler (Task Scheduler,
-market-hours gated, like run_checks) + document the kill switch. Blunt: uncapped short-DTE options on an
-unproven signal is high-variance / likely -EV — pilot can go to zero by design.
-
-### R26. Agentic control tab (PARKED — future feature)
+### R26. Agentic control tab (PARKED — mostly superseded by the Agent tab's mode + Sell/Close now)
 A dashboard tab to control the agentic account directly: account view (buying power/positions/open
 orders), a deterministic order ticket (ticker/side/type/$ or shares/price → review_equity_order →
 confirm → place, DRY_RUN-aware), and a "🛡️ Protect positions" button (runs
@@ -1194,37 +1192,6 @@ confirm → place, DRY_RUN-aware), and a "🛡️ Protect positions" button (run
 ticket the user confirms (LLM suggests, never auto-executes). Stocks first; options deferred (R5).
 Parked 2026-08-14 — revisit after the pilot proves the stop flow with a real agentic position.
 
-
-### R25b. Robinhood MCP — authenticated, reads wired + proven; dashboard swap + exits pending
-**DONE (2026-08-14):** funded a dedicated Agentic account + authenticated via `scripts/mcp_login.py`
-(DCR + PKCE + refresh token → 429 dead). All gates resolved (see CLAUDE.md R25): native stop orders
-exist (#1), reads span the MAIN account, orders agentic-only (#4). `ingestion/robinhood_mcp.py` reads
-(`fetch_positions`/`fetch_buying_power`/`fetch_quotes`) wired to the real tools and **verified live**
-(read main buying power $150 + 6 positions with P&L). Orders wired (`place_equity_order`, native stop
-mapping) but DRY_RUN. 62 tests green. Nothing in the app calls it yet (`USE_MCP=False`).
-Remaining:
-1. ✅ **DONE — dashboard reads swapped to MCP (429 gone in-app).** New `ingestion/account_reads.py`
-   dispatcher (MCP when `USE_MCP`, else robin_stocks, no cross-fallback) backs buying power / positions /
-   quotes in `dashboard/app.py` + `ingestion/prices.py`; `main.py` skips robin_stocks news under USE_MCP so
-   no login fires. `config.USE_MCP=True` on this branch (reads MAIN account = the real book; agentic =
-   pilot). Verified live. `git checkout main` / `USE_MCP=False` reverts.
-2. ✅ **DONE (capability) — auto-exit native stops.** `alerts/agentic_stops.py`
-   (`sync_protective_stops`) places a standing GTC `stop_market` per AGENTIC-account position:
-   ATR stop % from R24 structure, confirm-first via `review_equity_order`, DRY_RUN-safe +
-   trading_guards, whole-share only. `scripts/agentic_stops.py` runs it. Verified end-to-end
-   (simulated 1-sh F holding → real structure stop @ $13.07, live review, DRY_RUN place). Main
-   book stays manual (MCP can't order it). **Remaining:** hook it to a dashboard button / the
-   15-min runner, and flip DRY_RUN=False after a live pilot position exists.
-3. **DRY_RUN diff** several clean days → ONE tiny live confirm-first order → then enable.
-   Confirm-first + tiny size until the edge beats SPY across >2 trades.
-4. ✅ **DONE** — silenced the SDK's benign `Session termination failed: 400` teardown warning
-   (`mcp_auth.py` lowers that logger to ERROR).
-5. **Sync positions button** ✅ — synced holdings get R24 structure exits (not flat 10/5).
-Full detail in the plan file `~/.claude/plans/crystalline-sniffing-kurzweil.md`.
-
-### B1. Robinhood MCP sync
-Official read-only position import via agent.robinhood.com MCP instead of
-the unofficial robin_stocks library. More stable long-term.
 
 ### B2. Reactive loading screen
 Show ingestion source icons in real-time during pipeline run so the user

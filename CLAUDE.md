@@ -139,9 +139,11 @@ agent_mode.py                 THE agent control: off | paper | live, in agent_mo
                               off = nothing runs (exits too); paper = paper cycle + live EXITS of any real positions
                               left from live; live = full real cycle (options + shares).
 llm_budget.py                 Local LLM credit ledger (Anthropic has NO live-balance API) — user sets
-                              console balance, record_cost decrements per call, can_spend() halts new
+                              console balance, every Claude call decrements it, can_spend() halts new
                               agent entries + chat when remaining ≤ reserve (default $0.50). Persists to
-                              credit_ledger.json (gitignored). Wired into _log_chat_usage + agentic_options.
+                              credit_ledger.json (gitignored). `record_usage(model, usage)` is THE recorder
+                              (pipeline analysis, exit checker, chat); the judge records via cost_of/record_cost.
+                              A new Claude call site MUST record, or "credit left" reads high (it did, pre-#67).
 chat_budget.py                Chat token budget: history window + max_tokens + the system-prompt
                               char floor that keeps prompt caching alive (R23). Separate module so
                               it's testable without importing app.py (which boots Streamlit)
@@ -684,7 +686,8 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
      live watch in a fresh pipeline run (so a still-valid thesis persists; a true orphan ages out).
   2. **Argus chat's last suggestion** — the `/chat` proxy parses `Buy —`/`Watch — TICKER` action
      lines via `_capture_chat_suggestions`; each capture replaces the prior set.
-  3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`).
+  3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`), read via
+     `pipeline_cache.load_today()` — another day's cache yields no rec alerts (#67).
      **Ephemeral:** `save_cache()` overwrites the cache each run, so an unpinned watch silently
      disappears on the next pipeline run — that's exactly what pinning solves. **Two gates (only this
      source is gated — pinned/chat are explicit opt-ins that always fire):** (a) **watchlist scope** —
