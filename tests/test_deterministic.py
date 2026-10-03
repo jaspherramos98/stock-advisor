@@ -2082,6 +2082,11 @@ def test_judge_scorecard_scoring_and_conclusion():
     assert short["enter"][1]["avg"] > 0
     thin = js.conclusion(js.entry_scores(recs[:3], lambda t: closes[t]), {})
     assert not thin["ready"] and "Not enough data" in thin["text"]
+    # Skip-only fallback: the judge never says enter → judged on whether what it skipped went on to lose.
+    dodged = js.conclusion(js.entry_scores([rec("DN", d, "skip") for d in range(1, 16)], lambda t: closes[t]), {})
+    assert dodged["ready"] and dodged["helps"] and dodged["basis"] == "skip_only" and "dodged losers" in dodged["text"]
+    missed = js.conclusion(js.entry_scores([rec("UP", d, "skip") for d in range(1, 16)], lambda t: closes[t]), {})
+    assert missed["ready"] and not missed["helps"] and "cost real gains" in missed["text"]
     taken = js.taken_trade_scores([
         {"id": "e1", "kind": "entry", "action": "placed", "judge": {"decision": "skip"}},
         {"id": "x1", "kind": "exit", "action": "placed", "entry_id": "e1", "pnl_pct": -12.0}])

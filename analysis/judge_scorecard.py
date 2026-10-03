@@ -116,10 +116,33 @@ def review_scores(records: list[dict], closes_for, horizon: int = 1) -> dict:
     return {k: _stats(v) for k, v in groups.items()}
 
 
+def _skip_only_conclusion(n: dict, h: int, n_enter: int) -> dict:
+    """The judge almost never says 'enter' (first paper week: 0 of 8), so the enter-vs-skip comparison can't
+    form. Binding it would then mean ONE thing — "don't take these trades" — which is testable on its own:
+    did the names it waved off go on to lose? ≤0% avg = its skips dodged losers; ≥ +HELPS_MARGIN_PP = its skips
+    cost real gains; in between = no evidence either way."""
+    avg = n["avg"]
+    base = (f"The judge said 'enter' only {n_enter} time(s); what it waved off returned {avg:+}% on average over "
+            f"{h} days (n={n['n']}, {n['win_rate']}% up). ")
+    if avg <= 0:
+        return {"ready": True, "helps": True, "basis": "skip_only", "text": base +
+                "Its skips dodged losers — binding it (J5) would mostly mean the agent trades far less, and that "
+                "looks right on this sample."}
+    if avg >= HELPS_MARGIN_PP:
+        return {"ready": True, "helps": False, "basis": "skip_only", "text": base +
+                "Its skips cost real gains — binding it would block winners. Keep it in shadow or turn it off."}
+    return {"ready": True, "helps": False, "basis": "skip_only", "text": base +
+            "Roughly flat — no evidence the skips help or hurt yet. Keep it in shadow."}
+
+
 def conclusion(entries: dict, taken: dict) -> dict:
-    """Pure: is there enough data, and does the judge help? (The J5 go/no-go input — the user decides.)"""
+    """Pure: is there enough data, and does the judge help? (The J5 go/no-go input — the user decides.)
+    Normal test: 'enter' beats 'wait/skip' by HELPS_MARGIN_PP. When the judge has (almost) never said enter,
+    falls back to the skip-only test (_skip_only_conclusion)."""
     h = max(HORIZONS)
     e, n = entries["enter"][h], entries["not_enter"][h]
+    if e.get("n", 0) < MIN_SAMPLES and n.get("n", 0) >= MIN_SAMPLES:
+        return _skip_only_conclusion(n, h, e.get("n", 0))
     if e.get("n", 0) < MIN_SAMPLES or n.get("n", 0) < MIN_SAMPLES:
         return {"ready": False,
                 "text": f"Not enough data: {e.get('n', 0)} 'enter' and {n.get('n', 0)} 'wait/skip' verdicts have a "

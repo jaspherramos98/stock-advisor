@@ -2,6 +2,15 @@
 
 ## Done
 
+### 75. Judge scorecard: a skip-only test, since the judge never says "enter" (2026-10-02) ✅
+First paper week: 8 fresh entry verdicts, 0 "enter" (7 skip, 1 wait) → the J4 enter-vs-skip comparison could never
+reach 15 per group. User asked for my recommendation: keep the judge in SHADOW and judge it on what it actually does.
+`judge_scorecard.conclusion` now falls back to `_skip_only_conclusion` when 'enter' < 15 but 'wait/skip' ≥ 15:
+skipped names' 5-day return avg ≤0% → its skips dodged losers (binding it = trade far less, and that looks right);
+≥ +1 pp → its skips cost gains; in between → no evidence. Early read (n=7, 1-day only): skipped names +0.32%, 71% up;
+its holding-review "sell" calls were followed by +0.33% — leaning wrong, far too few to conclude. 159 tests. Files:
+analysis/judge_scorecard.py, CLAUDE.md, tests.
+
 ### 74. Stock cap removed — the agent sizes shares on the full agentic buying power (2026-10-02) ✅
 User decision (explicit, final: "money I'm prepared to lose"): `config.AGENT_STOCK_BUDGET_CAP = None`. The $20 cap
 had locked $19 in three slow positions (BAC/AMZN/JPM) since day one, so every later idea got $1 (AMD hit +5.3% for
@@ -1194,7 +1203,8 @@ shadow 2–4 weeks before binding; agent-originated ideas IN scope (J6).
   invalidation is free text, not a parseable level — the review instead SHOWS it to the judge on every event).
 - **J4 shadow (2–4 weeks from 2026-09-28)** — scoring tools BUILT (#62: `analysis/judge_scorecard.py`,
   `scripts/judge_review.py`, Agent tab scorecard). Remaining: accumulate ≥15 judged 'enter' + ≥15 'wait/skip' with
-  5-day outcomes, then read the conclusion and decide J5. Data only accrues on days with candidates.
+  5-day outcomes — or, since the judge almost never enters, ≥15 skips for the skip-only test (#75) — then read the
+  conclusion and decide J5. Data only accrues on days with candidates.
 - **J5 binding** — only if J4 shows the judge helps; its skips/shrinks/exits become real. Kill switch = config flag.
   Also then decide whether to re-enable `short_dte_momentum` (disabled #63 until the judge is proven).
 - **J6 own ideas** — scanner candidates (`create_scan`/`run_scan`/`get_scanner_*`, real data) through the SAME judge

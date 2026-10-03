@@ -304,7 +304,9 @@ analysis/judge_scorecard.py   Judge scorecard (J4) — scores shadow verdicts vs
                               wait/skip; taken trades → realized P&L by the judge's call; reviews → move after.
                               One sample per ticker/day (reused verdicts excluded). `conclusion()` = J5 input:
                               needs ≥15 per group; "helps" = enter beats wait/skip by ≥1 pp at 5d and isn't worse
-                              on taken trades. `scripts/judge_review.py` prints it; Agent tab "⚖ Judge scorecard".
+                              on taken trades. If the judge (almost) never says enter (week 1: 0 of 8), the
+                              SKIP-ONLY test decides (#75): ≥15 skips whose 5d return avg ≤0% = its skips dodged
+                              losers (helps); ≥+1% = they cost gains; between = no evidence. `scripts/judge_review.py` prints it; Agent tab "⚖ Judge scorecard".
                               Proxy caveat: underlying return ≠ an option trade's P&L.
 analysis/holding_review.py    Event-driven holding review (J3) — on the HOLD path of both exit passes, a position is
                               reviewed only when an EVENT fires: an unseen Finnhub headline (at most ONE news review
