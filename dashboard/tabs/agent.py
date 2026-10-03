@@ -70,8 +70,11 @@ def render() -> None:
 
         # --- Paper trading: the SAME agent code as live, fills are virtual ---
         st.markdown("### 📊 Paper trading — simulated, zero money at risk")
-        st.caption("In Paper mode the scheduler runs the exact live agent (options, shares and crypto, the \\$20 "
-                   "stock and \\$10 crypto caps, PDT, the shadow judge, the decision log) but fills orders here at "
+        def _cap(v):
+            return "no cap" if v is None else f"\\${v:g} cap"
+        st.caption(f"In Paper mode the scheduler runs the exact live agent (options, shares — "
+                   f"{_cap(_cfg.AGENT_STOCK_BUDGET_CAP)} — and crypto — {_cap(_cfg.AGENT_CRYPTO_BUDGET_CAP)} — PDT, "
+                   "the shadow judge, the decision log) but fills orders here at "
                    "live prices instead of sending them — buys at the ask, sells at the bid.")
         _book = {}
         try:
