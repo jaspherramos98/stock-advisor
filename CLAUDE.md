@@ -307,9 +307,10 @@ analysis/judge_scorecard.py   Judge scorecard (J4) — scores shadow verdicts vs
                               on taken trades. `scripts/judge_review.py` prints it; Agent tab "⚖ Judge scorecard".
                               Proxy caveat: underlying return ≠ an option trade's P&L.
 analysis/holding_review.py    Event-driven holding review (J3) — on the HOLD path of both exit passes, a position is
-                              reviewed only when an EVENT fires: an unseen Finnhub headline (2h per-ticker cooldown —
-                              roundup pieces get tagged to big names; headlines in between batch into the next
-                              review), a move ≥1.5× its avg daily range since the last reference price, or earnings
+                              reviewed only when an EVENT fires: an unseen Finnhub headline (at most ONE news review
+                              per position per day, #73 — roundup pieces get tagged to big names, and a 2h cooldown
+                              still fired 3–4/day; headlines in between batch into the next day), a move ≥1.5× its
+                              avg daily range since the last reference price, or earnings
                               ≤2 days (once/day). Sonnet `agent_judge.judge_holding` (keep | sell | tighten_stop;
                               tighten = shares only and must be above the current stop and below price, else keep)
                               reads the J1 briefing + entry→now, plan, the ORIGINAL thesis/invalidation from the
