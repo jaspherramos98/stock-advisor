@@ -2,6 +2,14 @@
 
 ## Done
 
+### 73. Holding reviews: news at most once per position per day (2026-10-02) ✅
+First paper week: 52 holding reviews in 4 days, ALL news-triggered (3–4 per position per day — Finnhub roundup
+pieces get tagged to big names and the 2h cooldown let them through), 41 of them repeating "sell" on the same names;
+~$0.58, the agent's biggest LLM cost, on track to hit the credit reserve (which halts entries + chat) within days.
+`holding_review.events` now lets news trigger a review only if the position hasn't been reviewed yet today
+(headlines in between stay unseen and batch into the next day's review); moves and earnings stay unthrottled. On
+that week's data: 52 → 16 reviews (−69%). 159 tests. Files: analysis/holding_review.py, CLAUDE.md, tests.
+
 ### 72. Crypto signals, off-hours crypto exits, crypto on the dashboard (agent crypto K3, 2026-09-28) ✅
 - **Signals:** `market_open.bat` runs the pipeline with `--crypto`. That exposed a latent bug: the per-asset story
   slots were hard-coded for the old 25-story cap (17 stock + 8 crypto), so enabling crypto would have silently grown

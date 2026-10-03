@@ -1976,14 +1976,13 @@ def test_holding_review_events():
     assert after["anchor_price"] == 97.0 and after["earnings_flagged"] == "2026-09-28"
     assert events(after, 97.0, h, "2026-09-28") == []                                  # nothing re-fires today
     assert events({}, 50.0, [], "2026-09-28") == []                                    # no reference yet
-    # News cooldown: within 2h of a review, new headlines wait (still unseen → batched later);
-    # a big move still fires immediately.
-    from datetime import datetime, timedelta
-    now = datetime(2026, 9, 28, 11, 0)
-    cool = mark_reviewed(st, 100.0, [], "2026-09-28", [], now=now - timedelta(minutes=30))
-    assert events(cool, 100.0, h, "2026-09-28", now) == []
-    assert events(cool, 96.0, h, "2026-09-28", now) == ["move -4.0% since $100 (≥1.5× its 2% daily range)"]
-    assert events(cool, 100.0, h, "2026-09-28", now + timedelta(hours=2)) == ["news: FDA rejects drug"]
+    # News: once per position per day — after a review today, new headlines wait (still unseen → batched
+    # into tomorrow's review); a big move still fires immediately.
+    from datetime import datetime
+    reviewed = mark_reviewed(st, 100.0, [], "2026-09-28", [], now=datetime(2026, 9, 28, 7, 0))
+    assert events(reviewed, 100.0, h, "2026-09-28") == []                              # even hours later
+    assert events(reviewed, 96.0, h, "2026-09-28") == ["move -4.0% since $100 (≥1.5× its 2% daily range)"]
+    assert events(reviewed, 100.0, h, "2026-09-29") == ["news: FDA rejects drug"]        # next day: batched news
 
 
 def test_parse_holding_verdict():

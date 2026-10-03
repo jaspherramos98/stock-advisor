@@ -5,7 +5,8 @@ The mechanical exits (stop / trailing / target / time) only look at PRICE. A hel
 breaks at 11 AM — a downgrade, a lawsuit, an earnings date the entry didn't plan for — waits for the
 stop. This reviews a held position with the Sonnet judge ONLY when something happens:
 
-  NEWS      a Finnhub headline about the ticker the review hasn't seen yet (each headline counts once)
+  NEWS      a Finnhub headline about the ticker the review hasn't seen yet — at most ONE news-triggered review
+            per position per day (headlines in between stay unseen and batch into the next day's review)
   MOVE      price moved ≥ MOVE_ATR_MULT × its average daily range since the last reference price
             (the reference resets after each review, so one big move = one review, not one per cycle)
   EARNINGS  a report ≤ EARNINGS_DAYS away (once per day)
@@ -31,11 +32,10 @@ _FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 MOVE_ATR_MULT = 1.5
 EARNINGS_DAYS = 2
-# Finnhub tags market-roundup pieces ("Which S&P500 stocks are moving?") to big tickers, so a heavily
-# covered name would otherwise trigger a paid review on every new roundup. News alone re-triggers at most
-# this often per ticker; headlines arriving in between stay unseen and are batched into the next review.
-# Moves and earnings are not throttled.
-NEWS_COOLDOWN_MINUTES = 120
+# News triggers at most one review per position per day. Finnhub tags market-roundup pieces ("Which S&P500
+# stocks are moving?") to big tickers, so a 2-hour cooldown (the first version) still fired 3–4 reviews per
+# position per day — 52 in the first paper week, ALL news-triggered, 41 repeating "sell" on the same names
+# (~$0.58). Moves and earnings are not throttled: they're rare and they're the events that matter.
 
 
 def _load() -> dict:
@@ -59,17 +59,15 @@ def headline_id(title: str | None) -> str:
     return hashlib.sha1((title or "").strip().lower().encode("utf-8", "replace")).hexdigest()[:12]
 
 
-def events(st: dict, price: float | None, headlines: list[dict], today: str,
-           now: datetime | None = None) -> list[str]:
+def events(st: dict, price: float | None, headlines: list[dict], today: str) -> list[str]:
     """Pure: which review events fired for one position, given its state (mutated only by the caller
     after a review). `st` keys: anchor_price, adr_pct, days_to_earnings, seen (headline ids),
-    earnings_flagged (date string), last_review (ISO datetime)."""
+    earnings_flagged (date string), last_review (ISO datetime). News only counts when the position
+    hasn't been reviewed yet today."""
     fired = []
     seen = set(st.get("seen") or [])
-    last = st.get("last_review")
-    news_cooling = bool(last and now and
-                        now - datetime.fromisoformat(last) < timedelta(minutes=NEWS_COOLDOWN_MINUTES))
-    if not news_cooling:
+    reviewed_today = str(st.get("last_review") or "")[:10] == today
+    if not reviewed_today:
         for h in headlines or []:
             if headline_id(h.get("title")) not in seen:
                 fired.append(f"news: {h.get('title')}")
@@ -158,7 +156,7 @@ def review(pos: dict, *, holdings: set[str], regime: dict | None = None, verbose
             print(f"holding_review: {t} news read failed — {e}")
             headlines = []
         now = datetime.now()
-        fired = events(st, pos.get("price"), headlines, today, now)
+        fired = events(st, pos.get("price"), headlines, today)
         if not fired:
             state[t] = st
             _save(state)
