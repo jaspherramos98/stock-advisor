@@ -2,6 +2,13 @@
 
 ## Done
 
+### 74. Stock cap removed — the agent sizes shares on the full agentic buying power (2026-10-02) ✅
+User decision (explicit, final: "money I'm prepared to lose"): `config.AGENT_STOCK_BUDGET_CAP = None`. The $20 cap
+had locked $19 in three slow positions (BAC/AMZN/JPM) since day one, so every later idea got $1 (AMD hit +5.3% for
+$0.05). Shares now size by the pyramid on the full BP; the 40% single-name guard still applies. Crypto keeps its $10
+cap. Applies in Live too once the user switches. Agent tab caption now reads the caps from config. Files: config.py,
+dashboard/tabs/agent.py, CLAUDE.md.
+
 ### 73. Holding reviews: news at most once per position per day (2026-10-02) ✅
 First paper week: 52 holding reviews in 4 days, ALL news-triggered (3–4 per position per day — Finnhub roundup
 pieces get tagged to big names and the 2h cooldown let them through), 41 of them repeating "sell" on the same names;

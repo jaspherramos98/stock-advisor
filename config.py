@@ -29,8 +29,10 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 #              on a broken connection; order placement never retries. False = per-call sessions.
 #   AGENT_STOCK_BUDGET_CAP — max TOTAL $ (entry cost) the agent may hold in SHARES at once (the stock
 #              leg is always on; routing in alerts/agentic_stocks.py: HR / conviction ≥75 → options,
-#              other buys → shares). 20.0 while the stock leg is new. None = no cap (the pyramid sizes
-#              on the full agentic buying power). ← set None to take the training wheels off.
+#              other buys → shares). None = no cap: the pyramid sizes on the full agentic buying power
+#              (still ≤40% per name via trading_guards). None since 2026-10-02 — the user's explicit call
+#              ("money I'm prepared to lose"); the $20 cap had locked $19 in 3 slow positions, so every
+#              later idea got $1. A number re-imposes a cap.
 #   AGENT_CRYPTO_BUDGET_CAP — max TOTAL $ (entry cost) the agent may hold in CRYPTO at once (crypto buys
 #              route to alerts/agentic_crypto.py). 10.0 while the crypto leg is new — Robinhood crypto has a
 #              ~2% bid/ask spread per round trip. None = no cap. 0 = crypto leg off.
@@ -44,7 +46,7 @@ CLAUDE_CHEAP_MODEL = "claude-haiku-4-5"
 USE_MCP = True
 DRY_RUN = True
 MCP_PERSISTENT_SESSION = True
-AGENT_STOCK_BUDGET_CAP = 20.0
+AGENT_STOCK_BUDGET_CAP = None
 AGENT_CRYPTO_BUDGET_CAP = 10.0
 # Entry judge (analysis/agent_judge.py, plan J2): "shadow" = a Sonnet call reviews each candidate and its
 # verdict is LOGGED beside the rules' decision but changes NOTHING (the J4 review compares them);

@@ -129,7 +129,7 @@ market_hours.py               Shared NYSE session logic (holidays/half-days/stat
 config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL) + Robinhood MCP
                               flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_JUDGE +
                               AGENT_STOCK_BUDGET_CAP (max total $ entry cost the agent holds in shares;
-                              20.0 while the stock leg is new — set None to remove the cap) +
+                              None = no cap since 2026-10-02, the user's explicit call; ≤40%/name still applies) +
                               AGENT_CRYPTO_BUDGET_CAP (same for coins; 10.0; 0 = crypto leg off) + ROBINHOOD_MCP_URL
                               (R25) — single source of truth. Whether the agent trades is NOT here: agent_mode.py
 agent_mode.py                 THE agent control: off | paper | live, in agent_mode.txt (gitignored), set only from
