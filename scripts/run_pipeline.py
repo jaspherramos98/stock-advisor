@@ -50,9 +50,12 @@ def main(argv: list[str]) -> int:
         recs = run_ingestion_and_analysis(include_stocks=True, include_etfs="--etfs" in argv,
                                           include_crypto="--crypto" in argv)
         prices = fetch_prices([r["ticker"] for r in recs if r.get("ticker")]) if recs else {}
-        pipeline_cache.save(recs, prices, datetime.now().strftime("%B %d, %Y at %I:%M %p"))
+        saved = pipeline_cache.save(recs, prices, datetime.now().strftime("%B %d, %Y at %I:%M %p"))
     except Exception as e:  # noqa: BLE001 — report + non-zero exit; the caller logs it
         print(f"[{stamp}] run_pipeline: FAILED — {e}")
+        return 1
+    if not saved:
+        print(f"[{stamp}] run_pipeline: 0 recommendations — kept today's earlier cache")
         return 1
     buys = [r["ticker"] for r in recs if r.get("direction") in ("buy", "short")]
     print(f"[{stamp}] run_pipeline: {len(recs)} recommendations cached; buy/short: {buys or 'none'}")

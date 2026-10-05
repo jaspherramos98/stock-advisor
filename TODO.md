@@ -2,6 +2,14 @@
 
 ## Done
 
+### 76. An empty pipeline run no longer wipes the day's recommendations (2026-10-05) ✅
+User's 9:31 dashboard run returned 0 and overwrote the 9:23 run's 12 ideas → the agent had no signals for the rest
+of the day (restored by hand from pipeline_history/). The analyst turns every failure (bad JSON, API error, empty
+input) into [] and the hidden app's console lost the reason. `pipeline_cache.save` now returns False and keeps
+today's cache when the new run is empty (still archived); the dashboard warns + shows the kept results;
+run_pipeline exits 1. `pipeline_cache.logged_run()` tees a dashboard run's output to pipeline.log (gitignored).
+161 tests. Files: storage/pipeline_cache.py, dashboard/app.py, scripts/run_pipeline.py, .gitignore, CLAUDE.md, tests.
+
 ### 75. Judge scorecard: a skip-only test, since the judge never says "enter" (2026-10-02) ✅
 First paper week: 8 fresh entry verdicts, 0 "enter" (7 skip, 1 wait) → the J4 enter-vs-skip comparison could never
 reach 15 per group. User asked for my recommendation: keep the judge in SHADOW and judge it on what it actually does.

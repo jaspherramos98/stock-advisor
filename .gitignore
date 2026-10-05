@@ -8,6 +8,7 @@ credit_ledger.json
 agent_mode.txt
 agent_scheduler.log
 market_open.log
+pipeline.log
 paper_book.json
 paper_agent_stocks.json
 paper_peaks.json
