@@ -533,22 +533,30 @@ if "prices" not in st.session_state:
 if run_button:
     with st.spinner("Fetching news and running analysis... this takes about 30 seconds."):
         try:
-            recs = run_ingestion_and_analysis(
-                include_stocks=show_stocks,
-                include_etfs=show_etfs,
-                include_crypto=show_crypto,
-            )
-            st.session_state.recommendations = recs
-
-            tickers = [r["ticker"] for r in recs if r.get("ticker")]
-            st.session_state.prices = fetch_prices(tickers)
-
+            with pipeline_cache.logged_run():
+                recs = run_ingestion_and_analysis(
+                    include_stocks=show_stocks,
+                    include_etfs=show_etfs,
+                    include_crypto=show_crypto,
+                )
+                tickers = [r["ticker"] for r in recs if r.get("ticker")]
+                prices = fetch_prices(tickers)
             last_run = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-            st.session_state.last_run    = last_run
-            st.session_state._from_cache = False
 
-            pipeline_cache.save(recs, st.session_state.prices, last_run)
-            st.success(f"Pipeline complete — {len(recs)} recommendations found.")
+            if pipeline_cache.save(recs, prices, last_run):
+                st.session_state.recommendations = recs
+                st.session_state.prices          = prices
+                st.session_state.last_run        = last_run
+                st.session_state._from_cache     = False
+                st.success(f"Pipeline complete — {len(recs)} recommendations found.")
+            else:
+                kept, _ = pipeline_cache.load_today()
+                st.session_state.recommendations = kept["recommendations"]
+                st.session_state.prices          = kept.get("prices", {})
+                st.session_state.last_run        = kept.get("last_run")
+                st.session_state._from_cache     = True
+                st.warning("This run returned 0 recommendations, so today's earlier results were kept "
+                           f"(from {kept.get('last_run')}). The reason is in pipeline.log.")
         except Exception as e:
             st.error(f"Pipeline error: {e}")
 

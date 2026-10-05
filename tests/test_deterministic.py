@@ -1518,6 +1518,27 @@ def test_pipeline_history_keeps_every_run(monkeypatch, tmp_path):
     assert pc.load_today()[0]["recommendations"] == [{"ticker": "C"}]
 
 
+def test_empty_run_never_replaces_todays_cache(monkeypatch, tmp_path):
+    import json as _json
+    from storage import pipeline_cache as pc
+    monkeypatch.setattr(pc, "CACHE_FILE", str(tmp_path / "c.json"))
+    monkeypatch.setattr(pc, "CACHE_BACKUP_FILE", str(tmp_path / "b.json"))
+    assert pc.save([{"ticker": "A"}], {}, "09:23") is True
+    assert pc.save([], {}, "09:31") is False                                 # failed run → kept
+    assert pc.load_today()[0]["recommendations"] == [{"ticker": "A"}]
+    assert [len(r["recommendations"]) for r in pc.read_history()] == [1, 0]  # still archived
+    (tmp_path / "c.json").write_text(_json.dumps({"date": "2020-01-01", "recommendations": [1]}))
+    assert pc.save([], {}, "x") is True                                     # yesterday's isn't kept
+    assert pc.load_today()[0]["recommendations"] == []
+
+
+def test_logged_run_tees_output(tmp_path):
+    from storage import pipeline_cache as pc
+    with pc.logged_run():
+        print("JSON parse error: boom")
+    assert "JSON parse error: boom" in (tmp_path / "pipeline.log").read_text(encoding="utf-8")
+
+
 def test_run_pipeline_skips_closed_days():
     import datetime as dt
     from scripts.run_pipeline import is_trading_day

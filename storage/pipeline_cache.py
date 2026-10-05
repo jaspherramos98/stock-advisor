@@ -9,39 +9,86 @@ Before this module existed the dashboard was the only writer, so `main.py` runs 
 HISTORY: the cache is overwritten every run, so every run is ALSO appended to pipeline_history/<date>.jsonl
 (gitignored, one JSON line per run, ~7 KB each). Nothing else keeps past recommendations — this is what a
 later judge replay / pipeline scorecard reads (`read_history`). An archive failure never blocks the cache.
+
+An empty run never replaces today's non-empty cache (`save` returns False); `logged_run()` copies a
+dashboard run's output to pipeline.log (gitignored) so the reason for an empty run isn't lost.
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
+from contextlib import contextmanager, redirect_stdout
 from datetime import date, datetime
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_FILE = os.path.join(_REPO, "pipeline_cache.json")
 CACHE_BACKUP_FILE = os.path.join(_REPO, "pipeline_cache_backup.json")
 HISTORY_DIR = os.path.join(_REPO, "pipeline_history")
+LOG_FILE = os.path.join(_REPO, "pipeline.log")
 
 
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def save(recommendations: list, prices: dict, last_run: str) -> None:
-    """Write today's result. The previous cache (if it had recommendations) becomes the backup, so a
-    run that dies mid-write can't leave the day with nothing."""
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-            if existing.get("recommendations"):
-                with open(CACHE_BACKUP_FILE, "w", encoding="utf-8") as f:
-                    json.dump(existing, f)
-        except Exception:  # noqa: BLE001 — a corrupt old cache must not block writing the new one
-            pass
+def save(recommendations: list, prices: dict, last_run: str) -> bool:
+    """Write today's result; False = kept the existing cache instead. An EMPTY run never replaces a
+    non-empty one from today: the analyst turns every failure (bad JSON, API error) into [], and on
+    2026-10-05 one such run wiped the day's 12 ideas, leaving the agent blind. The empty run is still
+    archived. Otherwise the previous cache (if it had recommendations) becomes the backup, so a run
+    that dies mid-write can't leave the day with nothing."""
+    existing = _try_load(CACHE_FILE)
     run = {"date": _today(), "last_run": last_run, "recommendations": recommendations, "prices": prices}
+    if not recommendations and existing and existing.get("date") == run["date"] \
+            and existing.get("recommendations"):
+        _archive(run)
+        return False
+    if existing and existing.get("recommendations"):
+        try:
+            with open(CACHE_BACKUP_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing, f)
+        except OSError:  # a failed backup must not block writing the new cache
+            pass
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(run, f)
     _archive(run)
+    return True
+
+
+@contextmanager
+def logged_run():
+    """Copy everything printed during a pipeline run into pipeline.log (appended, timestamped header).
+    The dashboard runs hidden (argus_silent.vbs), so without this an empty run's reason — printed by the
+    analyst — is lost. The console still gets the output. Log failures never break the run."""
+    try:
+        log = open(LOG_FILE, "a", encoding="utf-8")
+        log.write(f"\n==== {datetime.now():%Y-%m-%d %H:%M:%S} dashboard pipeline run ====\n")
+    except OSError:
+        yield
+        return
+    with log, redirect_stdout(_Tee(sys.stdout, log)):
+        yield
+
+
+class _Tee:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, text):
+        for s in self._streams:
+            try:
+                s.write(text)
+            except (OSError, ValueError):
+                pass
+        return len(text)
+
+    def flush(self):
+        for s in self._streams:
+            try:
+                s.flush()
+            except (OSError, ValueError):
+                pass
 
 
 def _archive(run: dict) -> None:

@@ -377,6 +377,11 @@ storage/pipeline_cache.py     ONE writer/reader of pipeline_cache.json (+ backup
                               (the agent's `_signals` applies the same rule to the same file). Every save is
                               ALSO appended to pipeline_history/<date>.jsonl (gitignored; `read_history(since,
                               until)`) — the only record of past recommendations (the cache is overwritten).
+                              An EMPTY run never replaces today's non-empty cache (`save` → False; archived anyway;
+                              the dashboard warns, run_pipeline exits 1) — the analyst turns every failure into
+                              [], and one such run wiped 2026-10-05's 12 ideas. `logged_run()` tees a dashboard
+                              run's output to pipeline.log (gitignored): the app runs hidden, so that's where the
+                              reason for an empty run lives.
 scripts/bench_dashboard.py    Click-latency benchmark — runs dashboard/app.py headless (Streamlit AppTest):
                               cold load + N warm reruns (a warm rerun = what a click costs) + exceptions.
                               Live data (needs network + MCP token), so NOT in CI. Use for before/after.

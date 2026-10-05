@@ -11,9 +11,11 @@ def _isolated_decision_log(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_pipeline_history(tmp_path, monkeypatch):
-    """pipeline_cache.save() also archives every run to pipeline_history/ — never the real one in tests."""
+    """pipeline_cache.save() also archives every run to pipeline_history/ — never the real one in tests
+    (nor the real pipeline.log)."""
     from storage import pipeline_cache
     monkeypatch.setattr(pipeline_cache, "HISTORY_DIR", str(tmp_path / "pipeline_history"))
+    monkeypatch.setattr(pipeline_cache, "LOG_FILE", str(tmp_path / "pipeline.log"))
 
 
 @pytest.fixture(autouse=True)
