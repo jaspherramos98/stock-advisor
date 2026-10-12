@@ -294,6 +294,8 @@ analysis/agent_judge.py       Entry judge (judgment plan J2): one Sonnet call pe
                               forced tool call `record_verdict` → enter|wait|skip, size_multiplier, instrument,
                               stop, confidence, thesis, invalidation, risks; `parse_verdict` clamps size to [0,1]
                               (can only SHRINK) and turns anything malformed/failed into an explicit skip.
+                              **OFF since 2026-10-12** (user's call after 2 shadow weeks: 0 'enter', skips +0.92%
+                              at 5d, $1.01 of $1.34 LLM spend; "off" also skips the holding review's reads).
                               config.AGENT_JUDGE = "shadow" (logged as `judge` on the decision record, changes
                               NOTHING) | "off". ~$0.012 + ~10s per call; cost → llm_budget; skipped at the credit
                               reserve; loads .env itself. `reusable_verdict`: a ticker's verdict is reused for

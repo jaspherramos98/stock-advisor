@@ -2,6 +2,14 @@
 
 ## Done
 
+### 77. Judge turned OFF (2026-10-12) ✅
+User's call after two shadow weeks: 0 'enter' of 12 entry verdicts; the names it skipped returned +0.92% at 5 days
+(n=8); 17 of 27 holding reviews said 'sell' and those names then rose +0.21% — and it was $1.01 of the $1.34 LLM spend
+since 10-02. `config.AGENT_JUDGE = "off"` (no entry verdicts, no holding-review calls); `holding_review.review` now
+returns before its news/briefing reads when the judge is off (it used to fetch them for every held position and log
+an empty record). J4–J6 paused, not deleted: logged verdicts stay in agent_decisions.jsonl. 161 tests.
+Files: config.py, analysis/holding_review.py, CLAUDE.md, tests.
+
 ### 76. An empty pipeline run no longer wipes the day's recommendations (2026-10-05) ✅
 User's 9:31 dashboard run returned 0 and overwrote the 9:23 run's 12 ideas → the agent had no signals for the rest
 of the day (restored by hand from pipeline_history/). The analyst turns every failure (bad JSON, API error, empty
@@ -1190,7 +1198,8 @@ Lowest core-fit; do last or not at all.
   read-only sync (set AGENT_CRYPTO_BUDGET_CAP = 0) if it doesn't work out. Off-hours crypto ENTRIES are not built
   (the pipeline runs at 6:30 on trading days only) — add only if the user wants weekend crypto trading.
 
-### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built, J4 data accruing)
+### Agent judgment — PLAN (approved 2026-09-28; J0–J4 tooling built) — PAUSED 2026-10-12, judge OFF (#77)
+To resume: `config.AGENT_JUDGE = "shadow"`; the J4 scorecard picks up where it left off (verdicts are kept).
 **Problem (audit):** the agent makes ZERO LLM calls. Every decision is a fixed rule over the pipeline's 6:30 AM
 batch: buy/short recs → route by conviction (≥75 options, else shares, short → puts) → first matching playbook
 (options_strategies) → pyramid/caps/PDT sizing; exits = fixed option_exit_decision / equity_exit_decision. Watches

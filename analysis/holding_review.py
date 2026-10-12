@@ -140,9 +140,11 @@ def review(pos: dict, *, holdings: set[str], regime: dict | None = None, verbose
     t = (pos.get("ticker") or "").upper()
     try:
         from analysis.agent_context import _news_since, gather
-        from analysis.agent_judge import judge_holding
+        from analysis.agent_judge import judge_holding, mode as judge_mode
         from storage import decision_log as dlog
 
+        if judge_mode() == "off":                     # no judge → skip the news/briefing reads too
+            return None
         state = _load()
         today = date.today().isoformat()
         st = _daily_reads(t, state.get(t) or {}, today)

@@ -2022,9 +2022,11 @@ def test_parse_holding_verdict():
 
 
 def test_holding_review_fires_judges_and_logs(monkeypatch):
+    import config
     from analysis import agent_context, agent_judge, holding_review as hr
     from storage import decision_log as dl
     review = hr._review_impl
+    monkeypatch.setattr(config, "AGENT_JUDGE", "shadow", raising=False)
     monkeypatch.setattr(hr, "_daily_reads", lambda t, st, today: {**st, "adr_pct": 2.0, "days_to_earnings": 20})
     monkeypatch.setattr(agent_context, "_news_since", lambda t, since: [{"title": "Company cuts guidance"}])
     monkeypatch.setattr(agent_context, "gather", lambda *a, **k: _real_ctx())
@@ -2045,6 +2047,10 @@ def test_holding_review_fires_judges_and_logs(monkeypatch):
     rec = dl.read()[-1]
     assert rec["kind"] == "review" and rec["action"] == "hold" and rec["entry_id"] == e
     assert review(pos, holdings={"F"}, regime={}) is None                  # same headline → no second review
+    monkeypatch.setattr(config, "AGENT_JUDGE", "off", raising=False)
+    monkeypatch.setattr(agent_context, "_news_since", lambda t, since: 1 / 0)   # off → no reads at all
+    n = len(dl.read())
+    assert review({**pos, "ticker": "T", "key": "eq:T"}, holdings={"T"}) is None and len(dl.read()) == n
 
 
 def test_judge_verdict_reuse():

@@ -50,6 +50,9 @@ AGENT_STOCK_BUDGET_CAP = None
 AGENT_CRYPTO_BUDGET_CAP = 10.0
 # Entry judge (analysis/agent_judge.py, plan J2): "shadow" = a Sonnet call reviews each candidate and its
 # verdict is LOGGED beside the rules' decision but changes NOTHING (the J4 review compares them);
-# "off" = no judge calls. (A binding mode arrives only in J5, if the shadow data shows it helps.)
-AGENT_JUDGE = "shadow"
+# "off" = no judge calls (entry verdicts AND holding reviews). (A binding mode arrives only in J5, if the
+# shadow data shows it helps.) OFF since 2026-10-12, the user's call: 2 weeks of shadow = 0 'enter' of 12,
+# names it skipped +0.92% at 5d, 17/27 holding reviews said 'sell' before +0.21% — $1.01 of the $1.34 LLM
+# spend for no evidence of edge. J4–J6 paused; the logged verdicts stay in agent_decisions.jsonl.
+AGENT_JUDGE = "off"
 ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading"
