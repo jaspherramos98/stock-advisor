@@ -58,6 +58,15 @@ def positions() -> list[dict]:
     return fetch_positions()
 
 
+def filled_sells(since: str) -> list[dict] | None:
+    """Executed sells since `since` (YYYY-MM-DD): [{ticker, qty, price, filled_at}]. MCP only — the
+    robin_stocks path doesn't read order history, so it returns None (= unknown, close nothing)."""
+    if _use_mcp():
+        from ingestion import robinhood_mcp
+        return robinhood_mcp.fetch_filled_sells(since)
+    return None
+
+
 def quotes(tickers: list[str]) -> dict[str, dict]:
     """Quotes keyed by ticker: {price,change,change_pct,high,low} or None per ticker."""
     if _use_mcp():

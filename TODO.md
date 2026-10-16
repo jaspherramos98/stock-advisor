@@ -2,6 +2,17 @@
 
 ## Done
 
+### 78. Sync closes positions sold in the Robinhood app (2026-10-16) ✅
+User had to close every hand-sold position in Argus manually (AMD + GS were sold 10/15 but still "open").
+Sync now also reads the main account's order history (`get_equity_orders`, the tool the PDT count already uses):
+each tracked open long that's no longer held is closed at the quantity-weighted average of its executed sells
+since it was opened, reason "Sold on Robinhood (date)" — real exit price → real P&L/scorecard. Never guesses: no
+matching sell → stays open and is listed; crypto and shorts are skipped; an unreadable order history closes
+nothing; the check only runs after a successful position read. Result shows as one line after the rerun.
+`positions.close_position` now returns the closed record. 164 tests. Files: storage/position_sync.py (new),
+ingestion/robinhood_mcp.py (`_normalize_sells`, `fetch_filled_sells`), ingestion/account_reads.py
+(`filled_sells`), storage/positions.py, dashboard/app.py, CLAUDE.md, tests.
+
 ### 77. Judge turned OFF (2026-10-12) ✅
 User's call after two shadow weeks: 0 'enter' of 12 entry verdicts; the names it skipped returned +0.92% at 5 days
 (n=8); 17 of 27 holding reviews said 'sell' and those names then rose +0.21% — and it was $1.01 of the $1.34 LLM spend

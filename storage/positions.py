@@ -103,6 +103,7 @@ def close_position(ticker: str, reason: str, close_price: float = None):
     Marks a position as closed. Keeps the record for history —
     never deletes, just changes status to 'closed'.
     Optionally records the closing price and calculates final P&L.
+    Returns the closed record, or None if no open position matched.
     """
     positions = load_positions()
     for p in positions:
@@ -133,8 +134,9 @@ def close_position(ticker: str, reason: str, close_price: float = None):
             save_positions(positions)
             pnl_str = f" | P&L: {p['pnl_pct']:+.1f}%" if p.get("pnl_pct") is not None else ""
             print(f"Positions: closed {ticker} — {reason}{pnl_str}")
-            return
+            return p
     print(f"Positions: {ticker} not found or already closed.")
+    return None
 
 
 def get_closed_positions() -> list[dict]:
