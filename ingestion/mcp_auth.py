@@ -47,10 +47,12 @@ from ingestion.mcp_session import PersistentSession
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.client.auth import OAuthClientProvider, OAuthFlowError, TokenStorage
+from mcp.client.auth.utils import build_oauth_authorization_server_metadata_discovery_urls
 from mcp.shared.auth import (
     AuthorizationCodeResult,
     OAuthClientInformationFull,
     OAuthClientMetadata,
+    OAuthMetadata,
     OAuthToken,
 )
 
@@ -219,6 +221,34 @@ class _RefreshingProvider(OAuthClientProvider):
             storage = self.context.storage
             exp = storage.read_expires_at() if hasattr(storage, "read_expires_at") else None
             self.context.token_expiry_time = exp if exp is not None else 0.0
+
+    async def _refresh_token(self):  # type: ignore[override]
+        """The SDK learns the token endpoint only during a full (browser) authorization. In a fresh
+        process it has no metadata and POSTs the refresh to `<server origin>/token` — for Robinhood
+        that's agent.robinhood.com/token, but the real endpoint is api.robinhood.com/oauth2/token/. So
+        every silent refresh failed and the login died each time the ~11-day access token expired
+        (2026-10-06, 2026-10-16). Discover the metadata first, exactly as the full flow does."""
+        if self.context.oauth_metadata is None:
+            issuer = getattr(self.context.client_info, "issuer", None)
+            self.context.oauth_metadata = await _discover_metadata(issuer, self.context.server_url)
+        return await super()._refresh_token()
+
+
+async def _discover_metadata(issuer: str | None, server_url: str) -> OAuthMetadata | None:
+    """The authorization server's RFC 8414 metadata (token endpoint etc.), trying the SDK's discovery
+    URLs for the issuer, then the server-root legacy URL. None if none answers (the SDK then falls back
+    to its guess, and the failure surfaces as NotAuthenticated as before)."""
+    urls = build_oauth_authorization_server_metadata_discovery_urls(issuer, server_url)
+    legacy = build_oauth_authorization_server_metadata_discovery_urls(None, server_url)
+    async with httpx2.AsyncClient(timeout=15.0) as http:
+        for url in dict.fromkeys(urls + legacy):
+            try:
+                resp = await http.get(url)
+                if resp.status_code == 200:
+                    return OAuthMetadata.model_validate_json(resp.content)
+            except Exception as e:  # noqa: BLE001 — try the next discovery URL
+                logging.getLogger(__name__).debug("OAuth metadata discovery failed at %s: %s", url, e)
+    return None
 
 
 def _provider(interactive: bool) -> OAuthClientProvider:

@@ -191,7 +191,12 @@ ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mc
                               _initialize restores the token but not token_expiry_time, so is_token_valid()
                               wrongly passed an expired token and never refreshed (full re-auth every few
                               days); we persist an absolute `expires_at` (_FileTokenStorage) and restore it
-                              on init so an expired token takes the refresh path. mcp SDK is an OPTIONAL
+                              on init so an expired token takes the refresh path. It ALSO overrides
+                              `_refresh_token` to discover the OAuth metadata first (`_discover_metadata`): a
+                              fresh process has none, and the SDK then POSTed refreshes to <origin>/token =
+                              agent.robinhood.com/token, but Robinhood's token_endpoint is
+                              api.robinhood.com/oauth2/token/ → EVERY silent refresh failed until TODO #79
+                              (2026-10-16). A refreshed token lasts ~7 days (a browser login ~11). mcp SDK is an OPTIONAL
                               dep (not in requirements.txt) → imported lazily so CI stays clean.
                               call_tool runs on ONE shared session per process (`_PERSISTENT`, see
                               mcp_session.py) when config.MCP_PERSISTENT_SESSION; login() resets it.
@@ -824,7 +829,9 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
   needed, a read fails clean, never a surprise OAuth popup/race. **Recovery when the refresh token finally
   expires** (symptom: log shows `_perform_authorization_code_grant` then a clean `NotAuthenticated`;
   buying power stops reading): `python scripts/mcp_login.py` (one browser approve), then relaunch — now
-  rare (refresh-token lifetime), not every ~3 days.
+  rare (refresh-token lifetime), not every ~3 days. (3) Until TODO #79 the refresh still always failed — it went
+  to the SDK's guessed `<origin>/token` instead of the discovered token endpoint; `_refresh_token` now
+  discovers it first. Verified 2026-10-16 with a forced real refresh (200, token rotated, reads OK).
 - **Crypto via the MCP (K1 #70, 2026-09-28):** `robinhood_mcp` has `fetch_crypto_quotes` (mark/bid/ask),
   `fetch_crypto_positions` and `place_crypto_order` (shape → guards → `preview_crypto_order` → DRY_RUN/live,
   preview problem BLOCKS a buy, never a sell). Verified live: the agentic account's crypto account is onboarded
