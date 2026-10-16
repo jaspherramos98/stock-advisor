@@ -2,6 +2,16 @@
 
 ## Done
 
+### 79. Robinhood MCP silent refresh actually works now (2026-10-16) ✅
+The login died every time the access token expired (10-06, 10-16) despite the old expiry fix. Root cause: in a
+fresh process the mcp SDK has no OAuth metadata (it's learned only during a full browser authorization), so it
+POSTed the refresh to its guess `<server origin>/token` = agent.robinhood.com/token, while Robinhood's published
+token_endpoint is api.robinhood.com/oauth2/token/ — every refresh failed → NotAuthenticated → manual
+mcp_login. `_RefreshingProvider._refresh_token` now discovers the RFC 8414 metadata first (`_discover_metadata`,
+the SDK's own discovery URLs). Verified with a forced real refresh: 200, token rotated + persisted, reads OK.
+Refreshed tokens last ~7 days (browser login ~11); renewal is automatic now. 165 tests (the new one needs the
+optional `mcp` SDK → skipped in CI). Files: ingestion/mcp_auth.py, CLAUDE.md, tests.
+
 ### 78. Sync closes positions sold in the Robinhood app (2026-10-16) ✅
 User had to close every hand-sold position in Argus manually (AMD + GS were sold 10/15 but still "open").
 Sync now also reads the main account's order history (`get_equity_orders`, the tool the PDT count already uses):

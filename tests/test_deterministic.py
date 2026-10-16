@@ -2455,3 +2455,31 @@ def test_close_sold_closes_at_fill_and_fails_safe(monkeypatch, tmp_path):
     out = position_sync.close_sold({"AAPL"})
     assert out["closed"] == [{"ticker": "GS", "pnl_pct": -2.33}] and not positions.get_open_positions()
     assert positions.get_closed_positions()[0]["close_reason"] == "Sold on Robinhood (2999-01-01)"
+
+
+def test_mcp_refresh_discovers_token_endpoint(monkeypatch):
+    """Fresh process: the SDK has no OAuth metadata and used to POST refreshes to <origin>/token (wrong host
+    for Robinhood) → every silent refresh failed. The provider must discover the real endpoint first.
+    Needs the optional `mcp` SDK → skipped in CI."""
+    import asyncio
+    import pytest
+    pytest.importorskip("mcp")
+    from mcp.shared.auth import OAuthClientInformationFull, OAuthMetadata, OAuthToken
+    from ingestion import mcp_auth as m
+
+    meta = OAuthMetadata.model_validate({
+        "issuer": "https://agent.robinhood.com/mcp/trading", "authorization_endpoint": "https://robinhood.com/oauth",
+        "token_endpoint": "https://api.robinhood.com/oauth2/token/", "response_types_supported": ["code"]})
+    seen = []
+
+    async def fake_discover(issuer, server_url):
+        seen.append(issuer)
+        return meta
+    monkeypatch.setattr(m, "_discover_metadata", fake_discover)
+    p = m._provider(False)
+    p.context.current_tokens = OAuthToken(access_token="a", refresh_token="r", token_type="Bearer")
+    p.context.client_info = OAuthClientInformationFull(client_id="c", redirect_uris=["http://localhost:8765/callback"],
+                                                       issuer="https://agent.robinhood.com/mcp/trading")
+    req = asyncio.run(p._refresh_token())
+    assert str(req.url) == "https://api.robinhood.com/oauth2/token/"
+    assert seen == ["https://agent.robinhood.com/mcp/trading"]
