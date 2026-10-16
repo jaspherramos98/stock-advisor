@@ -478,11 +478,9 @@ with st.sidebar:
                 rh_positions = rh_fetch()
             if rh_positions:
                 synced = 0
-                skipped = 0
                 existing_tickers = {p["ticker"] for p in get_open_positions()}
                 for rp in rh_positions:
                     if rp["ticker"] in existing_tickers:
-                        skipped += 1
                         continue
                     _crypto = bool(TICKER_TO_COINGECKO_ID.get(rp["ticker"], ""))
                     exit_cond = (_structure_exit_condition(rp["ticker"], "crypto" if _crypto else "stock")
@@ -498,17 +496,30 @@ with st.sidebar:
                     )
                     update_amount_invested(rp["ticker"], rp["amount_invested"])
                     synced += 1
-                if synced:
-                    st.success(f"Synced {synced} new. Skipped {skipped} already tracked.")
-                else:
-                    st.info(f"Nothing new — all {skipped} equity/ETF position(s) already tracked.")
-                st.caption("⚠️ Crypto (DOGE, XRP, etc.) can't sync — the Robinhood Trading MCP has no "
-                           "crypto endpoint. Add coins manually below (Manage positions → add).")
-                if synced > 0:
-                    st.rerun()
+                # Positions sold in the Robinhood app → closed at the real fill price (storage/position_sync).
+                # Only after a successful read: an empty read on error would make everything look sold.
+                from storage.position_sync import close_sold
+                with st.spinner("Checking Robinhood for positions you sold..."):
+                    sold = close_sold({rp["ticker"] for rp in rh_positions})
+                parts = [f"Synced {synced} new"]
+                if sold["closed"]:
+                    parts.append(f"closed {len(sold['closed'])} sold (" + ", ".join(
+                        f"{c['ticker']} {c['pnl_pct']:+.1f}%" if c["pnl_pct"] is not None else c["ticker"]
+                        for c in sold["closed"]) + ")")
+                if sold["unresolved"]:
+                    parts.append(f"{len(sold['unresolved'])} not held but no sell found: "
+                                 f"{', '.join(sold['unresolved'])} — close by hand")
+                if sold["error"]:
+                    parts.append(f"sold check skipped — {sold['error']}")
+                st.session_state.sync_msg = " · ".join(parts) + "."
+                st.rerun()
             else:
                 st.info("No equity/ETF positions to sync (crypto isn't readable via the MCP — "
                         "add coins manually below).")
+        if st.session_state.get("sync_msg"):
+            st.success(st.session_state.pop("sync_msg"))
+            st.caption("⚠️ Crypto (DOGE, XRP, etc.) isn't synced — add and close coins manually "
+                       "(Manage positions).")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:

@@ -94,6 +94,11 @@ ingestion/
 validation/scorer.py          News scoring by source credibility
 storage/
   positions.py                Open/closed position tracking
+  position_sync.py            Sidebar "Sync positions" CLOSES what the user sold in the Robinhood app: a tracked
+                              open long no longer held → its executed sells since opened (`robinhood_mcp.
+                              fetch_filled_sells` via account_reads.filled_sells, get_equity_orders on MAIN) →
+                              closed at the qty-weighted avg fill. No matching sell → left open + reported;
+                              crypto + shorts skipped; unreadable order history → closes nothing.
   watchlist.py                Ticker watchlist
   sheets.py                   Google Sheets export/read
 alerts/snooze.py              Alert snooze/dismiss logic

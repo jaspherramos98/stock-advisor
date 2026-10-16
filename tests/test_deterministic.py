@@ -2409,3 +2409,49 @@ def test_mcp_session_thread_safe():
     for t in threads: t.start()
     for t in threads: t.join(10)
     assert out == {i: i for i in range(10)} and log["opens"] == 1
+
+
+def test_normalize_sells_counts_only_executed():
+    from ingestion.robinhood_mcp import _normalize_sells
+    rows = [{"symbol": "amd", "side": "sell", "cumulative_quantity": "0.16", "average_price": "542.11",
+             "last_transaction_at": "2026-10-15T13:30:01Z"},
+            {"symbol": "TSLA", "side": "sell", "cumulative_quantity": "0.000000", "average_price": None},  # cancelled
+            {"symbol": "GS", "side": "buy", "cumulative_quantity": "1", "average_price": "900"}]
+    assert _normalize_sells(rows) == [{"ticker": "AMD", "qty": 0.16, "price": 542.11,
+                                       "filled_at": "2026-10-15T13:30:01Z"}]
+
+
+def test_sold_positions_matches_sells_after_open():
+    from storage.position_sync import sold_positions
+    open_pos = [{"ticker": "AMD", "direction": "buy", "opened_at": "2026-10-14T07:28:07"},
+                {"ticker": "GS", "direction": "buy", "opened_at": "2026-10-13T09:36:02"},
+                {"ticker": "GOOGL", "direction": "buy", "opened_at": "2026-10-07T10:10:45"},   # still held
+                {"ticker": "LLY", "direction": "buy", "opened_at": "2026-10-10T09:00:00"},     # no sell → unresolved
+                {"ticker": "DOGE", "direction": "buy", "opened_at": "2026-10-10T09:00:00"},    # crypto → skipped
+                {"ticker": "XYZ", "direction": "short", "opened_at": "2026-10-10T09:00:00"}]   # short → skipped
+    sells = [{"ticker": "AMD", "qty": 0.1, "price": 540.0, "filled_at": "2026-10-15T13:30:00Z"},
+             {"ticker": "AMD", "qty": 0.3, "price": 544.0, "filled_at": "2026-10-16T13:30:00Z"},
+             {"ticker": "AMD", "qty": 5.0, "price": 400.0, "filled_at": "2026-09-01T13:30:00Z"},  # before open
+             {"ticker": "GS", "qty": 0.166, "price": 879.0, "filled_at": "2026-10-15T13:30:01Z"},
+             {"ticker": "LLY", "qty": 1.0, "price": 1170.0, "filled_at": "2026-08-31T13:30:01Z"}]
+    closes, unresolved = sold_positions(open_pos, {"GOOGL", "AAPL"}, sells, skip_tickers={"DOGE"})
+    assert [(c["ticker"], c["price"], c["filled_at"][:10]) for c in closes] == [
+        ("AMD", 543.0, "2026-10-16"), ("GS", 879.0, "2026-10-15")]
+    assert unresolved == ["LLY"]
+
+
+def test_close_sold_closes_at_fill_and_fails_safe(monkeypatch, tmp_path):
+    from ingestion import account_reads
+    from storage import position_sync, positions
+    monkeypatch.setattr(positions, "POSITIONS_FILE", str(tmp_path / "positions.json"))
+    positions.add_position(ticker="GS", company_name="Goldman", reference_price=900.0,
+                           exit_condition="target 8% gain, stop loss at 4%", direction="buy",
+                           confidence=0.0, source_title="Robinhood sync")
+    monkeypatch.setattr(account_reads, "filled_sells", lambda since: None)        # unreadable → close nothing
+    out = position_sync.close_sold({"AAPL"})
+    assert out["error"] and positions.get_open_positions()[0]["ticker"] == "GS"
+    monkeypatch.setattr(account_reads, "filled_sells", lambda since: [
+        {"ticker": "GS", "qty": 0.166, "price": 879.0, "filled_at": "2999-01-01T13:30:01Z"}])
+    out = position_sync.close_sold({"AAPL"})
+    assert out["closed"] == [{"ticker": "GS", "pnl_pct": -2.33}] and not positions.get_open_positions()
+    assert positions.get_closed_positions()[0]["close_reason"] == "Sold on Robinhood (2999-01-01)"

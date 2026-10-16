@@ -402,6 +402,38 @@ def day_trade_budget(account_number: str, account_equity: float) -> int | None:
     return _budget(fills, window, today, account_equity)
 
 
+def _normalize_sells(orders: list) -> list[dict]:
+    """Pure: equity order rows → executed sells {ticker, qty, price, filled_at}. Uses the executed
+    `cumulative_quantity` and `average_price`, so a cancelled order with no fill drops out and a partly
+    filled one counts only what actually sold."""
+    out = []
+    for o in orders or []:
+        if (o.get("side") or "").lower() != "sell":
+            continue
+        ticker = (o.get("symbol") or "").upper()
+        qty, price = _to_float(o.get("cumulative_quantity")), _to_float(o.get("average_price"))
+        if ticker and qty > 0 and price > 0:
+            out.append({"ticker": ticker, "qty": qty, "price": price,
+                        "filled_at": o.get("last_transaction_at") or o.get("created_at")})
+    return out
+
+
+def fetch_filled_sells(since: str, account_number: str | None = None) -> list[dict] | None:
+    """Executed sells created on/after `since` (YYYY-MM-DD), MAIN account by default. None = unreadable
+    (callers must not treat that as "nothing sold")."""
+    if not is_available():
+        return None
+    try:
+        acct = account_number or _main_account_number()
+        if not acct:
+            return None
+        data = _data(_call_tool("get_equity_orders", {"account_number": acct, "created_at_gte": since}))
+        return _normalize_sells((data or {}).get("orders"))
+    except Exception as e:  # noqa: BLE001
+        print(f"Robinhood MCP sells: {e}")
+        return None
+
+
 # --- orders: guarded, DRY_RUN-safe -----------------------------------------------------
 
 def place_order(intent: OrderIntent, state: GuardState, buying_power: float,
