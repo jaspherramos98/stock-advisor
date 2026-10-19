@@ -67,6 +67,28 @@ def filled_sells(since: str) -> list[dict] | None:
     return None
 
 
+def crypto_positions() -> list[dict] | None:
+    """Main-account crypto holdings (same keys as positions() + asset_type). None = unreadable — the
+    robin_stocks path isn't wired for this, so it reports unknown rather than "holds nothing"."""
+    if _use_mcp():
+        from ingestion import robinhood_mcp
+        try:
+            acct = robinhood_mcp._main_account_number()
+        except Exception as e:  # noqa: BLE001
+            print(f"Robinhood MCP crypto positions: account read failed — {e}")
+            return None
+        return robinhood_mcp.fetch_crypto_positions(acct, strict=True)
+    return None
+
+
+def filled_crypto_sells(since: str) -> list[dict] | None:
+    """Executed crypto sells since `since` (YYYY-MM-DD): [{ticker, qty, price, filled_at}]. MCP only."""
+    if _use_mcp():
+        from ingestion import robinhood_mcp
+        return robinhood_mcp.fetch_filled_crypto_sells(since)
+    return None
+
+
 def quotes(tickers: list[str]) -> dict[str, dict]:
     """Quotes keyed by ticker: {price,change,change_pct,high,low} or None per ticker."""
     if _use_mcp():

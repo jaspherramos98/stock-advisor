@@ -2427,14 +2427,13 @@ def test_sold_positions_matches_sells_after_open():
                 {"ticker": "GS", "direction": "buy", "opened_at": "2026-10-13T09:36:02"},
                 {"ticker": "GOOGL", "direction": "buy", "opened_at": "2026-10-07T10:10:45"},   # still held
                 {"ticker": "LLY", "direction": "buy", "opened_at": "2026-10-10T09:00:00"},     # no sell → unresolved
-                {"ticker": "DOGE", "direction": "buy", "opened_at": "2026-10-10T09:00:00"},    # crypto → skipped
                 {"ticker": "XYZ", "direction": "short", "opened_at": "2026-10-10T09:00:00"}]   # short → skipped
     sells = [{"ticker": "AMD", "qty": 0.1, "price": 540.0, "filled_at": "2026-10-15T13:30:00Z"},
              {"ticker": "AMD", "qty": 0.3, "price": 544.0, "filled_at": "2026-10-16T13:30:00Z"},
              {"ticker": "AMD", "qty": 5.0, "price": 400.0, "filled_at": "2026-09-01T13:30:00Z"},  # before open
              {"ticker": "GS", "qty": 0.166, "price": 879.0, "filled_at": "2026-10-15T13:30:01Z"},
              {"ticker": "LLY", "qty": 1.0, "price": 1170.0, "filled_at": "2026-08-31T13:30:01Z"}]
-    closes, unresolved = sold_positions(open_pos, {"GOOGL", "AAPL"}, sells, skip_tickers={"DOGE"})
+    closes, unresolved = sold_positions(open_pos, {"GOOGL", "AAPL"}, sells)
     assert [(c["ticker"], c["price"], c["filled_at"][:10]) for c in closes] == [
         ("AMD", 543.0, "2026-10-16"), ("GS", 879.0, "2026-10-15")]
     assert unresolved == ["LLY"]
@@ -2447,14 +2446,37 @@ def test_close_sold_closes_at_fill_and_fails_safe(monkeypatch, tmp_path):
     positions.add_position(ticker="GS", company_name="Goldman", reference_price=900.0,
                            exit_condition="target 8% gain, stop loss at 4%", direction="buy",
                            confidence=0.0, source_title="Robinhood sync")
+    positions.add_position(ticker="ETH", company_name="ETH", reference_price=2400.0,
+                           exit_condition="target 8% gain, stop loss at 4%", direction="buy",
+                           confidence=0.0, source_title="Robinhood sync")
+    later = "2999-01-01T13:30:01Z"
     monkeypatch.setattr(account_reads, "filled_sells", lambda since: None)        # unreadable → close nothing
-    out = position_sync.close_sold({"AAPL"})
-    assert out["error"] and positions.get_open_positions()[0]["ticker"] == "GS"
+    monkeypatch.setattr(account_reads, "filled_crypto_sells", lambda since: [
+        {"ticker": "ETH", "qty": 0.07, "price": 2448.0, "filled_at": later}])
+    out = position_sync.close_sold({"AAPL"}, None)                               # coin read failed → ETH untouched
+    assert out["errors"] and sorted(p["ticker"] for p in positions.get_open_positions()) == ["ETH", "GS"]
+    out = position_sync.close_sold({"AAPL"}, {"ETH"})                            # ETH held: never "sold"
+    assert not out["closed"] and len(positions.get_open_positions()) == 2
     monkeypatch.setattr(account_reads, "filled_sells", lambda since: [
-        {"ticker": "GS", "qty": 0.166, "price": 879.0, "filled_at": "2999-01-01T13:30:01Z"}])
-    out = position_sync.close_sold({"AAPL"})
-    assert out["closed"] == [{"ticker": "GS", "pnl_pct": -2.33}] and not positions.get_open_positions()
-    assert positions.get_closed_positions()[0]["close_reason"] == "Sold on Robinhood (2999-01-01)"
+        {"ticker": "GS", "qty": 0.166, "price": 879.0, "filled_at": later},
+        {"ticker": "ETH", "qty": 9.0, "price": 1.0, "filled_at": later}])        # an equity "ETH" must not close the coin
+    out = position_sync.close_sold({"AAPL"}, set())                              # sold everything
+    assert sorted((c["ticker"], c["pnl_pct"]) for c in out["closed"]) == [("ETH", 2.0), ("GS", -2.33)]
+    assert not positions.get_open_positions() and not out["errors"]
+    assert {p["close_reason"] for p in positions.get_closed_positions()} == {"Sold on Robinhood (2999-01-01)"}
+
+
+def test_normalize_crypto_sells():
+    from ingestion.robinhood_mcp import _normalize_crypto_sells
+    rows = [{"side": "sell", "state": "filled", "currency_code": "eth", "cumulative_quantity": "0.07",
+             "average_price": "2448.0", "created_at": "2026-10-20T10:00:00-04:00",
+             "updated_at": "2026-10-20T10:00:02-04:00"},
+            {"side": "sell", "currency_code": "XRP", "cumulative_quantity": "100", "average_price": "1.41",
+             "created_at": "2026-09-15T10:11:45-04:00"},                                  # before `since`
+            {"side": "buy", "currency_code": "ETH", "cumulative_quantity": "1", "average_price": "2400",
+             "created_at": "2026-10-20T09:00:00-04:00"}]
+    assert _normalize_crypto_sells(rows, "2026-10-01") == [
+        {"ticker": "ETH", "qty": 0.07, "price": 2448.0, "filled_at": "2026-10-20T10:00:02-04:00"}]
 
 
 def test_mcp_refresh_discovers_token_endpoint(monkeypatch):

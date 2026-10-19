@@ -689,19 +689,54 @@ def _normalize_crypto_positions(rows, quotes: dict | None = None) -> list[dict]:
     return out
 
 
-def fetch_crypto_positions(account_number: str) -> list[dict]:
-    """Crypto holdings of a brokerage account (via its linked crypto account), priced at the mark.
-    Degrades to [] on any failure — callers that must not act on a failed read check the book, not this."""
+def fetch_crypto_positions(account_number: str | None, *, strict: bool = False) -> list[dict] | None:
+    """Crypto holdings of a brokerage account (via its linked crypto account), priced at the mark. The
+    account is explicit on purpose: the agent passes the AGENTIC one, and a missing number must not fall
+    through to the main account. Row shape verified live 2026-10-19 (currency.code +
+    cost_bases[].direct_cost_basis). On any failure: [] — or None with strict=True, for callers that must
+    tell "holds nothing" from "unreadable"."""
+    fail = None if strict else []
     if not is_available() or not account_number:
-        return []
+        return fail
     try:
         data = _data(_call_tool(_TOOL_CRYPTO_POSITIONS, {"rhs_account_number": account_number}))
     except Exception as e:  # noqa: BLE001
         print(f"Robinhood MCP crypto positions: fetch failed — {e}")
-        return []
+        return fail
     rows = (data.get("results") or data.get("positions") or []) if isinstance(data, dict) else []
     tickers = [_crypto_row_fields(r)[0] for r in rows if isinstance(r, dict)]
     return _normalize_crypto_positions(rows, fetch_crypto_quotes([t for t in tickers if t]))
+
+
+def _normalize_crypto_sells(orders: list, since: str) -> list[dict]:
+    """Pure: get_crypto_orders rows → executed sells {ticker, qty, price, filled_at} created on/after `since`.
+    Crypto orders carry the coin in `currency_code` (no symbol) and no last_transaction_at → updated_at."""
+    out = []
+    for o in orders or []:
+        if (o.get("side") or "").lower() != "sell" or str(o.get("created_at") or "")[:10] < since:
+            continue
+        ticker = (o.get("currency_code") or "").upper()
+        qty, price = _to_float(o.get("cumulative_quantity")), _to_float(o.get("average_price"))
+        if ticker and qty > 0 and price > 0:
+            out.append({"ticker": ticker, "qty": qty, "price": price,
+                        "filled_at": o.get("updated_at") or o.get("created_at")})
+    return out
+
+
+def fetch_filled_crypto_sells(since: str, account_number: str | None = None) -> list[dict] | None:
+    """Executed crypto sells created on/after `since` (YYYY-MM-DD), MAIN account by default. The tool
+    returns the full history (no date filter), so it's filtered here. None = unreadable."""
+    if not is_available():
+        return None
+    try:
+        acct = account_number or _main_account_number()
+        if not acct:
+            return None
+        data = _data(_call_tool("get_crypto_orders", {"rhs_account_number": acct}))
+        return _normalize_crypto_sells((data or {}).get("results"), since)
+    except Exception as e:  # noqa: BLE001
+        print(f"Robinhood MCP crypto sells: {e}")
+        return None
 
 
 def _crypto_order_shape_error(intent: OrderIntent) -> str | None:
