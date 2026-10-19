@@ -2,6 +2,18 @@
 
 ## Done
 
+### 80. Sync handles crypto: adds held coins, closes sold ones (2026-10-19) ✅
+User bought ETH and Sync ignored it — coins were skipped by design ("the MCP has no crypto endpoint", stale since
+K1). Sync now also reads the main account's crypto holdings (`account_reads.crypto_positions` →
+`fetch_crypto_positions(acct, strict=True)`; None = unreadable) and adds new coins with a structure exit; sold
+coins close at their real fill via `get_crypto_orders` (`fetch_filled_crypto_sells` / pure `_normalize_crypto_sells`;
+the coin is in `currency_code`, filled time = updated_at). `position_sync.close_sold(held_stocks, held_crypto)`
+matches stocks and coins SEPARATELY (SOL is both; an equity sell must never close a coin) and skips a side whose
+read failed. `fetch_crypto_positions` keeps an explicit account (a missing agentic number must not fall through to
+MAIN). Crypto position row shape now verified live (ETH). Sync's message says when everything already matches.
+Live: ETH added (0.0701 @ $2,401.64, $168.36). 166 tests. Files: storage/position_sync.py,
+ingestion/robinhood_mcp.py, ingestion/account_reads.py, dashboard/app.py, CLAUDE.md, tests.
+
 ### 79. Robinhood MCP silent refresh actually works now (2026-10-16) ✅
 The login died every time the access token expired (10-06, 10-16) despite the old expiry fix. Root cause: in a
 fresh process the mcp SDK has no OAuth metadata (it's learned only during a full browser authorization), so it

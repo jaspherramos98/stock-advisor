@@ -98,7 +98,10 @@ storage/
                               open long no longer held → its executed sells since opened (`robinhood_mcp.
                               fetch_filled_sells` via account_reads.filled_sells, get_equity_orders on MAIN) →
                               closed at the qty-weighted avg fill. No matching sell → left open + reported;
-                              crypto + shorts skipped; unreadable order history → closes nothing.
+                              shorts skipped; unreadable holdings/order history → that side closes nothing.
+                              CRYPTO too (TODO #80): Sync adds held coins (`account_reads.crypto_positions`, main
+                              acct) and closes sold ones via get_crypto_orders (`fetch_filled_crypto_sells`; coin =
+                              `currency_code`). Stocks and coins are matched separately (SOL is both).
   watchlist.py                Ticker watchlist
   sheets.py                   Google Sheets export/read
 alerts/snooze.py              Alert snooze/dismiss logic
@@ -837,11 +840,11 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
   preview problem BLOCKS a buy, never a sell). Verified live: the agentic account's crypto account is onboarded
   + agentic-enabled, $1 market buy previews clean with ZERO fee, `rhs_account_number` == `account_number`.
   **Robinhood crypto is market-maker priced: bid/ask spread ~1.9% (BTC/DOGE/ETH)** — a round trip costs ~2%
-  before any move. No account holds crypto today, so the POSITION row shape is unverified (parsed defensively;
-  confirm on the first real position). The agent trades it via alerts/agentic_crypto.py (K2 #71). K3 (#72): the
+  before any move. POSITION row shape verified live 2026-10-19 on the main account's ETH (currency.code +
+  cost_bases[].direct_cost_basis — what the parser already expected). The agent trades it via alerts/agentic_crypto.py (K2 #71). K3 (#72): the
   6:30 pipeline runs with `--crypto` (+5 crypto stories on top of the 15 stock ones); off-hours the scheduler runs
   only `run_crypto_exits` (free with no coins held); the Agent tab shows paper + real crypto with Sell now. The
-  sidebar Sync still skips crypto (the main account holds none today).
+  sidebar Sync adds + closes main-account coins too (TODO #80).
 - **Equity order rules (verified S0, 2026-09-27):** fractional / `dollar_amount` orders are `market` +
   `regular_hours` only (dollar min $1); `review_equity_order` is advisory — problems come back as a soft
   `data.order_checks.alertType`, not an error, and it doesn't catch every illegal shape. Details: TODO "Stock

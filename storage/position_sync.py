@@ -7,8 +7,10 @@ sells since it was opened, and closed at their quantity-weighted average fill pr
 and the scorecard use the real exit.
 
 Never guesses: no matching sell (a transfer, or a sale before the position was tracked) → left open and
-reported as unresolved. Crypto is skipped (the main account's coins aren't in the equity position read,
-so every coin would look "sold"). Shorts are skipped (Argus shorts are tracked ideas, not broker shorts).
+reported as unresolved. Stocks and coins are matched SEPARATELY (equity positions vs equity sells, crypto
+holdings vs crypto sells) — a coin never appears in the equity read, so mixing them would make every coin
+look "sold", and SOL is both a stock and a coin. A side whose holdings read failed is skipped entirely.
+Shorts are skipped (Argus shorts are tracked ideas, not broker shorts).
 `sold_positions` is pure; `close_sold` does the reads + writes.
 """
 from __future__ import annotations
@@ -25,16 +27,15 @@ def _aware(ts: str | None) -> datetime | None:
     return dt if dt.tzinfo else dt.astimezone()
 
 
-def sold_positions(open_positions: list[dict], held_tickers, sells: list[dict],
-                   skip_tickers=frozenset()) -> tuple[list[dict], list[str]]:
+def sold_positions(open_positions: list[dict], held_tickers, sells: list[dict]) -> tuple[list[dict], list[str]]:
     """Pure: (closes [{ticker, price, qty, filled_at}], unresolved tickers) for tracked open longs that
-    are no longer held. A sell counts only if it filled after the position was opened."""
+    are no longer held. A sell counts only if it filled after the position was opened. One asset class
+    per call (positions, holdings and sells all stocks, or all coins)."""
     held = {t.upper() for t in held_tickers}
-    skip = {t.upper() for t in skip_tickers}
     closes, unresolved = [], []
     for p in open_positions:
         t = (p.get("ticker") or "").upper()
-        if not t or p.get("direction", "buy") != "buy" or t in held or t in skip:
+        if not t or p.get("direction", "buy") != "buy" or t in held:
             continue
         opened = _aware(p.get("opened_at")) or datetime.min.replace(tzinfo=timezone.utc)
         fills = [s for s in sells
@@ -49,28 +50,40 @@ def sold_positions(open_positions: list[dict], held_tickers, sells: list[dict],
     return closes, unresolved
 
 
-def close_sold(held_tickers) -> dict:
-    """Close every tracked position sold on Robinhood. `held_tickers` must come from a SUCCESSFUL position
-    read (an empty read on error would make everything look sold — the caller gates on that).
-    → {"closed": [{ticker, pnl_pct}], "unresolved": [ticker], "error": str | None}"""
-    from ingestion.account_reads import filled_sells
+def close_sold(held_stocks: set | None, held_crypto: set | None) -> dict:
+    """Close every tracked position sold on Robinhood. Each held set must come from a SUCCESSFUL read; pass
+    None when that read failed (or returned nothing) and that side is left alone — an empty read on error
+    would make everything look sold.
+    → {"closed": [{ticker, pnl_pct}], "unresolved": [ticker], "errors": [str]}"""
+    from ingestion.account_reads import filled_crypto_sells, filled_sells
     from ingestion.coingecko import TICKER_TO_COINGECKO_ID
     from storage.positions import close_position, get_open_positions
 
+    out = {"closed": [], "unresolved": [], "errors": []}
     open_positions = get_open_positions()
-    candidates = [p for p in open_positions if (p.get("ticker") or "").upper() not in
-                  {t.upper() for t in held_tickers}]
+    held_all = {t.upper() for t in (held_stocks or set()) | (held_crypto or set())}
+    candidates = [p for p in open_positions if (p.get("ticker") or "").upper() not in held_all]
     if not candidates:
-        return {"closed": [], "unresolved": [], "error": None}
+        return out
     starts = [d for d in (_aware(p.get("opened_at")) for p in candidates) if d]
     since = (min(starts) - timedelta(days=1)).date().isoformat() if starts else "2000-01-01"
-    sells = filled_sells(since)
-    if sells is None:
-        return {"closed": [], "unresolved": [], "error": "could not read Robinhood order history"}
-    closes, unresolved = sold_positions(open_positions, held_tickers, sells,
-                                        skip_tickers=TICKER_TO_COINGECKO_ID.keys())
-    closed = []
-    for c in closes:
-        rec = close_position(c["ticker"], f"Sold on Robinhood ({str(c['filled_at'])[:10]})", c["price"])
-        closed.append({"ticker": c["ticker"], "pnl_pct": (rec or {}).get("pnl_pct")})
-    return {"closed": closed, "unresolved": unresolved, "error": None}
+
+    crypto_sells = filled_crypto_sells(since) if held_crypto is not None else None
+    coins = ({t.upper() for t in TICKER_TO_COINGECKO_ID} | {t.upper() for t in held_crypto or ()}
+             | {s["ticker"] for s in crypto_sells or []})
+    is_coin = lambda p: (p.get("ticker") or "").upper() in coins  # noqa: E731
+    sides = (("stocks", [p for p in open_positions if not is_coin(p)], held_stocks, filled_sells),
+             ("crypto", [p for p in open_positions if is_coin(p)], held_crypto, lambda _: crypto_sells))
+    for name, positions, held, read_sells in sides:
+        if not any((p.get("ticker") or "").upper() not in held_all for p in positions):
+            continue                                   # everything on this side is still held
+        sells = read_sells(since) if held is not None else None
+        if sells is None:
+            out["errors"].append(f"{name} not checked — Robinhood holdings or order history unreadable")
+            continue
+        closes, unresolved = sold_positions(positions, held, sells)
+        out["unresolved"] += unresolved
+        for c in closes:
+            rec = close_position(c["ticker"], f"Sold on Robinhood ({str(c['filled_at'])[:10]})", c["price"])
+            out["closed"].append({"ticker": c["ticker"], "pnl_pct": (rec or {}).get("pnl_pct")})
+    return out

@@ -19,7 +19,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # --- Local imports after path is set ---
 from config import CLAUDE_MODEL
 from ingestion.prices import fetch_prices
-from ingestion.coingecko import TICKER_TO_COINGECKO_ID
 from main import run_ingestion_and_analysis
 from calculator.portfolio import calculate_allocations
 from storage.positions import add_position, get_open_positions, get_closed_positions, update_amount_invested
@@ -474,15 +473,17 @@ with st.sidebar:
                 st.success(f"Live buying power: ${bp:,.2f} — this is your budget.")
                 st.rerun()
         if st.button("🔄 Sync positions", use_container_width=True):
+            from ingestion.account_reads import crypto_positions as rh_crypto
             with st.spinner("Connecting to Robinhood..."):
                 rh_positions = rh_fetch()
-            if rh_positions:
+                rh_coins = rh_crypto()                      # None = unreadable (≠ holds no coins)
+            if rh_positions or rh_coins is not None:
                 synced = 0
                 existing_tickers = {p["ticker"] for p in get_open_positions()}
-                for rp in rh_positions:
+                for rp in (rh_positions or []) + (rh_coins or []):
                     if rp["ticker"] in existing_tickers:
                         continue
-                    _crypto = bool(TICKER_TO_COINGECKO_ID.get(rp["ticker"], ""))
+                    _crypto = rp.get("asset_type") == "crypto"
                     exit_cond = (_structure_exit_condition(rp["ticker"], "crypto" if _crypto else "stock")
                                  or "target 10% gain, stop loss at 5%")
                     add_position(
@@ -500,7 +501,8 @@ with st.sidebar:
                 # Only after a successful read: an empty read on error would make everything look sold.
                 from storage.position_sync import close_sold
                 with st.spinner("Checking Robinhood for positions you sold..."):
-                    sold = close_sold({rp["ticker"] for rp in rh_positions})
+                    sold = close_sold({rp["ticker"] for rp in rh_positions} if rh_positions else None,
+                                      {c["ticker"] for c in rh_coins} if rh_coins is not None else None)
                 parts = [f"Synced {synced} new"]
                 if sold["closed"]:
                     parts.append(f"closed {len(sold['closed'])} sold (" + ", ".join(
@@ -509,17 +511,15 @@ with st.sidebar:
                 if sold["unresolved"]:
                     parts.append(f"{len(sold['unresolved'])} not held but no sell found: "
                                  f"{', '.join(sold['unresolved'])} — close by hand")
-                if sold["error"]:
-                    parts.append(f"sold check skipped — {sold['error']}")
+                parts += sold["errors"]
+                if not synced and not sold["closed"] and not sold["unresolved"] and not sold["errors"]:
+                    parts = ["Everything matches Robinhood — nothing new, nothing sold"]
                 st.session_state.sync_msg = " · ".join(parts) + "."
                 st.rerun()
             else:
-                st.info("No equity/ETF positions to sync (crypto isn't readable via the MCP — "
-                        "add coins manually below).")
+                st.error("Couldn't read your Robinhood positions — nothing changed.")
         if st.session_state.get("sync_msg"):
             st.success(st.session_state.pop("sync_msg"))
-            st.caption("⚠️ Crypto (DOGE, XRP, etc.) isn't synced — add and close coins manually "
-                       "(Manage positions).")
 
 # --- Session state ---
 if "recommendations" not in st.session_state:
