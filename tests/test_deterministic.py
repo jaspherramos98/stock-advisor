@@ -2505,3 +2505,38 @@ def test_mcp_refresh_discovers_token_endpoint(monkeypatch):
     req = asyncio.run(p._refresh_token())
     assert str(req.url) == "https://api.robinhood.com/oauth2/token/"
     assert seen == ["https://agent.robinhood.com/mcp/trading"]
+
+
+def test_coins_never_get_the_etf_quote(monkeypatch):
+    """ETH / BTC / XRP are also ETF tickers: the equity quote priced the coin ETH at $22.88 (2026-10-19)."""
+    import config
+    from ingestion import account_reads, robinhood_mcp
+    from ingestion.coingecko import is_crypto
+    assert is_crypto("eth") and is_crypto("DOGE") and not is_crypto("AAPL") and not is_crypto(None)
+    monkeypatch.setattr(config, "USE_MCP", True, raising=False)
+    asked = []
+    monkeypatch.setattr(robinhood_mcp, "fetch_quotes",
+                        lambda ts: asked.extend(ts) or {t: {"price": 22.88 if t == "ETH" else 342.8} for t in ts})
+    monkeypatch.setattr(robinhood_mcp, "fetch_crypto_quotes",
+                        lambda ts: {"ETH": {"price": 2404.36, "bid": 2381.7, "ask": 2427.0}})
+    q = account_reads.quotes(["AAPL", "ETH", "BTC"])
+    assert asked == ["AAPL"]                                             # coins never hit the equity quote
+    assert q["ETH"]["price"] == 2404.36 and q["ETH"]["change_pct"] == 0.0 and q["BTC"] is None
+    assert q["AAPL"]["price"] == 342.8
+
+
+def test_fetch_prices_coin_keeps_rh_mark_with_yahoo_day_change(monkeypatch):
+    from ingestion import account_reads, prices
+    monkeypatch.setattr(account_reads, "is_available", lambda: True)
+    monkeypatch.setattr(account_reads, "quotes", lambda ts: {
+        "ETH": {"price": 2400.0, "bid": 2380.0, "ask": 2420.0, "change": 0.0, "change_pct": 0.0, "high": 0.0,
+                "low": 0.0}, "BTC": None})
+    yahoo = {"ETH-USD": {"price": 2404.0, "change": 4.0, "change_pct": 0.17, "high": 2443.0, "low": 2388.0},
+             "BTC-USD": {"price": 82000.0, "change": 0.0, "change_pct": 0.0, "high": 0.0, "low": 0.0}}
+    monkeypatch.setattr(prices, "_yfinance_quote", lambda t: yahoo.get(prices._yahoo_symbol(t)))
+    out = prices.fetch_prices(["ETH", "BTC"])
+    assert out["ETH"]["price"] == 2400.0 and out["ETH"]["bid"] == 2380.0          # RH mark is the price
+    assert out["ETH"]["change"] == 0.0 and out["ETH"]["high"] == 2443.0           # prev close 2400 → flat
+    assert out["BTC"]["price"] == 82000.0                                         # RH miss → Yahoo BTC-USD
+    assert prices._yahoo_symbol("ETH") == "ETH-USD" and prices._yahoo_symbol("AAPL") == "AAPL"
+    assert prices.with_day_change({"price": 10.0}, None)["change_pct"] == 0.0

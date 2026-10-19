@@ -25,7 +25,19 @@ TICKER_TO_COINGECKO_ID = {
     "DOT":  "polkadot",
     "MATIC": "matic-network",
     "LINK": "chainlink",
+    "DOGE": "dogecoin",
+    "SHIB": "shiba-inu",
+    "BONK": "bonk",
+    "PEPE": "pepe",
 }
+
+
+def is_crypto(ticker: str | None) -> bool:
+    """THE rule for "this ticker is a coin" wherever no asset_type travels with it (saved positions, pins,
+    price lookups). Several coin tickers are ALSO listed equities — ETH / BTC / XRP are Grayscale & co. ETFs
+    priced ~$15–40 — so a coin must never be quoted as a stock (2026-10-19: Argus showed ETH at the ETF's $22.88
+    → a false −99% stop-loss email). Argus doesn't trade those ETFs, so these tickers always mean the coin."""
+    return (ticker or "").upper() in TICKER_TO_COINGECKO_ID
 
 
 def fetch_coin_context(ticker: str) -> dict | None:

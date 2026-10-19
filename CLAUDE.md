@@ -80,7 +80,9 @@ analysis/scorecard.py         Closed-trade performance scorecard — payoff/prof
                               concentration, let-run-vs-closed-early discipline leak, SPY benchmark
 calculator/portfolio.py       Budget allocation with HR 2x weighting
 ingestion/
-  prices.py                   Live prices + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
+  prices.py                   Live prices (`fetch_prices`: Robinhood via account_reads.quotes → Yahoo fallback; a coin
+                              keeps RH's crypto mark as price + Yahoo '<COIN>-USD' day change via `with_day_change`)
+                              + 14d trend + technical indicators (RSI/MACD/SMA/52w/vol)
                               + ETF relative-strength rotation vs SPY (RRG) + market regime (SPY/VIX, R6)
                               + key price levels (support/resistance) anchoring watch entry triggers (R7)
   fundamentals.py             Fact-based company fundamentals (valuation/growth/margins) + next earnings date (R6) via yfinance
@@ -179,7 +181,11 @@ ingestion/robinhood_mcp.py    Robinhood official Trading MCP client (R25, Path B
                               are the verified live tool names (use them — don't hardcode tool strings).
                               USE_MCP=False → never touched.
 ingestion/account_reads.py    Read dispatcher (R25) — buying_power/positions/quotes/is_available routed
-                              to the MCP (USE_MCP=True, no 429) or robin_stocks (False), NO cross-fallback
+                              to the MCP (USE_MCP=True, no 429) or robin_stocks (False). `quotes()` sends COINS
+                              (`coingecko.is_crypto` = THE coin rule) to the crypto quote, never the equity one:
+                              ETH/BTC/XRP are also ETF tickers (~$15–40) — Argus showed ETH at the ETF's $22.88 and
+                              emailed a false −99% stop (TODO #81). Also crypto_quotes/crypto_positions/
+                              filled_sells/filled_crypto_sells. NO cross-fallback
                               (so MCP-on can't silently re-trigger the robin_stocks login). Dashboard +
                               prices import from HERE. News stays on robin_stocks and is skipped when USE_MCP.
 ingestion/mcp_auth.py         OAuth transport for the MCP (R25) — wraps the mcp SDK OAuthClientProvider

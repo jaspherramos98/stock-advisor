@@ -2,6 +2,21 @@
 
 ## Done
 
+### 81. Coins priced as coins, not as same-ticker ETFs (2026-10-19) ✅
+User: "argus eth live price is wrong". `fetch_prices` asked Robinhood's EQUITY quote first, and ETH / BTC / XRP are
+also listed ETFs (Grayscale Ethereum Mini Trust $22.88, a Bitcoin mini trust $36.19, an XRP ETF $14.51) → the synced
+ETH position read −99% and exit_checker EMAILED a false STOP LOSS (10:48). Every fetch_prices/quotes consumer was
+affected: dashboard tabs, exit + entry alerts, the pipeline's crypto rec prices, and agentic_watch (a crypto watch
+trigger compared to the ETF price; only the 3%-of-level guard kept it from firing). The agent's own crypto leg and
+paper fills were already right (crypto quotes). Fix at the one choke point: `coingecko.is_crypto` is THE coin rule
+(map + DOGE/SHIB/BONK/PEPE); `account_reads.quotes` routes coins to `crypto_quotes`; `fetch_prices` keeps RH's mark
+as price + Yahoo '<COIN>-USD' day change (`with_day_change`); Yahoo symbol for any coin = '<COIN>-USD' (`_yahoo_symbol`,
+replaces the 5-coin CRYPTO_YAHOO_MAP — DOGE history now loads). Trade-off: those tickers always mean the coin
+(Argus doesn't trade the ETFs). NOT rewritten: the August BTC/ETH closed trades were recorded at ETF prices ($31.73,
+$21.77) — their % P&L tracks the ETFs, not the coins. Verified live: ETH $2,403 / BTC $81,974 / XRP $1.30 / DOGE
+$0.079; ETH position +0.07%. 168 tests. Files: ingestion/coingecko.py, ingestion/account_reads.py, ingestion/prices.py,
+storage/position_sync.py, CLAUDE.md, tests.
+
 ### 80. Sync handles crypto: adds held coins, closes sold ones (2026-10-19) ✅
 User bought ETH and Sync ignored it — coins were skipped by design ("the MCP has no crypto endpoint", stale since
 K1). Sync now also reads the main account's crypto holdings (`account_reads.crypto_positions` →

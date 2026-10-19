@@ -56,7 +56,7 @@ def close_sold(held_stocks: set | None, held_crypto: set | None) -> dict:
     would make everything look sold.
     → {"closed": [{ticker, pnl_pct}], "unresolved": [ticker], "errors": [str]}"""
     from ingestion.account_reads import filled_crypto_sells, filled_sells
-    from ingestion.coingecko import TICKER_TO_COINGECKO_ID
+    from ingestion.coingecko import is_crypto
     from storage.positions import close_position, get_open_positions
 
     out = {"closed": [], "unresolved": [], "errors": []}
@@ -69,9 +69,8 @@ def close_sold(held_stocks: set | None, held_crypto: set | None) -> dict:
     since = (min(starts) - timedelta(days=1)).date().isoformat() if starts else "2000-01-01"
 
     crypto_sells = filled_crypto_sells(since) if held_crypto is not None else None
-    coins = ({t.upper() for t in TICKER_TO_COINGECKO_ID} | {t.upper() for t in held_crypto or ()}
-             | {s["ticker"] for s in crypto_sells or []})
-    is_coin = lambda p: (p.get("ticker") or "").upper() in coins  # noqa: E731
+    coins = {t.upper() for t in held_crypto or ()} | {s["ticker"] for s in crypto_sells or []}
+    is_coin = lambda p: is_crypto(p.get("ticker")) or (p.get("ticker") or "").upper() in coins  # noqa: E731
     sides = (("stocks", [p for p in open_positions if not is_coin(p)], held_stocks, filled_sells),
              ("crypto", [p for p in open_positions if is_coin(p)], held_crypto, lambda _: crypto_sells))
     for name, positions, held, read_sells in sides:
