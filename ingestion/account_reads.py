@@ -67,6 +67,15 @@ def filled_sells(since: str) -> list[dict] | None:
     return None
 
 
+def crypto_quotes(tickers: list[str]) -> dict[str, dict]:
+    """Coin quotes {TICKER: {price (mark), bid, ask}} — MCP only ({} otherwise; fetch_prices then falls
+    back to Yahoo '<COIN>-USD'). quotes() routes coins here automatically."""
+    if _use_mcp():
+        from ingestion import robinhood_mcp
+        return robinhood_mcp.fetch_crypto_quotes(tickers)
+    return {}
+
+
 def crypto_positions() -> list[dict] | None:
     """Main-account crypto holdings (same keys as positions() + asset_type). None = unreadable — the
     robin_stocks path isn't wired for this, so it reports unknown rather than "holds nothing"."""
@@ -90,9 +99,24 @@ def filled_crypto_sells(since: str) -> list[dict] | None:
 
 
 def quotes(tickers: list[str]) -> dict[str, dict]:
-    """Quotes keyed by ticker: {price,change,change_pct,high,low} or None per ticker."""
-    if _use_mcp():
-        from ingestion import robinhood_mcp
-        return robinhood_mcp.fetch_quotes(tickers)
-    from ingestion.robinhood import fetch_quotes
-    return fetch_quotes(tickers)
+    """Quotes keyed by ticker: {price,change,change_pct,high,low} or None per ticker.
+    Coins (`coingecko.is_crypto`) go to the CRYPTO quote, never the equity one: ETH / BTC / XRP are also ETF
+    tickers, and the equity quote priced the coin ETH at the ETF's $22.88 (2026-10-19). A coin's entry carries
+    the mark price + bid/ask; change/high/low are 0.0 (= unknown — fetch_prices fills them from Yahoo)."""
+    from ingestion.coingecko import is_crypto
+    coins = [t for t in tickers if is_crypto(t)]
+    stocks = [t for t in tickers if not is_crypto(t)]
+    out: dict[str, dict] = {}
+    if stocks:
+        if _use_mcp():
+            from ingestion import robinhood_mcp
+            out.update(robinhood_mcp.fetch_quotes(stocks))
+        else:
+            from ingestion.robinhood import fetch_quotes
+            out.update(fetch_quotes(stocks))
+    if coins:
+        cq = crypto_quotes(coins)
+        for t in coins:
+            q = cq.get(t.upper())
+            out[t] = {**q, "change": 0.0, "change_pct": 0.0, "high": 0.0, "low": 0.0} if q else None
+    return out

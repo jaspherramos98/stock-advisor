@@ -4,15 +4,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# Yahoo Finance uses different symbols for crypto. Used by both the yfinance
-# price fallback and the 14-day history fetch.
-CRYPTO_YAHOO_MAP = {
-    "BTC":  "BTC-USD",
-    "ETH":  "ETH-USD",
-    "SOL":  "SOL-USD",
-    "BNB":  "BNB-USD",
-    "XRP":  "XRP-USD",
-}
+def _yahoo_symbol(ticker: str) -> str:
+    """Yahoo quotes coins as '<COIN>-USD' (plain 'ETH' is the Grayscale ETF). Used by the price
+    fallback and the price-history fetch."""
+    from ingestion.coingecko import is_crypto
+    return f"{ticker.upper()}-USD" if is_crypto(ticker) else ticker
 
 
 def _yfinance_quote(ticker: str) -> dict | None:
@@ -23,7 +19,7 @@ def _yfinance_quote(ticker: str) -> dict | None:
     """
     import yfinance as yf
 
-    yahoo_symbol = CRYPTO_YAHOO_MAP.get(ticker, ticker)
+    yahoo_symbol = _yahoo_symbol(ticker)
 
     try:
         hist = yf.Ticker(yahoo_symbol).history(period="2d", interval="1d")
@@ -53,6 +49,22 @@ def _yfinance_quote(ticker: str) -> dict | None:
         return None
 
 
+def with_day_change(quote: dict, ref: dict | None) -> dict:
+    """Pure: give a price-only quote (Robinhood crypto: price/bid/ask) the fetch_prices shape. The day
+    change is measured from `ref`'s previous close (ref price − ref change); no ref → zeros, the same
+    "unknown" convention the MCP equity quote uses for high/low."""
+    price = quote["price"]
+    out = {**quote, "change": 0.0, "change_pct": 0.0, "high": 0.0, "low": 0.0}
+    if ref and ref.get("price"):
+        prev = ref["price"] - ref.get("change", 0.0)
+        if prev:
+            out["change"] = round(price - prev, 2)
+            out["change_pct"] = round((price - prev) / prev * 100, 2)
+        out["high"] = max(ref.get("high") or 0.0, price)
+        out["low"] = min(ref.get("low") or price, price)
+    return out
+
+
 def fetch_prices(tickers: list[str]) -> dict[str, dict]:
     """
     Fetches current price data for a list of tickers.
@@ -76,10 +88,13 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
     """
     if not tickers:
         return {}
+    from ingestion.coingecko import is_crypto
 
     results: dict[str, dict] = {}
+    coins = [t for t in tickers if is_crypto(t)]
 
     # --- Primary: Robinhood (MCP or robin_stocks, per config.USE_MCP) ---
+    # account_reads.quotes sends coins to the crypto quote (ETH/BTC/XRP are also ETF tickers).
     try:
         from ingestion.account_reads import is_available, quotes as fetch_quotes
         if is_available():
@@ -89,6 +104,12 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
                     results[ticker] = rh_results[ticker]
     except Exception as e:
         print(f"Prices: Robinhood quote source unavailable — {e}")
+
+    # Robinhood's crypto quote has no day change / range — take those from Yahoo, keeping RH's mark
+    # (the price the account actually trades at) as the price.
+    for t in coins:
+        if t in results:
+            results[t] = with_day_change(results[t], _yfinance_quote(t))
 
     # --- Fallback: Yahoo Finance for anything Robinhood didn't cover ---
     remaining = [t for t in tickers if t not in results]
@@ -417,13 +438,7 @@ def fetch_price_history(tickers: list[str], asset_type: str = "stock") -> dict[s
     for ticker in tickers:
         try:
             # Map ticker to Yahoo Finance symbol
-            if asset_type == "crypto":
-                yahoo_symbol = CRYPTO_YAHOO_MAP.get(ticker)
-                if not yahoo_symbol:
-                    print(f"Price history: no Yahoo mapping for {ticker}, skipping.")
-                    continue
-            else:
-                yahoo_symbol = ticker
+            yahoo_symbol = f"{ticker.upper()}-USD" if asset_type == "crypto" else _yahoo_symbol(ticker)
 
             # Fetch ~1 year so there's enough history for SMA200 / RSI / MACD.
             hist = yf.Ticker(yahoo_symbol).history(period="1y", interval="1d")
