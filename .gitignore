@@ -11,10 +11,12 @@ market_open.log
 pipeline.log
 paper_book.json
 paper_agent_stocks.json
+paper_agent_crypto.json
 paper_peaks.json
 paper_holding_review.json
 peaks.json
 agent_stocks.json
+agent_crypto.json
 agent_decisions.jsonl
 holding_review.json
 pipeline_cache_backup.json
