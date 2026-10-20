@@ -15,6 +15,48 @@ load_dotenv()
 # asset-type slot split in _deduplicate_by_asset_type scales off this.
 MAX_STORIES = 15
 ADDON_STORIES = 5   # extra story slots per additional asset class (ETFs / crypto) — see _deduplicate_by_asset_type
+ANALYSIS_MAX_TOKENS = 8000   # a truncated tool call is lost whole, so leave room (~10–15 recs ≈ 3–5k tokens)
+
+# The analyst answers through a FORCED tool call, not free text: told "ONLY a JSON array, no preamble", it still
+# opened with prose ("Looking at the data carefully: …") on 2 of 5 mornings (2026-10-16, 10-19) → json.loads failed
+# → the day's paid run returned [] and the agent had no signals until a manual rerun. A forced tool call makes the
+# API return structured input with no text to strip (same pattern as analysis/agent_judge.py).
+_REC_FIELDS = {
+    "ticker": {"type": ["string", "null"]},
+    "company_name": {"type": "string"},
+    "asset_type": {"type": "string", "enum": ["stock", "etf", "crypto"]},
+    "direction": {"type": "string", "enum": ["buy", "short", "watch", "avoid"]},
+    "entry_rationale": {"type": "string"},
+    "entry_trigger": {"type": "string"},
+    "exit_condition": {"type": "string"},
+    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+    "confidence_score": {"type": "number"},
+    "conviction": {"type": "number"},
+    "flagged": {"type": "boolean"},
+    "source_title": {"type": "string"},
+    "catalyst_date": {"type": ["string", "null"]},
+    "highly_recommended": {"type": "boolean"},
+}
+RECS_TOOL = {
+    "name": "record_recommendations",
+    "description": "Record today's recommendations (the full list, per the rules in the system prompt).",
+    "input_schema": {
+        "type": "object",
+        "properties": {"recommendations": {"type": "array", "items": {
+            "type": "object", "properties": _REC_FIELDS, "required": list(_REC_FIELDS)}}},
+        "required": ["recommendations"],
+    },
+}
+
+
+def _recs_from_message(message) -> list | None:
+    """Pure: the recommendations list from the forced record_recommendations call; None if it's missing or
+    malformed (e.g. cut off at max_tokens — a partial tool input can't be trusted)."""
+    for block in getattr(message, "content", None) or []:
+        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == RECS_TOOL["name"]:
+            recs = (block.input or {}).get("recommendations") if isinstance(block.input, dict) else None
+            return recs if isinstance(recs, list) else None
+    return None
 
 
 def _deduplicate(items: list[dict], max_stories: int = MAX_STORIES) -> list[dict]:
@@ -669,7 +711,8 @@ def run_analysis(
             p["ticker"] for p in open_positions
             if p.get("ticker") and (p.get("direction") or "buy") != "short"
         ]
-        owned_stock_tickers = [t for t in owned_stock_tickers if t not in crypto_news_tickers]
+        from ingestion.coingecko import is_crypto     # an owned coin isn't in today's crypto news necessarily
+        owned_stock_tickers = [t for t in owned_stock_tickers if t not in crypto_news_tickers and not is_crypto(t)]
         if owned_stock_tickers:
             from ingestion.fundamentals import fetch_fundamentals
             owned_fund = fetch_fundamentals(owned_stock_tickers)
@@ -890,10 +933,8 @@ EXIT CONDITIONS — ANCHOR TO EACH STOCK'S OWN CHART, NOT A ROUND NUMBER:
   For a 'buy' or 'short' you act now, so set entry_trigger to "now" (or "" ). Never put the entry
   condition inside exit_condition.
 
-You must respond with ONLY a valid JSON array. No preamble, no explanation,
-no markdown code fences. Just the raw JSON array.
-
-Each object in the array must have exactly these fields:
+Return your answer by calling the record_recommendations tool with the full list — that call is your
+entire output. Each object in its `recommendations` array must have exactly these fields:
 {{
   "ticker":             string or null,
   "company_name":       string,
@@ -916,8 +957,8 @@ Each object in the array must have exactly these fields:
 Per the WATCH FLOOR, return at least 10 items (buys + shorts + watches) on a normal news day. Only
 return an empty array if there is genuinely no relevant, fact-based market news at all — which is very rare."""
 
-    user_prompt = f"""Here are today's validated news items. Analyze them and return
-your recommendations as a JSON array.
+    user_prompt = f"""Here are today's validated news items. Analyze them and record
+your recommendations with the record_recommendations tool.
 
 NEWS ITEMS:
 {news_block}"""
@@ -926,33 +967,18 @@ NEWS ITEMS:
     try:
         message = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=4000,
+            max_tokens=ANALYSIS_MAX_TOKENS,
             messages=[{"role": "user", "content": user_prompt}],
             system=system_prompt,
+            tools=[RECS_TOOL],
+            tool_choice={"type": "tool", "name": RECS_TOOL["name"]},
         )
         from llm_budget import record_usage
         print(f"Pipeline analysis cost: ${record_usage(CLAUDE_MODEL, message.usage):.4f}")
 
-        raw = message.content[0].text.strip()
-
-        if message.stop_reason == "max_tokens":
-            print("Warning: Claude hit token limit — truncating to valid JSON.")
-            last_brace = raw.rfind("},")
-            if last_brace != -1:
-                raw = raw[:last_brace + 1] + "]"
-            else:
-                print("Could not recover truncated JSON.")
-                return []
-
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
-        recommendations = json.loads(raw)
-
-        if not isinstance(recommendations, list):
-            print(f"Claude returned unexpected type: {type(recommendations)}")
+        recommendations = _recs_from_message(message)
+        if recommendations is None:
+            print(f"Claude returned no usable record_recommendations call (stop_reason={message.stop_reason}).")
             return []
 
         # Deduplicate by ticker — keep the highest confidence score per ticker
@@ -978,10 +1004,6 @@ NEWS ITEMS:
         print(f"Claude returned {len(cleaned)} actionable recommendations")
         return cleaned
 
-    except json.JSONDecodeError as e:
-        print(f"JSON parse error: {e}")
-        print(f"Raw response was:\n{raw[:500]}")
-        return []
     except Exception as e:
         import traceback
         print(f"Claude API error: {e}")

@@ -2540,3 +2540,19 @@ def test_fetch_prices_coin_keeps_rh_mark_with_yahoo_day_change(monkeypatch):
     assert out["BTC"]["price"] == 82000.0                                         # RH miss → Yahoo BTC-USD
     assert prices._yahoo_symbol("ETH") == "ETH-USD" and prices._yahoo_symbol("AAPL") == "AAPL"
     assert prices.with_day_change({"price": 10.0}, None)["change_pct"] == 0.0
+
+
+def test_analyst_reads_recs_from_forced_tool_call():
+    """The analyst answers via a forced record_recommendations call — prose before free-text JSON emptied the
+    6:30 run on 2026-10-16 and 10-19. Only a well-formed tool call counts."""
+    from types import SimpleNamespace as NS
+    from analysis.claude_analyst import RECS_TOOL, _recs_from_message
+    rec = {"ticker": "ETH", "direction": "buy"}
+    good = NS(content=[NS(type="text", text="Looking at the data carefully..."),
+                       NS(type="tool_use", name=RECS_TOOL["name"], input={"recommendations": [rec]})])
+    assert _recs_from_message(good) == [rec]
+    assert _recs_from_message(NS(content=[NS(type="tool_use", name=RECS_TOOL["name"],
+                                             input={"recommendations": []})])) == []     # genuine empty day
+    assert _recs_from_message(NS(content=[NS(type="text", text="[{...}]")])) is None   # no tool call
+    assert _recs_from_message(NS(content=[NS(type="tool_use", name=RECS_TOOL["name"], input={})])) is None  # truncated
+    assert RECS_TOOL["input_schema"]["properties"]["recommendations"]["items"]["required"][0] == "ticker"
