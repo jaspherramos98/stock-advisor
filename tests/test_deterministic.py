@@ -2556,3 +2556,62 @@ def test_analyst_reads_recs_from_forced_tool_call():
     assert _recs_from_message(NS(content=[NS(type="text", text="[{...}]")])) is None   # no tool call
     assert _recs_from_message(NS(content=[NS(type="tool_use", name=RECS_TOOL["name"], input={})])) is None  # truncated
     assert RECS_TOOL["input_schema"]["properties"]["recommendations"]["items"]["required"][0] == "ticker"
+
+
+def _bt_prices(days, **series):
+    """Synthetic daily closes on consecutive calendar days: {ticker: [close, ...]} (None = no data yet)."""
+    from datetime import date, timedelta
+    d0 = date(2020, 1, 1)
+    cal = [d0 + timedelta(days=i) for i in range(days)]
+    return {t: [(cal[i], c) for i, c in enumerate(cs) if c is not None] for t, cs in series.items()}, cal
+
+
+def test_strategy_backtest_buy_hold_and_costs():
+    from backtest.strategy_backtest import metrics, run
+    from backtest.strategies import buy_hold
+    prices, cal = _bt_prices(3, SPY=[100.0, 110.0, 121.0])
+    r = run(prices, buy_hold("SPY"), cal[0], cal[-1], cost_bps=0)
+    assert [round(v, 6) for _, v in r["curve"]] == [1.0, 1.1, 1.21] and r["trades"] == 1
+    r = run(prices, buy_hold("SPY"), cal[0], cal[-1], cost_bps=100)          # 1% to get in
+    assert round(r["curve"][0][1], 6) == 0.99 and round(r["curve"][-1][1], 4) == round(0.99 * 1.21, 4)
+    m = metrics(run(prices, buy_hold("SPY"), cal[0], cal[-1], cost_bps=0))
+    assert m["total_pct"] == 21.0 and m["max_dd_pct"] == 0.0
+
+
+def test_strategy_backtest_rebalances_monthly_without_lookahead():
+    """The strategy sees closes only through the PRIOR day, and trades only on a month's first trading day."""
+    from backtest.strategy_backtest import run
+    prices, cal = _bt_prices(70, SPY=[100.0 + i for i in range(70)], AAA=[50.0] * 70)
+    seen = []
+
+    def spy(hist):
+        seen.append(hist.closes("SPY")[-1] if hist.closes("SPY") else None)
+        return {"SPY": 1.0}
+    r = run(prices, spy, cal[0], cal[-1], cost_bps=0)
+    assert r["rebalances"] == 3                                   # Jan 1 (start), Feb 1, Mar 1
+    assert seen == [None, 130.0, 159.0]                           # Feb 1 = day 31 → sees day 30's close (130)
+
+
+def test_strategy_backtest_unavailable_ticker_is_cash_and_drawdown():
+    from backtest.strategy_backtest import max_drawdown, run
+    prices, cal = _bt_prices(3, SPY=[100.0, 50.0, 75.0], NEW=[None, None, 10.0])
+    r = run(prices, lambda h: {"NEW": 1.0}, cal[0], cal[-1], cost_bps=0)      # NEW doesn't exist yet → idle cash
+    assert [v for _, v in r["curve"]] == [1.0, 1.0, 1.0] and r["trades"] == 0
+    assert max_drawdown([(cal[0], 1.0), (cal[1], 0.5), (cal[2], 0.75)]) == -50.0
+
+
+def test_trend_filter_and_sector_rotation_rules():
+    from backtest.strategy_backtest import History
+    from backtest import strategies as S
+    up, down = [float(i) for i in range(1, 260)], [float(300 - i) for i in range(260)]
+    h = History({"SPY": up, "DOWN": down}, 258)
+    assert S.trend_filter("SPY")(h) == {"SPY": 1.0} and S.trend_filter("DOWN")(h) == {"BIL": 1.0}
+    assert S.trend_filter("SPY")(History({"SPY": up[:50]}, 49)) == {"SPY": 1.0}        # too short → stays invested
+    gentle = [100.0 + i * 0.01 for i in range(259)]
+    rot = S.sector_rotation(universe=("A", "B", "C", "D"), top_n=2)
+    w = rot(History({"A": up, "B": down, "C": gentle, "D": [None] * 259}, 258))
+    assert w == {"A": 0.5, "C": 0.5}                    # top 2 by momentum: A, then C (> B); D unavailable
+    assert S.trend_filter("C")(History({"C": [100.0] * 259}, 258)) == {"BIL": 1.0}  # flat isn't ABOVE its average
+    w = rot(History({"A": up, "B": down}, 258))
+    assert w == {"A": 0.5, "BIL": 0.5}                  # B is 2nd but below its 200d → that slot in T-bills
+    assert S.momentum([1.0, 2.0], (1,)) == 1.0 and S.momentum([1.0], (1,)) is None

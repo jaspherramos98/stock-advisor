@@ -412,6 +412,14 @@ scripts/scan_affordable.py    Read-only screener — which tickers have a ~30-DT
                               agentic buying power (+ = affordable). Argv or auto (recs+chat+cheap preset).
 backtest/exit_backtest.py     Exit-band backtester (target/stop % on real price paths) — validates
                               exit bands only; does NOT replay news/LLM (sampled entries)
+backtest/strategy_backtest.py Overhaul Phase 1 (TODO #84): pure monthly-rebalance portfolio simulator — strategy =
+                              `fn(History) → {ticker: weight}`, History sees closes only through the PRIOR day (no
+                              lookahead); rebalance 1st trading day at the close; cost bp per $ traded; `metrics`
+                              (CAGR, max DD, vol, Sharpe rf=0, months beating SPY, trades, turnover).
+backtest/strategies.py        Rule strategies (params fixed before the out-of-sample run): buy_hold, trend_filter
+                              (200d SMA else BIL), sector_rotation (11 SPDR sectors, top 3 by momentum, 200d slot filter).
+scripts/backtest_strategies.py Runs them on yfinance adjusted closes: in-sample 2005–2015 vs out-of-sample 2016–now,
+                              + NANC politician proxy; writes backtest_strategy_results.md (gitignored). $0, no LLM.
 main.py                       Pipeline orchestrator (`run_ingestion_and_analysis`; its __main__ is an interactive
                               CLI that prompts for a budget and does NOT write the cache — schedule
                               scripts/run_pipeline.py instead)

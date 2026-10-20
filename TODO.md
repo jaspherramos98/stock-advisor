@@ -2,6 +2,20 @@
 
 ## Done
 
+### 84. Overhaul Phase 1 — strategy backtester + results (2026-10-20) ✅
+`backtest/strategy_backtest.py` (pure engine: monthly rebalance on the 1st trading day at the close, signals see only
+the prior close, cost bp per $ traded, unavailable tickers can't be held; metrics CAGR/total/max DD/vol/Sharpe/
+months-beating-SPY/trades/turnover), `backtest/strategies.py` (buy & hold, 200-day trend filter, sector rotation
+top-3 by 6-mo or 3/6/12-mo with a 200d slot filter — parameters fixed before the run), `scripts/backtest_strategies.py`
+(yfinance adjusted closes, in-sample 2005–2015 vs out-of-sample 2016–now, markdown report → gitignored
+backtest_strategy_results.md). Data spikes: free congressional-trade datasets are gone (403) and KRUZ is delisted →
+politician copy tested via NANC; post-earnings drift NOT testable (RH earnings = 8 quarters, survivorship, effect
+decayed). Results (OOS CAGR / max DD): SPY 15.1% / −33.7%; QQQ 19.9 / −35.1; SPY trend 9.0 / −26.9; QQQ trend
+16.6 / −28.6; rotation 6-mo 10.5 / −20.5, blend 11.9 / −18.6; NANC since 2023 21.8 vs SPY 20.0 (higher vol/DD). Only
+QQQ-trend beat SPY OOS on both return and risk — but it LOST in-sample (6.9 vs 7.1), so it isn't robust. SPY sanity
+check matches published total returns. 173 tests. Files: backtest/strategy_backtest.py, backtest/strategies.py,
+scripts/backtest_strategies.py, .gitignore, CLAUDE.md, tests.
+
 ### 83. "Argus Market Open" scheduled task deleted (2026-10-20) ✅
 User's call after the evidence check: archived pipeline picks (9/28–10/19) trailed SPY at 5 days (watch conv ≥50:
 −1.79 pp, n=16; lower conv: −1.11 pp, n=81; 1 buy), SPY +0.11% vs the paper agent −2.1%, and LLM spend (~$0.14/day)
@@ -1257,11 +1271,19 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### Rule-based strategy backtester vs SPY (proposed 2026-10-20, awaiting user go)
-News picks show no edge (TODO #83). Plan: (1) backtester for price-only rule strategies over years of daily data,
-after spread/costs, vs SPY buy-and-hold; (2) run candidates — ETF trend/sector rotation (3–6 mo momentum + 200d
-filter, monthly), post-earnings drift (beat + gap, hold 20–60d), short-term pullback in large caps above 200d —
-and show the table; (3) paper-trade only a strategy that beat SPY. Deterministic → $0 LLM cost per day.
+### OVERHAUL — strategy-first rebuild (approved 2026-10-20; Phase 1 DONE #84)
+Hybrid: the agentic account runs a backtested, monthly-rebalanced rule strategy; the dashboard shows its holdings +
+reasoning so the user can copy trades in the main account. Goal: beat SPY (judged out-of-sample, return AND risk).
+- **Phase 2 — strategy engine (paper first):** `strategies/` + rebalancer → dollar market orders through PaperBroker /
+  robinhood_mcp (guards, DRY_RUN); monthly gate in the existing task; decision log records the rule inputs. Robinhood
+  dollar orders have a $1 minimum → skip resizes under $1 (drift band). Decide which old legs to switch off.
+- **Phase 3 — dashboard "Agent strategy" view:** target portfolio + why, equity vs SPY, "copy these trades" sized to
+  main-account BP; AI per-ticker explanation only if the AI role is approved.
+- **Phase 4 — live** after ≥2–3 paper rebalances behave like the backtest.
+- **Phase 5 — refactor:** retire the judge/options/watch-trade/crypto paths (as decided), `agent/` package, split
+  dashboard/app.py, migrate state files, rewrite CLAUDE.md. Behavior-preserving PRs only.
+- Open: AI role; fate of the news pipeline/Recommendations tab, options + crypto legs.
+- Costs (est.): rule-based core ≈ $0.01–0.02/month on $42 vs $3.80/month today (LLM).
 
 ### Small follow-ups
 - **Crypto for the agent — IN PROGRESS (user, 2026-09-28: "do 2 [agent trades crypto] then switch to 1 [read-only
