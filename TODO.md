@@ -2,6 +2,13 @@
 
 ## Done
 
+### 83. "Argus Market Open" scheduled task deleted (2026-10-20) ✅
+User's call after the evidence check: archived pipeline picks (9/28–10/19) trailed SPY at 5 days (watch conv ≥50:
+−1.79 pp, n=16; lower conv: −1.11 pp, n=81; 1 buy), SPY +0.11% vs the paper agent −2.1%, and LLM spend (~$0.14/day)
+is ~80%/yr of the $42 account. `schtasks /Delete /TN "Argus Market Open"` — the 6:30 run (app launch + headless
+pipeline) no longer happens; the agent ("Argus Options Agent", every 20 min) only sees pipeline signals when the
+user runs it. Next proposed: rule-based strategy backtester vs SPY (Backlog). Files: CLAUDE.md (docs only).
+
 ### 82. Pipeline analyst answers via a forced tool call — no more empty mornings (2026-10-20) ✅
 The 6:30 run cached 0 recommendations on 2026-10-16 and 10-19: the prompt says "respond with ONLY a valid JSON array,
 no preamble", yet Claude opened with prose ("Looking at the data carefully: …") → json.loads failed → the paid run
@@ -1249,6 +1256,12 @@ Lowest core-fit; do last or not at all.
 ---
 
 ## Backlog
+
+### Rule-based strategy backtester vs SPY (proposed 2026-10-20, awaiting user go)
+News picks show no edge (TODO #83). Plan: (1) backtester for price-only rule strategies over years of daily data,
+after spread/costs, vs SPY buy-and-hold; (2) run candidates — ETF trend/sector rotation (3–6 mo momentum + 200d
+filter, monthly), post-earnings drift (beat + gap, hold 20–60d), short-term pullback in large caps above 200d —
+and show the table; (3) paper-trade only a strategy that beat SPY. Deterministic → $0 LLM cost per day.
 
 ### Small follow-ups
 - **Crypto for the agent — IN PROGRESS (user, 2026-09-28: "do 2 [agent trades crypto] then switch to 1 [read-only

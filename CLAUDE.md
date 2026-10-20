@@ -386,8 +386,10 @@ market_open.bat / _vbs        market_open.bat (CRLF!) = the 6:30 AM PT routine: 
                               live every morning — removed 2026-09-28 so only the user switches real money on).
                               It used to call main.py, which prompts for a budget (hung forever hidden) and
                               never wrote the cache (the agent never saw its signals).
-                              run_market_open_silent.vbs runs it hidden. Task "Argus Market Open" REGISTERED
-                              2026-09-28 (weekdays 06:30; verified first run). Re-register if ever needed (no
+                              run_market_open_silent.vbs runs it hidden. Task "Argus Market Open" DELETED
+                              2026-10-20 at the user's request (picks scored below SPY; agent strategy being
+                              rethought) → no automatic morning run: the agent gets pipeline signals only when the
+                              user runs the pipeline. Re-register if ever wanted (no
                               inner quotes — PowerShell mangles `\"`): schtasks /Create /TN "Argus Market Open"
                               /TR "wscript.exe D:\CS\Projects\stock-advisor\run_market_open_silent.vbs"
                               /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 06:30 /F
