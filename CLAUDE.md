@@ -432,7 +432,9 @@ pipeline_cache.json           Today's recommendations cache (written only via st
    crypto tickers (R4) it also gets CRYPTO MARKET DATA — see "Crypto conviction (R4)". Every run also
    includes MARKET REGIME (SPY/VIX), earnings-date flags, sector-concentration of owned positions, and
    the user's realized TRACK RECORD — see "Analyst risk/context improvements (R6)".
-4. Claude returns recommendations with `highly_recommended` field. **Watch floor:** on a
+4. Claude returns recommendations with `highly_recommended` field — via a FORCED tool call
+   (`RECS_TOOL` record_recommendations → `_recs_from_message`), not free-text JSON: told "ONLY a JSON array" it
+   still opened with prose on 2 of 5 mornings and the day's run parsed to [] (TODO #82). **Watch floor:** on a
    normal news day it always returns ≥10 items (buys + shorts + watches) so the user sees a
    full read on the day; BUYS stay strict/few (usually 0-3, never padded), the rest are
    watches with concrete triggers. Empty array only if there's genuinely no relevant news.

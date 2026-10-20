@@ -2,6 +2,17 @@
 
 ## Done
 
+### 82. Pipeline analyst answers via a forced tool call — no more empty mornings (2026-10-20) ✅
+The 6:30 run cached 0 recommendations on 2026-10-16 and 10-19: the prompt says "respond with ONLY a valid JSON array,
+no preamble", yet Claude opened with prose ("Looking at the data carefully: …") → json.loads failed → the paid run
+($0.09) returned [] and the agent had no signals until the user re-ran by hand (8:11, 10:21). Same pattern as the
+judge now: `RECS_TOOL` (record_recommendations, typed item schema) + `tool_choice` forced → `_recs_from_message`
+reads the tool input; a missing/truncated call → [] with stop_reason logged (#57 keeps today's earlier cache).
+max_tokens 4000 → 8000 (`ANALYSIS_MAX_TOKENS`; a cut-off tool call is lost whole). Dead fence-stripping /
+"},"-truncation code removed. Also: owned COINS no longer get a stock-fundamentals lookup (ETH → Yahoo 404).
+Verified live (no cache write): 8 recs via the tool, $0.08. 169 tests. Files: analysis/claude_analyst.py, CLAUDE.md,
+tests.
+
 ### 81. Coins priced as coins, not as same-ticker ETFs (2026-10-19) ✅
 User: "argus eth live price is wrong". `fetch_prices` asked Robinhood's EQUITY quote first, and ETH / BTC / XRP are
 also listed ETFs (Grayscale Ethereum Mini Trust $22.88, a Bitcoin mini trust $36.19, an XRP ETF $14.51) → the synced
