@@ -9,6 +9,7 @@ agent_mode.txt
 agent_scheduler.log
 market_open.log
 pipeline.log
+backtest_strategy_results.md
 paper_book.json
 paper_agent_stocks.json
 paper_agent_crypto.json
