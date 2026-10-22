@@ -93,12 +93,35 @@ def main() -> int:
         _log(f"[{tag}] heartbeat — market closed (crypto exits only)")
         return 0
 
+    # config.AGENT_STRATEGY set → the systematic strategy opens positions (monthly rebalance); the old pick-based
+    # cycle runs exits-only so whatever it opened winds down.
+    strategy = getattr(config, "AGENT_STRATEGY", None)
+    legacy = f"{tag}-EXITS" if strategy else tag       # an exits-only pass logs only when it does something
     if mode == "live":
-        _report(tag, run_options_agent(verbose=False))
+        _report(legacy, run_options_agent(verbose=False, entries=not strategy))
+        if strategy:
+            from strategy import rebalancer
+            _report_strategy(tag, rebalancer.run())
     else:
         _report("LIVE-EXITS", run_options_agent(verbose=False, entries=False))
-        _report(tag, run_paper_agent(verbose=False))
+        _report(legacy, run_paper_agent(verbose=False, entries=not strategy))
+        if strategy:
+            from strategy import rebalancer
+            _report_strategy(tag, rebalancer.run_paper())
     return 0
+
+
+def _report_strategy(tag: str, out: dict) -> None:
+    """Silent on the ~600 cycles a month with nothing due; one line when it rebalances, skips or fails."""
+    status = out.get("status")
+    if status == "not_due":
+        return
+    if status in ("rebalanced", "partial"):
+        orders = [f"{o['side']} {o['ticker']} {o.get('dollars') or o.get('quantity')} → {o['status']}"
+                  for o in out.get("orders", [])]
+        _log(f"[{tag}-STRATEGY] {status}: target={out.get('target')} orders={orders or 'none needed'}")
+    else:
+        _log(f"[{tag}-STRATEGY] {status}: {out.get('reason', '')}")
 
 
 if __name__ == "__main__":

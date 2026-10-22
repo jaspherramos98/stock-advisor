@@ -24,6 +24,8 @@ def _isolated_agent_books(tmp_path, monkeypatch):
     from storage import agent_stock_book
     monkeypatch.setattr(agent_stock_book, "_FILE", str(tmp_path / "agent_stocks.json"))
     monkeypatch.setattr(agent_stock_book, "_CRYPTO_FILE", str(tmp_path / "agent_crypto.json"))
+    from strategy import rebalancer                                  # + the strategy's monthly state
+    monkeypatch.setattr(rebalancer, "_FILE", str(tmp_path / "strategy_state.json"))
 
 
 @pytest.fixture(autouse=True)

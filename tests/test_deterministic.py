@@ -1611,12 +1611,24 @@ def test_run_agent_follows_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(ra, "_LOG", str(tmp_path / "log.txt"))
     monkeypatch.setattr(ra, "_market_open", lambda: True)
     monkeypatch.setattr(ra, "run_options_agent", lambda verbose, entries=True: calls.append(("live", entries)) or {})
-    monkeypatch.setattr(ra, "run_paper_agent", lambda verbose: calls.append(("paper",)) or {})
+    monkeypatch.setattr(ra, "run_paper_agent", lambda verbose, entries=True: calls.append(("paper", entries)) or {})
+    from strategy import rebalancer
+    monkeypatch.setattr(rebalancer, "run", lambda: calls.append(("strategy-live",)) or {"status": "not_due"})
+    monkeypatch.setattr(rebalancer, "run_paper", lambda: calls.append(("strategy-paper",)) or {"status": "not_due"})
+
+    monkeypatch.setattr(config, "AGENT_STRATEGY", None)          # old pick-based agent
     for mode in ("off", "paper", "live"):
         agent_mode.set_mode(mode)
         ra.main()
     # off → nothing; paper → live EXITS only + a paper cycle; live → a full live cycle
-    assert calls == [("live", False), ("paper",), ("live", True)]
+    assert calls == [("live", False), ("paper", True), ("live", True)]
+
+    calls.clear()
+    monkeypatch.setattr(config, "AGENT_STRATEGY", "qqq_trend")   # strategy on → old entries off, rebalancer runs
+    for mode in ("off", "paper", "live"):
+        agent_mode.set_mode(mode)
+        ra.main()
+    assert calls == [("live", False), ("paper", False), ("strategy-paper",), ("live", False), ("strategy-live",)]
 
 
 def test_stock_exit_helpers():
@@ -2568,7 +2580,7 @@ def _bt_prices(days, **series):
 
 def test_strategy_backtest_buy_hold_and_costs():
     from backtest.strategy_backtest import metrics, run
-    from backtest.strategies import buy_hold
+    from strategy.rules import buy_hold
     prices, cal = _bt_prices(3, SPY=[100.0, 110.0, 121.0])
     r = run(prices, buy_hold("SPY"), cal[0], cal[-1], cost_bps=0)
     assert [round(v, 6) for _, v in r["curve"]] == [1.0, 1.1, 1.21] and r["trades"] == 1
@@ -2601,8 +2613,8 @@ def test_strategy_backtest_unavailable_ticker_is_cash_and_drawdown():
 
 
 def test_trend_filter_and_sector_rotation_rules():
-    from backtest.strategy_backtest import History
-    from backtest import strategies as S
+    from strategy import rules as S
+    from strategy.rules import History
     up, down = [float(i) for i in range(1, 260)], [float(300 - i) for i in range(260)]
     h = History({"SPY": up, "DOWN": down}, 258)
     assert S.trend_filter("SPY")(h) == {"SPY": 1.0} and S.trend_filter("DOWN")(h) == {"BIL": 1.0}
@@ -2615,3 +2627,82 @@ def test_trend_filter_and_sector_rotation_rules():
     w = rot(History({"A": up, "B": down}, 258))
     assert w == {"A": 0.5, "BIL": 0.5}                  # B is 2nd but below its 200d → that slot in T-bills
     assert S.momentum([1.0, 2.0], (1,)) == 1.0 and S.momentum([1.0], (1,)) is None
+
+
+def test_rebalancer_plan_orders():
+    from strategy.rebalancer import plan_orders
+    # all cash → 100% QQQ
+    assert plan_orders({"QQQ": 1.0}, {}, 41.92) == [{"ticker": "QQQ", "side": "buy", "dollars": 41.92}]
+    # holding QQQ, signal flips to T-bills → sell every share, buy BIL with the proceeds
+    held = {"QQQ": {"shares": 0.08, "price": 500.0}}
+    assert plan_orders({"BIL": 1.0}, held, 2.0) == [
+        {"ticker": "QQQ", "side": "sell", "quantity": 0.08, "price": 500.0},
+        {"ticker": "BIL", "side": "buy", "dollars": 42.0}]
+    # already on target: a sub-$1 cash leftover isn't worth an order
+    assert plan_orders({"QQQ": 1.0}, held, 0.5) == []
+    # leftover cash ≥ $1 gets invested
+    assert plan_orders({"QQQ": 1.0}, held, 3.0) == [{"ticker": "QQQ", "side": "buy", "dollars": 3.0}]
+
+
+def test_rebalancer_due_and_signal_without_lookahead():
+    from datetime import date, timedelta
+    from strategy.rebalancer import rebalance_due, target_weights
+    assert rebalance_due({}, date(2026, 10, 22))
+    assert not rebalance_due({"last_rebalance_month": "2026-10"}, date(2026, 10, 30))
+    assert rebalance_due({"last_rebalance_month": "2026-10"}, date(2026, 11, 2))
+    d0 = date(2025, 1, 1)
+    days = [d0 + timedelta(days=i) for i in range(260)]
+    rising = [(d, 100.0 + i) for i, d in enumerate(days)]
+    crash_today = rising[:-1] + [(days[-1], 1.0)]                 # today's crash must NOT be visible
+    w, inputs = target_weights("qqq_trend", {"QQQ": crash_today, "BIL": []}, days[-1])
+    assert w == {"QQQ": 1.0} and inputs["asof"] == days[-2].isoformat()
+    falling = [(d, 400.0 - i) for i, d in enumerate(days)]
+    assert target_weights("qqq_trend", {"QQQ": falling, "BIL": []}, days[-1] + timedelta(days=1))[0] == {"BIL": 1.0}
+
+
+def test_guard_single_name_cap_is_per_run():
+    from trading_guards import GuardState, OrderIntent, check_order
+    buy = OrderIntent(ticker="QQQ", side="buy", dollars=40.0)
+    assert not check_order(buy, GuardState(start_equity=42.0), 42.0).allowed            # default 40% cap
+    assert check_order(buy, GuardState(start_equity=42.0, max_single_fraction=1.0), 42.0).allowed
+
+
+def test_rebalancer_run_paper_flow(monkeypatch):
+    """Due → signal → sells then buys through the broker → decision log → month marked done; then not due."""
+    from datetime import date, timedelta
+    from strategy import rebalancer as rb
+    from storage import decision_log as dl
+    monkeypatch.setattr(rb, "market_open", lambda: True)
+    placed = []
+
+    class FakeBroker:
+        PAPER = True
+        cash = 2.0
+
+        def agentic_account_number(self):
+            return "PAPER"
+
+        def fetch_positions(self, acct):
+            return [{"ticker": "QQQ", "shares": 0.08, "current_price": 500.0},
+                    {"ticker": "JPM", "shares": 1.0, "current_price": 300.0}]          # not the strategy's: untouched
+
+        def fetch_buying_power(self, acct):
+            return self.cash
+
+        def place_order(self, intent, state, buying_power, account_number=None):
+            from trading_guards import check_order
+            v = check_order(intent, state, buying_power)
+            placed.append((intent.side, intent.ticker, intent.quantity or intent.dollars, v.allowed))
+            if v.allowed and intent.side == "sell":
+                self.cash += 40.0
+            return {"status": "placed" if v.allowed else "rejected", "reason": v.reason}
+
+    d0, today = date(2025, 1, 1), date(2026, 10, 22)
+    falling = [(d0 + timedelta(days=i), 600.0 - i) for i in range(400)]
+    fetch = lambda tickers, t: {"QQQ": falling, "BIL": [(d, 91.0) for d, _ in falling]}   # noqa: E731
+    out = rb.run(FakeBroker(), today=today, fetch=fetch)
+    assert out["status"] == "rebalanced" and out["target"] == {"BIL": 1.0}
+    assert placed == [("sell", "QQQ", 0.08, True), ("buy", "BIL", 42.0, True)]       # 100% BIL passes the guard
+    rec = [r for r in dl.read() if r["kind"] == "rebalance"][-1]
+    assert rec["ticker"] == "QQQ_TREND" and rec["inputs"]["signal"]["QQQ"]["close"] < rec["inputs"]["signal"]["QQQ"]["sma200"]
+    assert rb.run(FakeBroker(), today=today, fetch=fetch) == {"status": "not_due"}

@@ -10,6 +10,10 @@ agent_scheduler.log
 market_open.log
 pipeline.log
 backtest_strategy_results.md
+strategy_state.json
+paper_strategy_state.json
+paper_book_legacy_*.json
+paper_agent_*_legacy_*.json
 paper_book.json
 paper_agent_stocks.json
 paper_agent_crypto.json
