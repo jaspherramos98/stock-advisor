@@ -3,6 +3,8 @@
 ## Done
 
 ### 86. Overhaul Phase 3 — 🧭 Strategy tab: what the agent holds, why, and a copy-trade list (2026-10-22) ✅
+Hotfix (#69): the copy-trade "Amount to follow" crashed (StreamlitMixedNumericTypesError) when the main account holds no
+QQQ/BIL — an empty sum is int 0 vs float min_value. Cast to float; verified headless with $0 and $250.
 New tab between History and Agent (`dashboard/tabs/strategy.py`), in three parts:
 - **Holding now — and why:** the target, the live signal (2026-10-22: QQQ $725.20, +7.4% above its 200d average
   $675.27 → 100% QQQ; "would have to fall ~7.4% to switch"), last/next rebalance, and the agent account (paper/live)
