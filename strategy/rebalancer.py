@@ -67,6 +67,25 @@ def rebalance_due(state: dict, today: date) -> bool:
     return state.get("last_rebalance_month") != today.strftime("%Y-%m")
 
 
+def next_rebalance_date(state: dict, today: date) -> date:
+    """The day the next rebalance will happen: the next NYSE trading day from today if this month's is still due,
+    else from the 1st of next month (weekends + NYSE holidays skipped)."""
+    import market_hours as mh
+    d = today if rebalance_due(state, today) else date(today.year + (today.month == 12), today.month % 12 + 1, 1)
+    while d.weekday() >= 5 or d in mh.nyse_holidays(d.year):
+        d += timedelta(days=1)
+    return d
+
+
+def copy_orders(target: dict[str, float], held: dict[str, dict], budget: float,
+                min_order: float = MIN_ORDER) -> list[dict]:
+    """Pure: the orders that make `budget` dollars of the user's MAIN account mirror the strategy. `held` = the
+    rule's tickers already in that account ({ticker: {shares, price}}); budget includes them. Same planner as the
+    agent, so a copy follows exactly what the agent does."""
+    held_value = sum(h["shares"] * h["price"] for h in held.values() if h.get("shares") and h.get("price"))
+    return plan_orders(target, held, budget - held_value, min_order)
+
+
 def target_weights(name: str, prices: dict[str, list[tuple[date, float]]], today: date) -> tuple[dict, dict]:
     """Pure: (weights, signal inputs) from the named rule on closes strictly BEFORE `today`."""
     factory, tickers = STRATEGIES[name]
