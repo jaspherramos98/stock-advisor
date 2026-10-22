@@ -122,7 +122,8 @@ def render() -> None:
         main_pos = []
     mine_held = {p["ticker"]: {"shares": p.get("shares"), "price": p.get("current_price")}
                  for p in main_pos if p.get("ticker") in tickers and p.get("shares")}
-    held_val = sum(h["shares"] * h["price"] for h in mine_held.values() if h["price"])
+    held_val = float(sum(h["shares"] * h["price"] for h in mine_held.values() if h["price"]))   # empty sum is int 0
+
     bp = _live_buying_power()
     # Default = what already follows the strategy (QQQ/BIL held) — never pre-fill the whole buying power.
     budget = st.number_input("Amount to follow (\\$)", min_value=0.0, value=round(held_val, 2), step=10.0,
