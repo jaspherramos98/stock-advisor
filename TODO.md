@@ -2,6 +2,25 @@
 
 ## Done
 
+### 86. Overhaul Phase 3 — 🧭 Strategy tab: what the agent holds, why, and a copy-trade list (2026-10-22) ✅
+New tab between History and Agent (`dashboard/tabs/strategy.py`), in three parts:
+- **Holding now — and why:** the target, the live signal (2026-10-22: QQQ $725.20, +7.4% above its 200d average
+  $675.27 → 100% QQQ; "would have to fall ~7.4% to switch"), last/next rebalance, and the agent account (paper/live)
+  value since the first rebalance vs SPY.
+- **Model performance:** the same rule, last 5 years, vs SPY (13.8%/yr vs 12.7%; worst drop −15.5% vs −24.5%).
+- **Copy these trades:** an "Amount to follow" for the main account → the agent's own planner
+  (`rebalancer.copy_orders`) → BUY $ / SELL shares. The user places the orders. The default is what already follows
+  the strategy, never the whole buying power.
+
+Also:
+- New helpers: `rebalancer.next_rebalance_date` (NYSE calendar) and `copy_orders`; cached readers
+  `_c_strategy_history` and `_c_main_positions`.
+- The Agent tab's paper caption now describes the strategy.
+- AI explanations not added (the AI role is still undecided).
+- Verified in the browser ($ renders, no errors). 178 tests.
+- Files: dashboard/tabs/strategy.py (new), dashboard/app.py, dashboard/common.py, dashboard/tabs/agent.py,
+  strategy/rebalancer.py, CLAUDE.md, tests.
+
 ### 85. Overhaul Phase 2 — the agent trades the QQQ trend strategy (paper first) (2026-10-22) ✅
 User picked the recommendation from #84: QQQ while above its 200-day average, else T-bills (BIL), monthly.
 - `backtest/strategies.py` → **`strategy/rules.py`** (+ History/align moved in, `STRATEGIES` registry), so the live
@@ -1289,7 +1308,7 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### OVERHAUL — strategy-first rebuild (approved 2026-10-20; Phase 1 DONE #84, Phase 2 DONE #85 — paper running)
+### OVERHAUL — strategy-first rebuild (approved 2026-10-20; Phases 1–3 DONE #84–#86 — paper running)
 Hybrid: the agentic account runs a backtested, monthly-rebalanced rule strategy; the dashboard shows its holdings +
 reasoning so the user can copy trades in the main account. Goal: beat SPY (judged out-of-sample, return AND risk).
 - **Phase 2 — strategy engine (paper first):** `strategies/` + rebalancer → dollar market orders through PaperBroker /

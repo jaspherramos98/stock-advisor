@@ -73,7 +73,7 @@ dashboard/common.py           Shared dashboard helpers: every cached network rea
                               `_suggested_exit`, `_render_alloc_table`. Imported once, so cache decorators
                               aren't re-applied every rerun.
 dashboard/tabs/               One module per tab, each with `render()`: recommendations.py, portfolio.py,
-                              positions.py, watchlist.py, history.py, agent.py. Tab code imports its own
+                              positions.py, watchlist.py, history.py, strategy.py, agent.py. Tab code imports its own
                               deps + helpers from dashboard.common — never from app.py (circular).
 analysis/claude_analyst.py    Claude analysis prompt and JSON schema
 analysis/scorecard.py         Closed-trade performance scorecard — payoff/profit-factor/expectancy,
@@ -839,7 +839,16 @@ Widget keys/labels are unchanged from the pre-split monolith, so saved session s
    cached (`_history_views` / `_allocation_fig`, `st.cache_resource` keyed on the rows — a new export
    changes the key, no manual clear). Plotly Express costs ~0.1s/figure, so uncached this tab alone
    was ~0.2–0.4s of EVERY click (all tabs rerun on each interaction).
-6. **🤖 Agent** — observe + control the autonomous agent (agentic pilot only). Top to bottom (#66):
+6. **🧭 Strategy** (overhaul Phase 3, TODO #86, `dashboard/tabs/strategy.py`) — the agent's systematic strategy, so
+   the user can decide whether to copy it. (1) **Holding now — and why**: target weights + the rule's live signal (QQQ
+   close vs its 200-day average from `rebalancer.target_weights`, distance to a switch), last rebalance (decision log
+   `rebalance` record) + next (`rebalancer.next_rebalance_date`, NYSE calendar), and the agent account (paper book or
+   live) value since the first rebalance vs SPY. (2) **Model performance vs SPY, last 5 years**: the backtest engine
+   on the same rule (chart + return/worst drop/Sharpe/switches) — a model, not fills. (3) **🧾 Copy these trades**:
+   "Amount to follow" (default = QQQ/BIL already held in the MAIN account, never the whole buying power) →
+   `rebalancer.copy_orders` (the agent's own planner) → BUY $ / SELL shares table; the user places them (the MCP
+   can't trade the main account). Data: `_c_strategy_history` (yfinance ~6y, daily key, 6h TTL), `_c_main_positions`.
+7. **🤖 Agent** — observe + control the autonomous agent (agentic pilot only). Top to bottom (#66):
    **Agent mode** radio (Off / Paper / Live → `agent_mode.set_mode`; Live needs a confirm checkbox) + metrics
    (agentic buying power, LLM credit left, **New entries (PDT)** = `_c_day_trade_budget` 60s).
    **📊 Paper trading**: the paper book (options + shares) — equity/cash/realized/win-rate, open + closed tables,

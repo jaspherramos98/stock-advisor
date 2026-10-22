@@ -2706,3 +2706,21 @@ def test_rebalancer_run_paper_flow(monkeypatch):
     rec = [r for r in dl.read() if r["kind"] == "rebalance"][-1]
     assert rec["ticker"] == "QQQ_TREND" and rec["inputs"]["signal"]["QQQ"]["close"] < rec["inputs"]["signal"]["QQQ"]["sma200"]
     assert rb.run(FakeBroker(), today=today, fetch=fetch) == {"status": "not_due"}
+
+
+def test_strategy_next_rebalance_and_copy_orders():
+    from datetime import date
+    from strategy.rebalancer import copy_orders, next_rebalance_date
+    assert next_rebalance_date({}, date(2026, 10, 22)) == date(2026, 10, 22)                  # due → today
+    assert next_rebalance_date({}, date(2026, 10, 24)) == date(2026, 10, 26)                  # due on a Saturday → Mon
+    done = {"last_rebalance_month": "2026-10"}
+    assert next_rebalance_date(done, date(2026, 10, 22)) == date(2026, 11, 2)                 # Nov 1 is a Sunday
+    assert next_rebalance_date({"last_rebalance_month": "2026-12"}, date(2026, 12, 15)) == date(2027, 1, 4)  # Jan 1 holiday
+    # copy: $500 to follow, nothing held → buy $500 QQQ; holding $300 QQQ with $500 budget → buy $200 more
+    assert copy_orders({"QQQ": 1.0}, {}, 500.0) == [{"ticker": "QQQ", "side": "buy", "dollars": 500.0}]
+    held = {"QQQ": {"shares": 0.5, "price": 600.0}}
+    assert copy_orders({"QQQ": 1.0}, held, 500.0) == [{"ticker": "QQQ", "side": "buy", "dollars": 200.0}]
+    # signal flips: sell all QQQ, buy BIL with the same budget
+    assert copy_orders({"BIL": 1.0}, held, 300.0) == [
+        {"ticker": "QQQ", "side": "sell", "quantity": 0.5, "price": 600.0},
+        {"ticker": "BIL", "side": "buy", "dollars": 300.0}]

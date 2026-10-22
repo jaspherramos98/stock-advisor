@@ -72,10 +72,16 @@ def render() -> None:
         st.markdown("### 📊 Paper trading — simulated, zero money at risk")
         def _cap(v):
             return "no cap" if v is None else f"\\${v:g} cap"
-        st.caption(f"In Paper mode the scheduler runs the exact live agent (options, shares — "
-                   f"{_cap(_cfg.AGENT_STOCK_BUDGET_CAP)} — and crypto — {_cap(_cfg.AGENT_CRYPTO_BUDGET_CAP)} — PDT, "
-                   "the shadow judge, the decision log) but fills orders here at "
-                   "live prices instead of sending them — buys at the ask, sells at the bid.")
+        if getattr(_cfg, "AGENT_STRATEGY", None):
+            st.caption(f"In Paper mode the scheduler runs the agent's strategy (**{_cfg.AGENT_STRATEGY}** — see the "
+                       "🧭 Strategy tab: holdings, why, copy-trade list) and fills its monthly rebalance here at live "
+                       "prices instead of sending orders — buys at the ask, sells at the bid. The old pick-based "
+                       "entries are off; their exits still close anything they opened.")
+        else:
+            st.caption(f"In Paper mode the scheduler runs the exact live agent (options, shares — "
+                       f"{_cap(_cfg.AGENT_STOCK_BUDGET_CAP)} — and crypto — {_cap(_cfg.AGENT_CRYPTO_BUDGET_CAP)} — "
+                       "PDT, the shadow judge, the decision log) but fills orders here at "
+                       "live prices instead of sending them — buys at the ask, sells at the bid.")
         _book = {}
         try:
             from storage import paper_book as _pb

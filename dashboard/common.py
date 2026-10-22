@@ -127,6 +127,29 @@ def _c_crypto_quotes(tickers: tuple) -> dict:
     return _m.fetch_crypto_quotes(list(tickers))
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _c_strategy_history(tickers: tuple, as_of: str) -> dict:
+    """Daily adjusted closes for the strategy tab (signal + model chart), ~6 years. Keyed by date so it refreshes
+    daily; the 6h TTL covers a long-running app. yfinance — the same source the backtest and the agent use."""
+    import yfinance as yf
+    from ingestion.prices import _yahoo_symbol
+    out = {}
+    for t in tickers:
+        try:
+            h = yf.Ticker(_yahoo_symbol(t)).history(period="6y", interval="1d", auto_adjust=True)
+            out[t] = [(ix.date(), float(c)) for ix, c in h["Close"].items() if c == c]
+        except Exception:  # noqa: BLE001
+            out[t] = []
+    return out
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _c_main_positions():
+    """MAIN-account positions (the user's real book) — for the strategy tab's copy-trade sizing."""
+    from ingestion.account_reads import positions
+    return positions()
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _c_agentic_equity(acct):
     from ingestion import robinhood_mcp as _m

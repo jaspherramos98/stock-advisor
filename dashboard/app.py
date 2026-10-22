@@ -32,6 +32,7 @@ from dashboard.tabs import (
     watchlist as watchlist_tab,
     history as history_tab,
     agent as agent_tab,
+    strategy as strategy_tab,
 )
 from dotenv import load_dotenv
 load_dotenv()
@@ -610,7 +611,9 @@ if not recs and not st.session_state.get("welcome_dismissed"):
             st.session_state.welcome_dismissed = True
             st.rerun()
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History", "🤖 Agent"])
+tab1, tab2, tab3, tab4, tab5, tab_strategy, tab6 = st.tabs(
+    ["📈 Today's Recommendations", "💼 Portfolio", "📌 My Positions", "🔭 Watch List", "📊 History", "🧭 Strategy",
+     "🤖 Agent"])
 
 # =========================================================
 # TAB 1 — Today's Recommendations
@@ -642,6 +645,11 @@ with tab4:
 with tab5:
     history_tab.render()
 
+# =========================================================
+# TAB — Strategy (the agent's systematic strategy + copy-trade list)
+# =========================================================
+with tab_strategy:
+    strategy_tab.render()
 
 with tab6:
     agent_tab.render()
