@@ -20,37 +20,9 @@ import math
 from datetime import date
 from statistics import mean, pstdev
 
+from strategy.rules import History, align
+
 TRADING_DAYS = 252
-
-
-class History:
-    """What a strategy may see at a rebalance: closes per ticker up to and including `asof_index` (the prior day)."""
-
-    def __init__(self, series: dict[str, list[float | None]], asof_index: int):
-        self._series = series
-        self._i = asof_index
-
-    def available(self, ticker: str) -> bool:
-        s = self._series.get(ticker)
-        return bool(s) and self._i >= 0 and s[self._i] is not None
-
-    def closes(self, ticker: str) -> list[float]:
-        """Known closes for `ticker` through the as-of day, oldest first ([] if none)."""
-        s = self._series.get(ticker) or []
-        return [c for c in s[: self._i + 1] if c is not None]
-
-
-def align(prices: dict[str, list[tuple[date, float]]], calendar: list[date]) -> dict[str, list[float | None]]:
-    """Pure: each ticker's closes on `calendar` — None before its first close, forward-filled over gaps after."""
-    out = {}
-    for t, rows in prices.items():
-        by_day = dict(rows)
-        last, col = None, []
-        for d in calendar:
-            last = by_day.get(d, last)
-            col.append(last)
-        out[t] = col
-    return out
 
 
 def _is_rebalance_day(calendar: list[date], i: int) -> bool:

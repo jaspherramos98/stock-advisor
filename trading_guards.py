@@ -75,6 +75,9 @@ class GuardState:
     orders_today: int = 0
     day_pnl: float = 0.0               # realized + unrealized P&L so far today (signed $)
     placed_client_ids: set = field(default_factory=set)
+    # Single-name cap for this run. 40% suits stock picking; the systematic strategy (strategy/rebalancer.py) holds
+    # ONE diversified ETF (QQQ or T-bills) by design and raises it to 1.0 for its own orders only.
+    max_single_fraction: float = MAX_SINGLE_ORDER_FRACTION
 
 
 @dataclass
@@ -122,8 +125,8 @@ def check_order(intent: OrderIntent, state: GuardState, buying_power: float) -> 
             return GuardResult(False, f"buying power < ${MIN_BUYING_POWER:.0f}")
         if cost > buying_power:
             return GuardResult(False, "order exceeds available buying power")
-        if state.start_equity > 0 and cost > MAX_SINGLE_ORDER_FRACTION * state.start_equity:
-            return GuardResult(False, f"order exceeds single-name cap {MAX_SINGLE_ORDER_FRACTION:.0%}")
+        if state.start_equity > 0 and cost > state.max_single_fraction * state.start_equity:
+            return GuardResult(False, f"order exceeds single-name cap {state.max_single_fraction:.0%}")
     elif intent.side == "sell":
         if intent.quantity is None or intent.quantity <= 0:
             return GuardResult(False, "sell intent missing a positive quantity")

@@ -140,7 +140,9 @@ config.py                     Shared constants (CLAUDE_MODEL, CLAUDE_CHEAP_MODEL
                               flags USE_MCP/DRY_RUN/MCP_PERSISTENT_SESSION/AGENT_JUDGE +
                               AGENT_STOCK_BUDGET_CAP (max total $ entry cost the agent holds in shares;
                               None = no cap since 2026-10-02, the user's explicit call; ≤40%/name still applies) +
-                              AGENT_CRYPTO_BUDGET_CAP (same for coins; 10.0; 0 = crypto leg off) + ROBINHOOD_MCP_URL
+                              AGENT_CRYPTO_BUDGET_CAP (same for coins; 10.0; 0 = crypto leg off) + AGENT_STRATEGY
+                              ("qqq_trend" → strategy/rebalancer trades it monthly and the old pick-based entries are
+                              off; None → the old agent) + ROBINHOOD_MCP_URL
                               (R25) — single source of truth. Whether the agent trades is NOT here: agent_mode.py
 agent_mode.py                 THE agent control: off | paper | live, in agent_mode.txt (gitignored), set only from
                               the Agent tab radio. No file → paper; garbled → off. Also `paper_scope()` (a
@@ -160,7 +162,9 @@ chat_budget.py                Chat token budget: history window + max_tokens + t
                               it's testable without importing app.py (which boots Streamlit)
 trading_guards.py             Broker-agnostic order-safety guardrails (R25) — OrderIntent/GuardState +
                               check_order (idempotency, daily order cap, daily-loss kill switch,
-                              buying-power + single-name cap). Pure logic, network-free, unit-tested.
+                              buying-power + single-name cap — 40% by default, per run via
+                              `GuardState.max_single_fraction`; only the strategy rebalancer raises it, to 1.0).
+                              Pure logic, network-free, unit-tested.
                               PDT: `count_day_trades` / `day_trade_budget` — ≤3 day trades per 5 NYSE
                               business days (options + stocks together; exempt ≥$25k). Each position
                               opened today RESERVES its same-day exit, so only ENTRIES are ever limited.
@@ -370,7 +374,10 @@ scripts/mcp_login.py          Interactive MCP login (R25) — browser auth, stor
                               list + schemas. Run once, and again only when the refresh token expires
                               (reads raise a clean NotAuthenticated). Needs `pip install "mcp[cli]"`.
 scripts/run_agent.py          Scheduled agent runner (Phase 2) — does what agent_mode says: off → nothing; paper →
-                              live exits-only pass + run_paper_agent; live → run_options_agent. Outside market
+                              live exits-only pass + run_paper_agent; live → run_options_agent. With
+                              config.AGENT_STRATEGY set (now "qqq_trend"), those old pick-based passes run EXITS ONLY
+                              (winding down what they opened) and strategy/rebalancer runs (paper: run_paper; live:
+                              run) — it logs only when it rebalances/skips/fails. Outside market
                               hours only the crypto exit pass runs (`run_crypto_exits`, + paper's in paper mode;
                               crypto trades 24/7). Honors the credit ledger; logs to agent_scheduler.log.
 run_agent.bat / _silent.vbs   run_agent.bat (CRLF!) runs scripts/run_agent.py; run_agent_silent.vbs runs
@@ -416,9 +423,20 @@ backtest/strategy_backtest.py Overhaul Phase 1 (TODO #84): pure monthly-rebalanc
                               `fn(History) → {ticker: weight}`, History sees closes only through the PRIOR day (no
                               lookahead); rebalance 1st trading day at the close; cost bp per $ traded; `metrics`
                               (CAGR, max DD, vol, Sharpe rf=0, months beating SPY, trades, turnover).
-backtest/strategies.py        Rule strategies (params fixed before the out-of-sample run): buy_hold, trend_filter
-                              (200d SMA else BIL), sector_rotation (11 SPDR sectors, top 3 by momentum, 200d slot filter).
-scripts/backtest_strategies.py Runs them on yfinance adjusted closes: in-sample 2005–2015 vs out-of-sample 2016–now,
+strategy/rules.py             THE rule code, shared by the backtester and the live/paper agent (so the agent trades
+                              exactly what was tested): History/align (what a rule may see — closes through the prior
+                              day), buy_hold, trend_filter (200d SMA else BIL), sector_rotation (11 SPDRs, top 3, 200d
+                              slot filter); params fixed before the out-of-sample run. `STRATEGIES` = name →
+                              (rule, tickers it may hold); config.AGENT_STRATEGY picks one ("qqq_trend").
+strategy/rebalancer.py        The agent's strategy engine (overhaul Phase 2, TODO #85): once per calendar month (first
+                              market-hours cycle; strategy_state.json, paper twin via agent_mode.state_file) → rule on
+                              yfinance adjusted closes through YESTERDAY → `plan_orders` (sells first — a full exit
+                              sells every share — then dollar buys; <$1 moves skipped, RH minimum) → broker.place_order
+                              (guards with `max_single_fraction=1.0` for its own orders — one ETF by design; review;
+                              DRY_RUN) → one `rebalance` decision-log record (signal close/SMA, target, holdings,
+                              orders). Month marked done only if every order went through; else re-plans from ACTUAL
+                              positions next cycle. Touches only the rule's tickers. `run_paper` = paper scope.
+scripts/backtest_strategies.py Runs the rules on yfinance adjusted closes: in-sample 2005–2015 vs out-of-sample 2016–now,
                               + NANC politician proxy; writes backtest_strategy_results.md (gitignored). $0, no LLM.
 main.py                       Pipeline orchestrator (`run_ingestion_and_analysis`; its __main__ is an interactive
                               CLI that prompts for a budget and does NOT write the cache — schedule

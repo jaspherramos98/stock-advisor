@@ -450,15 +450,16 @@ def _run_exits(mcp, acct, buying_power, verbose, rows: list[dict] | None = None)
     return results
 
 
-def run_paper_agent(verbose: bool = True) -> dict:
+def run_paper_agent(verbose: bool = True, entries: bool = True) -> dict:
     """PAPER cycle — the SAME cycle as live (run_options_agent: routing, sizing, stock cap, PDT, shadow
     judge, decision log, exits) against alerts.paper_broker.PaperBroker, which fills at live prices
     into storage.paper_book instead of sending orders. Inside agent_mode.paper_scope(), so the agent's
-    state files and decision-log records are the paper ones. Market-hours only (fills need live prices)."""
+    state files and decision-log records are the paper ones. Market-hours only (fills need live prices).
+    entries=False → exits only (config.AGENT_STRATEGY set: the strategy rebalancer opens positions instead)."""
     import agent_mode
     from alerts.paper_broker import PaperBroker
     with agent_mode.paper_scope():
-        return {**run_options_agent(verbose, broker=PaperBroker()), "mode": "paper"}
+        return {**run_options_agent(verbose, entries=entries, broker=PaperBroker()), "mode": "paper"}
 
 
 def run_crypto_exits(verbose: bool = True, broker=None) -> dict:

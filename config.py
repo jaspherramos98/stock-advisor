@@ -55,4 +55,9 @@ AGENT_CRYPTO_BUDGET_CAP = 10.0
 # names it skipped +0.92% at 5d, 17/27 holding reviews said 'sell' before +0.21% — $1.01 of the $1.34 LLM
 # spend for no evidence of edge. J4–J6 paused; the logged verdicts stay in agent_decisions.jsonl.
 AGENT_JUDGE = "off"
+# The agent's strategy (overhaul Phase 2): a strategy/rules.py STRATEGIES name → strategy/rebalancer.py trades it
+# monthly, and the old pick-based entries (options / shares / crypto from pipeline + watch signals) are OFF — their
+# exit passes still wind down any positions they opened. None → the old pick-based agent.
+# "qqq_trend" = QQQ while above its 200-day average, else T-bills (BIL) — picked 2026-10-22 (TODO #84/#85).
+AGENT_STRATEGY = "qqq_trend"
 ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading"

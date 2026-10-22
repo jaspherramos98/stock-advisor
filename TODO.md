@@ -2,6 +2,24 @@
 
 ## Done
 
+### 85. Overhaul Phase 2 — the agent trades the QQQ trend strategy (paper first) (2026-10-22) ✅
+User picked the recommendation from #84: QQQ while above its 200-day average, else T-bills (BIL), monthly.
+- `backtest/strategies.py` → **`strategy/rules.py`** (+ History/align moved in, `STRATEGIES` registry), so the live
+  agent and the backtester share one copy of the rule.
+- **`strategy/rebalancer.py`** handles the monthly cycle: signal on adjusted closes through yesterday, a sells-first
+  `plan_orders` (sub-$1 moves skipped), and orders via the broker's `place_order` (guards/review/DRY_RUN). Each run
+  writes a `rebalance` decision-log record. The month is marked done only when every order goes through.
+- `trading_guards.GuardState.max_single_fraction`: 40% by default; the strategy's own orders use 1.0.
+- `config.AGENT_STRATEGY = "qqq_trend"` turns the old pick-based entries OFF (their exit passes still wind down
+  what they opened) and makes `scripts/run_agent.py` run the rebalancer. `run_paper_agent(entries=...)`.
+- Paper book archived (paper_book_legacy_2026-10-22.json + the paper plan books) and reset to $41.92, so paper tracks
+  the strategy cleanly.
+- Live signal 2026-10-22: QQQ $725.20 vs its 200d average $675.27 → 100% QQQ.
+- Backtest-vs-live gap: the backtest rebalances at the 1st day's close; the agent trades at the first market-hours
+  cycle (~open).
+- 177 tests. Files: strategy/ (new), backtest/strategy_backtest.py, scripts/backtest_strategies.py,
+  trading_guards.py, config.py, alerts/agentic_options.py, scripts/run_agent.py, .gitignore, CLAUDE.md, tests.
+
 ### 84. Overhaul Phase 1 — strategy backtester + results (2026-10-20) ✅
 `backtest/strategy_backtest.py` (pure engine: monthly rebalance on the 1st trading day at the close, signals see only
 the prior close, cost bp per $ traded, unavailable tickers can't be held; metrics CAGR/total/max DD/vol/Sharpe/
@@ -1271,7 +1289,7 @@ Lowest core-fit; do last or not at all.
 
 ## Backlog
 
-### OVERHAUL — strategy-first rebuild (approved 2026-10-20; Phase 1 DONE #84)
+### OVERHAUL — strategy-first rebuild (approved 2026-10-20; Phase 1 DONE #84, Phase 2 DONE #85 — paper running)
 Hybrid: the agentic account runs a backtested, monthly-rebalanced rule strategy; the dashboard shows its holdings +
 reasoning so the user can copy trades in the main account. Goal: beat SPY (judged out-of-sample, return AND risk).
 - **Phase 2 — strategy engine (paper first):** `strategies/` + rebalancer → dollar market orders through PaperBroker /
