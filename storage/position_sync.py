@@ -52,8 +52,8 @@ def sold_positions(open_positions: list[dict], held_tickers, sells: list[dict]) 
 
 def close_sold(held_stocks: set | None, held_crypto: set | None) -> dict:
     """Close every tracked position sold on Robinhood. Each held set must come from a SUCCESSFUL read; pass
-    None when that read failed (or returned nothing) and that side is left alone — an empty read on error
-    would make everything look sold.
+    None when that read failed and that side is left alone — an empty read on error would make everything look
+    sold. An EMPTY set from a successful (strict) read is valid: the user sold everything on that side.
     → {"closed": [{ticker, pnl_pct}], "unresolved": [ticker], "errors": [str]}"""
     from ingestion.account_reads import filled_crypto_sells, filled_sells
     from ingestion.coingecko import is_crypto

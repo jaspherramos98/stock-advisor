@@ -158,16 +158,18 @@ def agentic_account_number() -> str | None:
 
 # --- reads: mirror ingestion/robinhood.py shapes so callers swap cleanly --------------
 
-def fetch_positions(account_number: str | None = None) -> list[dict]:
+def fetch_positions(account_number: str | None = None, *, strict: bool = False) -> list[dict] | None:
     """Same shape as ingestion.robinhood.fetch_positions. Defaults to the MAIN account.
     MCP positions lack live price/name, so we enrich current_price via fetch_quotes and
-    compute equity/pnl. Degrades to [] on any failure."""
+    compute equity/pnl. Degrades to [] on any failure — or None with strict=True, for callers that must
+    tell "holds nothing" from "unreadable" (Sync: selling your last stock must close it, a failed read must not)."""
+    fail = None if strict else []
     if not is_available():
-        return []
+        return fail
     try:
         acct = account_number or _main_account_number()
         if not acct:
-            return []
+            return fail
         rows: list[dict] = []
         cursor = None
         for _ in range(10):  # bounded pagination
@@ -181,10 +183,10 @@ def fetch_positions(account_number: str | None = None) -> list[dict]:
                 break
     except MCPNotWired as e:
         print(f"Robinhood MCP positions: {e}")
-        return []
+        return fail
     except Exception as e:  # noqa: BLE001 — never crash a dashboard rerun on a read
         print(f"Robinhood MCP positions: fetch failed — {e}")
-        return []
+        return fail
     symbols = [r.get("symbol") for r in rows if r.get("symbol")]
     quotes = fetch_quotes(symbols) if symbols else {}
     return _normalize_positions(rows, quotes)
