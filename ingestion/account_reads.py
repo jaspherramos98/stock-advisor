@@ -48,14 +48,16 @@ def buying_power() -> float | None:
     return fetch_buying_power()
 
 
-def positions() -> list[dict]:
+def positions(strict: bool = False) -> list[dict] | None:
     """Open positions (normalized dicts: ticker/company_name/shares/avg_cost/current_price/
-    amount_invested/equity/pnl_pct)."""
+    amount_invested/equity/pnl_pct). strict=True → None when the read failed, so [] really means "holds
+    nothing" (the robin_stocks path can't tell the two apart, so there an empty list is reported as None)."""
     if _use_mcp():
         from ingestion import robinhood_mcp
-        return robinhood_mcp.fetch_positions()
+        return robinhood_mcp.fetch_positions(strict=strict)
     from ingestion.robinhood import fetch_positions
-    return fetch_positions()
+    rows = fetch_positions()
+    return None if strict and not rows else rows
 
 
 def filled_sells(since: str) -> list[dict] | None:

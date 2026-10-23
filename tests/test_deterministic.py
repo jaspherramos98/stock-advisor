@@ -2724,3 +2724,22 @@ def test_strategy_next_rebalance_and_copy_orders():
     assert copy_orders({"BIL": 1.0}, held, 300.0) == [
         {"ticker": "QQQ", "side": "sell", "quantity": 0.5, "price": 600.0},
         {"ticker": "BIL", "side": "buy", "dollars": 300.0}]
+
+
+def test_strict_position_read_tells_empty_from_failed(monkeypatch):
+    """Sync must close the user's LAST stock (an empty account is a real answer) but never act on a failed read
+    (2026-10-23: AAPL + GOOGL sold, the empty read was treated as a failure, nothing closed)."""
+    import config
+    from ingestion import account_reads, robinhood_mcp as m
+    monkeypatch.setattr(config, "USE_MCP", True, raising=False)
+    monkeypatch.setattr(m, "_main_account_number", lambda: "MAIN")
+    monkeypatch.setattr(m, "_call_tool", lambda name, args=None: {"data": {"positions": []}})
+    assert account_reads.positions(strict=True) == [] and account_reads.positions() == []      # holds nothing
+
+    def boom(name, args=None):
+        raise RuntimeError("503")
+    monkeypatch.setattr(m, "_call_tool", boom)
+    assert account_reads.positions(strict=True) is None and account_reads.positions() == []    # unreadable
+    monkeypatch.setattr(config, "USE_MCP", False, raising=False)
+    monkeypatch.setattr("ingestion.robinhood.fetch_positions", lambda: [])
+    assert account_reads.positions(strict=True) is None             # robin_stocks can't tell → treat as unknown

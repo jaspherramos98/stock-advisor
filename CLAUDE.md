@@ -100,7 +100,9 @@ storage/
                               open long no longer held → its executed sells since opened (`robinhood_mcp.
                               fetch_filled_sells` via account_reads.filled_sells, get_equity_orders on MAIN) →
                               closed at the qty-weighted avg fill. No matching sell → left open + reported;
-                              shorts skipped; unreadable holdings/order history → that side closes nothing.
+                              shorts skipped; unreadable holdings/order history → that side closes nothing. Holdings
+                              are read STRICT (`account_reads.positions(strict=True)`: None = failed, [] = holds
+                              nothing) so selling your last stock still closes it (TODO #87).
                               CRYPTO too (TODO #80): Sync adds held coins (`account_reads.crypto_positions`, main
                               acct) and closes sold ones via get_crypto_orders (`fetch_filled_crypto_sells`; coin =
                               `currency_code`). Stocks and coins are matched separately (SOL is both).

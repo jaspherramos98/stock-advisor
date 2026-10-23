@@ -2,6 +2,13 @@
 
 ## Done
 
+### 87. Sync closes your LAST stock too (2026-10-23) ✅
+User sold AAPL + GOOGL (their only stocks) and Sync didn't close them: an empty position read was treated as a failed
+read (fetch_positions returned [] for both). `robinhood_mcp.fetch_positions(strict=True)` / `account_reads.positions(
+strict=True)` now return None on failure, so [] means "holds nothing" (robin_stocks path: empty → None, can't tell).
+Sync uses the strict read. Live: closed GOOGL @ $321.38 (−6.8%) and AAPL @ $349.49 (+2.0%). 179 tests. Files:
+ingestion/robinhood_mcp.py, ingestion/account_reads.py, dashboard/app.py, storage/position_sync.py, tests.
+
 ### 86. Overhaul Phase 3 — 🧭 Strategy tab: what the agent holds, why, and a copy-trade list (2026-10-22) ✅
 Hotfix (#69): the copy-trade "Amount to follow" crashed (StreamlitMixedNumericTypesError) when the main account holds no
 QQQ/BIL — an empty sum is int 0 vs float min_value. Cast to float; verified headless with $0 and $250.

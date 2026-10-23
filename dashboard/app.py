@@ -476,9 +476,9 @@ with st.sidebar:
         if st.button("🔄 Sync positions", use_container_width=True):
             from ingestion.account_reads import crypto_positions as rh_crypto
             with st.spinner("Connecting to Robinhood..."):
-                rh_positions = rh_fetch()
+                rh_positions = rh_fetch(strict=True)        # None = unreadable (≠ holds no stocks)
                 rh_coins = rh_crypto()                      # None = unreadable (≠ holds no coins)
-            if rh_positions or rh_coins is not None:
+            if rh_positions is not None or rh_coins is not None:
                 synced = 0
                 existing_tickers = {p["ticker"] for p in get_open_positions()}
                 for rp in (rh_positions or []) + (rh_coins or []):
@@ -502,7 +502,7 @@ with st.sidebar:
                 # Only after a successful read: an empty read on error would make everything look sold.
                 from storage.position_sync import close_sold
                 with st.spinner("Checking Robinhood for positions you sold..."):
-                    sold = close_sold({rp["ticker"] for rp in rh_positions} if rh_positions else None,
+                    sold = close_sold({rp["ticker"] for rp in rh_positions} if rh_positions is not None else None,
                                       {c["ticker"] for c in rh_coins} if rh_coins is not None else None)
                 parts = [f"Synced {synced} new"]
                 if sold["closed"]:
