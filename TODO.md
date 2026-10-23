@@ -2,6 +2,13 @@
 
 ## Done
 
+### 88. Buy alerts only for what the user chose (2026-10-23) ✅
+A BTC "buy trigger" email arrived while the user had nothing pinned. It came from the RECOMMENDATION source: today's
+watch recs for tickers in the Finnhub ticker list (BTC is in its crypto list), which works as designed but isn't what
+the user wants. The user picked "only my pins": `entry_checker.ALERT_ON_RECOMMENDATIONS = False` → pinned watches +
+Argus chat suggestions only; recs still renew pins' expiry. (10 pins created 6:33 AM the same day — the user confirmed
+adding them; kept.) 180 tests. Files: alerts/entry_checker.py, CLAUDE.md, tests.
+
 ### 87. Sync closes your LAST stock too (2026-10-23) ✅
 User sold AAPL + GOOGL (their only stocks) and Sync didn't close them: an empty position read was treated as a failed
 read (fetch_positions returned [] for both). `robinhood_mcp.fetch_positions(strict=True)` / `account_reads.positions(

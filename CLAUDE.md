@@ -119,8 +119,9 @@ analysis/exit_rules.py        ONE exit_condition parser (`parse_exit_condition` 
                               ATR trail (after +1R, sell 1 stop-distance off the peak) → target → time limit;
                               missing fields → STOCK_EXIT_DEFAULT (8% / 4% / 30d). Pure, unit-tested.
 alerts/entry_checker.py       "Buy when" entry alerts (R11) — fires when a watch trigger price is hit;
-                              sources = pinned watches + Argus chat's last suggestion + today's
-                              recommendations (recs gated to the watchlist + fresh catalyst_date)
+                              sources = pinned watches + Argus chat's last suggestion. Today's recommendations
+                              NO LONGER alert (`ALERT_ON_RECOMMENDATIONS = False`, 2026-10-23, TODO #88) — they
+                              only renew pins' expiry
 alerts/notifier.py            Gmail SMTP HTML alert email (exit + entry; subject/header adapt)
 alerts/run_checks.py          Scheduled runner — market-hours gated, runs exit + entry, one email
 storage/entry_watch.py        Persists PINNED watches + Argus chat's last buy/watch suggestions
@@ -763,7 +764,9 @@ the ATR stop; HR names may target a further resistance. Exits should visibly VAR
      live watch in a fresh pipeline run (so a still-valid thesis persists; a true orphan ages out).
   2. **Argus chat's last suggestion** — the `/chat` proxy parses `Buy —`/`Watch — TICKER` action
      lines via `_capture_chat_suggestions`; each capture replaces the prior set.
-  3. **Today's recommendations** — watch recs in `pipeline_cache.json` (their R7 `entry_trigger`), read via
+  3. **Today's recommendations** — ⛔ alerting OFF since 2026-10-23 (`entry_checker.ALERT_ON_RECOMMENDATIONS`; the
+     user only wants emails for triggers they chose — a BTC rec alerted unasked). Recs still renew pins' TTL. As
+     designed when on: watch recs in `pipeline_cache.json` (their R7 `entry_trigger`), read via
      `pipeline_cache.load_today()` — another day's cache yields no rec alerts (#67).
      **Ephemeral:** `save_cache()` overwrites the cache each run, so an unpinned watch silently
      disappears on the next pipeline run — that's exactly what pinning solves. **Two gates (only this

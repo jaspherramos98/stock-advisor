@@ -2743,3 +2743,25 @@ def test_strict_position_read_tells_empty_from_failed(monkeypatch):
     monkeypatch.setattr(config, "USE_MCP", False, raising=False)
     monkeypatch.setattr("ingestion.robinhood.fetch_positions", lambda: [])
     assert account_reads.positions(strict=True) is None             # robin_stocks can't tell → treat as unknown
+
+
+def test_entry_alerts_only_for_pins_and_chat(monkeypatch):
+    """2026-10-23: a BTC watch REC emailed a buy alert the user never asked for. Recs no longer alert (they still
+    renew pins); pinned watches do."""
+    from alerts import entry_checker as ec
+    renewed, notified = [], []
+    monkeypatch.setattr(ec, "_candidates_from_recommendations", lambda: [
+        {"ticker": "BTC", "company_name": "Bitcoin", "trigger_text": "breaks above $81,000", "source": "recommendation"}])
+    monkeypatch.setattr(ec, "get_pinned", lambda: [
+        {"ticker": "AMD", "company_name": "AMD", "trigger_text": "pulls back to $502.60 support"}])
+    monkeypatch.setattr(ec, "get_chat_suggestions", lambda: [])
+    monkeypatch.setattr(ec, "renew_pins", lambda tickers: renewed.extend(tickers))
+    monkeypatch.setattr(ec, "was_notified_today", lambda t, s: False)
+    monkeypatch.setattr(ec, "mark_notified", lambda t, s: notified.append((t, s)))
+    monkeypatch.setattr(ec, "fetch_prices", lambda ts: {"AMD": {"price": 500.0}, "BTC": {"price": 81630.0}})
+    monkeypatch.setattr("storage.positions.get_open_positions", lambda: [])
+    alerts = ec.run_entry_checks()
+    assert [a["ticker"] for a in alerts] == ["AMD"] and notified == [("AMD", "pinned")]
+    assert renewed == ["BTC"]                                 # recs still renew a pin's expiry
+    monkeypatch.setattr(ec, "ALERT_ON_RECOMMENDATIONS", True)  # the switch still works
+    assert sorted(a["ticker"] for a in ec.run_entry_checks()) == ["AMD", "BTC"]
