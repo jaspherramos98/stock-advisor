@@ -5,12 +5,13 @@ Exit checker answers "should I get OUT?". This answers "is the thing I was waiti
 for to get IN actually here?" — so a watch idea doesn't quietly pass its trigger
 while the user isn't looking.
 
-Two candidate sources:
-  1. RECOMMENDATIONS — watch recs in pipeline_cache.json. Their `entry_trigger` is
-     already anchored to real computed support/resistance (R7), e.g.
-     "Pulls back to support near $314.91 ..., or breaks above $328.04 on volume".
+Candidate sources:
+  1. PINNED watches — triggers the user chose ("Watch this trigger"); survive pipeline reruns.
   2. ARGUS CHAT — the last buy/watch action list Argus chat gave, persisted by the
      /chat proxy into storage/entry_watch.py.
+  3. RECOMMENDATIONS — watch recs in pipeline_cache.json (anchored to computed support/resistance, R7).
+     Alerting on these is OFF (ALERT_ON_RECOMMENDATIONS): users get emails only for what they chose.
+     They still renew pinned watches' expiry.
 
 A trigger string can carry BOTH a pullback (below) and a breakout (above) price;
 either one firing is a hit. Owned tickers are skipped (you're already in), and each
@@ -30,6 +31,11 @@ from market_hours import market_session
 from storage.entry_watch import (
     get_chat_suggestions, get_pinned, was_notified_today, mark_notified, renew_pins,
 )
+
+# Recommendation-sourced buy alerts — OFF (2026-10-23, user's call): a BTC watch rec emailed a buy alert the user
+# never asked for (BTC was in the Finnhub ticker list that feeds the pipeline, not a watch they chose). Alerts now
+# come only from triggers the user PINNED + Argus chat's last suggestion. Today's recs still renew pins' TTL.
+ALERT_ON_RECOMMENDATIONS = False
 
 # Words that mark the price after them as a BREAKOUT (buy when price rises to it)
 # vs a PULLBACK (buy when price falls to it). Whichever keyword sits closest before
@@ -206,7 +212,7 @@ def run_entry_checks() -> list[dict]:
     candidates = _dedupe_by_ticker(
         _candidates_from_pinned()
         + _candidates_from_chat()
-        + rec_candidates
+        + (rec_candidates if ALERT_ON_RECOMMENDATIONS else [])
     )
     if not candidates:
         print("Entry checker: no pending entry triggers.")
